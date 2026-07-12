@@ -316,11 +316,20 @@ Budgets are enforced, not observed. All three scopes are REQUIRED config with de
 
 ### 7.2 Accounting
 
-Token usage is extracted from adapter events using absolute totals with delta tracking (never
-double-count; ignore delta-style payloads for totals). `cost_usd` is computed from the adapter's
-configured price table and finalized at attempt exit. Per-issue cost is the sum over its attempts
-and MUST be answerable from the durable store with one query. Aggregates (daily spend, spend by
-role/class/profile) are derived from the same records.
+Token accounting is a boundary contract, because budgets depend on it:
+
+- Adapters emit `token_usage` events carrying **absolute session totals**
+  (`input_tokens`, `output_tokens`, `total_tokens`). Delta-style provider payloads MUST be
+  converted to absolute totals inside the adapter; the orchestrator never sees deltas.
+- The orchestrator tracks the last reported totals per session and accumulates the difference,
+  so repeated or replayed events never double-count.
+- A generic `usage` map on other event types is informational only and MUST NOT feed totals.
+- `cost_usd` = tokens × the adapter's price table for the pinned model, updated as events stream
+  and finalized at attempt exit. Attempts that die without a final usage event keep their last
+  accumulated value.
+
+Per-issue cost is the sum over its attempts and MUST be answerable from the durable store with one
+query. Aggregates (daily spend, spend by role/class/profile) are derived from the same records.
 
 ### 7.3 Budget-Aware Routing
 
@@ -578,8 +587,20 @@ deployment-specific.
 Required operations: `fetch_candidates()`, `fetch_states_by_ids(ids)`,
 `fetch_issues_by_states(states)` (startup cleanup), `update_issue_lane(id, lane, reason)`,
 `create_or_update_comment(id, marker, body)` (projection + questions),
-`fetch_comments_since(id, ts)` (answers), `fetch_pr_snapshot(id)` (head SHA, base, checks,
-reviews, unresolved threads), plus merge support for the queue.
+`fetch_comments_since(id, ts)` (answers), `fetch_pr_snapshot(id)`, plus merge support for the
+queue.
+
+`fetch_pr_snapshot(id)` returns exactly this shape (nullable where the tracker lacks the datum):
+
+- `pr_number`, `pr_url`, `pr_state` (`open` | `closed` | `merged` | `draft`)
+- `head_sha`, `base_ref`, `base_advanced` (boolean: base moved since `head_sha`'s checks ran)
+- `review_decision` (`approved` | `changes_requested` | `none`)
+- `checks[]`: `{name, status, conclusion, url}`
+- `reviews[]`: `{author, state, commit_sha, submitted_at}`
+- `unresolved_threads[]`: `{id, author, url}`
+
+Guards and the merge queue consume only these fields; adapters normalize whatever their tracker
+exposes into them.
 
 Adapter errors follow Section 13 (`infrastructure` unless clearly `auth`/`configuration`).
 Candidate-fetch failure skips a tick; state-refresh failure keeps workers running.
@@ -606,10 +627,9 @@ table per model, profile→(model, effort) mapping, and normalized event mapping
   orchestrator declares `agent_process` failure — finishing cheap beats re-running everything.
 - Terminate the full process tree and confirm exit on any end state.
 
-**Codex app-server reference profile**: `agent.command` default `codex app-server` over stdio;
-the installed Codex version's generated schema is the protocol source of truth; approval/sandbox
-values pass through to Codex settings; thread reuse for continuation turns within one attempt;
-`session_id = <thread_id>-<turn_id>`.
+The normalized upstream event set and error mapping every adapter targets are defined in
+Appendix B alongside the Codex reference profile; alternative adapters map their protocol onto the
+same enums so the orchestrator is provider-blind.
 
 ## 18. WORKFLOW.md
 
@@ -618,30 +638,81 @@ template, rendered strictly — unknown variables fail — with `issue`, `attemp
 and `rules` available). The synthesized rules block (Section 12) lives in the body between
 `<!-- rules:start -->` and `<!-- rules:end -->` markers.
 
-Front matter keys (defaults per the sections above):
+### 18.1 Configuration Reference
 
-```yaml
-tracker:        # kind, owner, project_number, repo_owner, repo_name, status/priority fields
-polling:        # interval_ms
-workspace:      # root, verify_command (REQUIRED), verify_none_reason
-hooks:          # after_create, before_run, after_run, before_remove, timeout_ms
-agent:          # command, max_concurrent, max_turns, turn_timeout_ms, stall_timeout_ms,
-                # max_failure_retries, max_rework_cycles, max_escalations, max_retry_backoff_ms
-budget:         # per_attempt_tokens, per_issue_usd, daily_usd
-compute:        # profiles {economy|standard|deep -> model, effort}, risk_floor_rules
-class:          # trivial_max_changed_lines, trivial_patterns, risk_paths
-review:         # max_parallel_specialists, specialists[]
-quality:        # audit_rate, escape_window_days
-learning:       # interval_issues, max_rules, max_prompt_tokens, rule_decay_issues
-human:          # operators (REQUIRED), reminder_hours
-notify:         # command, webhook_url
-env:            # allowlist
-persistence:    # database_path, lease_ttl_ms, event_retention_days
-server:         # port, host (optional surface)
-```
+This table is the configuration contract. Reload categories: **hot** (live scheduler, next tick),
+**attempt** (attempts created after reload), **ack** (requires operator acknowledgment,
+Section 15.3), **restart** (reported as pending; never partially applied).
 
-Unknown keys are ignored. Startup validation failure fails startup; per-tick validation failure
-skips dispatch. Dynamic reload per Sections 3.5 and 15.3.
+| Key | Type | Default | Reload |
+|---|---|---|---|
+| `tracker.kind` | string | (required) | restart |
+| `tracker.owner` | string | (required for github) | restart |
+| `tracker.project_number` | integer | (required for github) | restart |
+| `tracker.repo_owner` | string | (required for github) | restart |
+| `tracker.repo_name` | string | (required for github) | restart |
+| `tracker.status_field` | string | `"Status"` | hot |
+| `tracker.priority_field` | string | `"Priority"` | hot |
+| `polling.interval_ms` | integer | `30000` | hot |
+| `workspace.root` | path | `<system-temp>/symphony_workspaces` | restart |
+| `workspace.verify_command` | string | (required; literal `none` permitted) | attempt |
+| `workspace.verify_none_reason` | string | `null` (required if `none`) | attempt |
+| `hooks.after_create` | script | `null` | ack |
+| `hooks.before_run` | script | `null` | ack |
+| `hooks.after_run` | script | `null` | ack |
+| `hooks.before_remove` | script | `null` | ack |
+| `hooks.timeout_ms` | integer | `60000` | attempt |
+| `agent.command` | string | `"codex app-server"` | ack |
+| `agent.max_concurrent` | integer | `4` | hot |
+| `agent.max_turns` | integer | `8` | attempt |
+| `agent.turn_timeout_ms` | integer | `900000` | attempt |
+| `agent.stall_timeout_ms` | integer | `300000` (`<=0` disables) | hot |
+| `agent.max_failure_retries` | integer | `2` | attempt |
+| `agent.max_rework_cycles` | integer | `2` | attempt |
+| `agent.max_escalations` | integer | `1` | attempt |
+| `agent.max_retry_backoff_ms` | integer | `300000` | hot |
+| `budget.per_attempt_tokens` | integer | `400000` | attempt |
+| `budget.per_issue_usd` | number | `10.00` | hot |
+| `budget.daily_usd` | number | `50.00` | hot |
+| `compute.profiles` | map profile → `{model, effort}` | (required: `economy`, `standard`, `deep`) | attempt |
+| `compute.risk_floor_rules` | ordered rule list | built-in rules of Section 4 | attempt |
+| `class.trivial_max_changed_lines` | integer | `25` | attempt |
+| `class.trivial_patterns` | list of globs | `[]` | attempt |
+| `class.risk_paths` | list of globs | `[]` | attempt |
+| `review.max_parallel_specialists` | integer | `2` | attempt |
+| `review.specialists` | list | defaults of Section 9.1 | attempt |
+| `quality.audit_rate` | number 0–1 | `0.10` | hot |
+| `quality.escape_window_days` | integer | `14` | hot |
+| `learning.interval_issues` | integer | `25` | hot |
+| `learning.max_rules` | integer | `25` | attempt |
+| `learning.max_prompt_tokens` | integer | `4000` | attempt |
+| `learning.rule_decay_issues` | integer | `100` | hot |
+| `human.operators` | list of logins | (required, non-empty) | ack |
+| `human.reminder_hours` | integer | `24` | hot |
+| `notify.command` | string | `null` | hot |
+| `notify.webhook_url` | string | `null` | hot |
+| `env.allowlist` | list of var names | `[]` | ack |
+| `persistence.database_path` | path | `<service-data-root>/symphony-encore.sqlite3` | restart |
+| `persistence.lease_ttl_ms` | integer | `120000` | hot |
+| `persistence.event_retention_days` | integer or null | `90` | hot |
+| `server.port` | integer | `null` (surface disabled) | restart |
+| `server.host` | string | `"127.0.0.1"` | restart |
+
+### 18.2 Value Semantics and Validation
+
+- Secret-bearing values MUST use `$VAR` indirection (Section 15.2); `$VAR` resolving to empty is
+  treated as missing.
+- Path values expand `~`; a relative `workspace.root` resolves against the directory containing
+  `WORKFLOW.md`; the effective root is normalized to an absolute path before use.
+- Unknown keys are ignored (forward compatibility). Blank strings in list values are validation
+  errors.
+- Startup validation failure fails startup. Per-tick validation failure skips dispatch but keeps
+  reconciliation running. Invalid reloads keep the last known good configuration and emit an
+  operator-visible error.
+- Validation checks at minimum: tracker keys for the selected kind; `workspace.verify_command`
+  present (or `none` with reason); `agent.command` non-empty; all three budgets positive;
+  `compute.profiles` defines the three profiles and resolves through the active adapter;
+  `human.operators` non-empty; database path local and writable with compatible schema.
 
 ## 19. Implementation Checklist
 
@@ -667,10 +738,73 @@ Required:
 
 Optional: HTTP status surface (14.3), webhook-triggered ticks, additional tracker/agent adapters.
 
-Tests SHOULD cover, at minimum: claim atomicity and restart recovery; budget termination at each
-scope; plan-gate routing per class; outcome routing including malformed outcomes; merge-queue
-base-advance re-validation; autonomy demotion on escaped defect; guard refusal of comment-only
-"evidence"; rule cap displacement and decay; env scrubbing; and process-tree termination.
+Tests SHOULD cover, at minimum:
+
+Control plane:
+
+- Claim acquisition is atomic; a second dispatch for a claimed issue is impossible
+- Restart recovery: interrupted attempts close as `agent_process`; leases with live ownership are
+  respected; expired leases reconcile; side-effect intents replay idempotently; retry timers and
+  budgets rebuild from durable records
+- Outcome routing per the Section 5.4 table, including: malformed/missing outcomes are protocol
+  failures; `completed` without `verification` evidence is rejected
+- Infrastructure failures retry with backoff and never charge issue failure budgets;
+  non-retryable classes do not loop without new evidence
+- Terminal tracker state stops the worker and cleans the workspace; a lane change stops without
+  cleanup; `AwaitingHuman` claims hold no slot and release on terminal states
+
+Budgets and cost:
+
+- Per-attempt token cap terminates the attempt with `budget_exhausted` and a preserved handoff
+- Per-issue exhaustion parks the issue and blocks all further dispatch until operator reset
+- Daily exhaustion pauses dispatch, notifies, and resumes when the window clears
+- Repeated/replayed `token_usage` events never double-count; per-issue cost is queryable and
+  equals the sum of its attempts
+- An escalation whose estimated cost exceeds remaining issue budget routes to
+  `Human(budget_exhausted)` instead of running
+
+Classes and plan gate:
+
+- Classification fixtures resolve to the expected class from paths/labels/size; reclassification
+  is upward-only
+- `trivial` skips the gate; `standard` deterministic checks catch an unmapped acceptance
+  criterion, allow one revision, then route to `needs_input`; `high_risk` ends at `plan_ready`,
+  dispatches an economy plan review, and resumes in the same workspace on approval
+- An issue with missing/contradictory acceptance criteria exits at the plan stage as `needs_input`
+
+Review and merge:
+
+- Guards refuse evidence that exists only in tracker comments; approvals pin to the reviewed SHA
+  and a SHA change invalidates them
+- Specialists fan out only on triggers; findings union without voting; adjudication fires only on
+  contrary blocking findings and cannot erase an uncontested one
+- Merge queue serializes; base advance triggers rebase + re-check; identical-diff rebase carries
+  the approval forward (recorded); changed diff requires fresh review; merge failure pauses the
+  queue
+
+Autonomy and humans:
+
+- All classes start `supervised`; `high_risk` and synthesis PRs can never be `auto`; an escaped
+  defect demotes the class immediately and notifies
+- Question rendering matches Section 11.2; only an authorized operator's first reply is consumed
+  and echoed into the next attempt; reminder fires once
+
+Learning and quality:
+
+- Each lesson source (guard denial, rework, blocking finding, escaped defect, plan rejection,
+  tool failure, budget exhaustion, confusion) produces a lesson
+- Synthesis triggers at the interval; at the rule cap an addition must name its displacement;
+  citations increment on reference; uncited rules are proposed for removal after decay
+- Escaped defects are detected via revert, linked fix within the window, and audit findings;
+  per-class metrics aggregate correctly
+
+Safety:
+
+- Agent/hook env contains only the allowlist plus baseline; workspace paths outside the root are
+  rejected via resolved-path checks; process trees are terminated and confirmed on cancel,
+  timeout, stall, and shutdown
+- Privileged config changes (`hooks.*`, `agent.command`, `env.allowlist`, `human.operators`) do
+  not apply without acknowledgment; other changes hot-reload per the Section 18.1 categories
 
 ## Appendix A. Changes from v2
 
@@ -691,3 +825,72 @@ verification loop; merge queue with base re-validation; graduated autonomy with 
 demotion; structured questions and notifications; lessons, synthesis agent, and rule saturation
 controls; escaped-defect definition and per-class quality metrics; outcome-elicitation salvage
 turn; `budget_exhausted` and `plan_ready` outcomes.
+
+## Appendix B. Normalized Agent Events and the Codex Reference Adapter
+
+### B.1 Normalized Upstream Events (all adapters)
+
+Adapters translate their provider protocol into exactly this event set. Every event carries
+`event`, `timestamp` (UTC), and `session_id`; process-bearing events carry the subprocess pid.
+
+- `session_started` — thread and turn identity established; payload: `thread_id`, `turn_id`,
+  `model`, `reasoning_effort`.
+- `startup_failed` — protocol handshake, capability, or schema incompatibility; payload:
+  `error_code`. MUST fire before the attempt is charged where detectable.
+- `turn_completed` / `turn_failed` / `turn_cancelled` — turn end states; payload: provider reason.
+- `turn_input_required` — the agent requested operator input mid-turn.
+- `approval_requested` / `approval_auto_approved` — approval flow per documented policy.
+- `unsupported_tool_call` — the agent invoked a tool the runtime does not implement; the adapter
+  MUST return a tool-failure result to the session and continue rather than stall.
+- `token_usage` — absolute session totals per Section 7.2.
+- `rate_limit` — latest provider rate-limit snapshot.
+- `outcome_reported` — the schema-validated Section 3.3 outcome.
+- `notification` — informational passthrough (progress text); observability only.
+- `malformed` — an unparseable protocol message; counted, never interpreted.
+
+Orchestrator logic MUST depend only on these events, never on provider-specific payloads or
+humanized strings.
+
+### B.2 Normalized Error Mapping (all adapters)
+
+Adapter-detected failures map to these codes, which map to Section 13 classes:
+
+| Error code | Meaning | Failure class |
+|---|---|---|
+| `agent_not_found` | executable missing/unlaunchable | `configuration` |
+| `protocol_incompatible` | version/schema/capability mismatch | `configuration` |
+| `invalid_workspace_cwd` | workspace validation failed at launch | `policy` |
+| `auth_failed` | provider rejected credentials | `auth` |
+| `response_timeout` | startup/sync request exceeded read timeout | `agent_process` |
+| `turn_timeout` | turn exceeded `agent.turn_timeout_ms` | `agent_process` |
+| `stalled` | no events for `agent.stall_timeout_ms` | `agent_process` |
+| `process_exit` | subprocess died mid-turn | `agent_process` |
+| `turn_failed` / `turn_cancelled` | provider-reported turn failure | `agent_process` |
+| `turn_input_required` | input required and policy says fail | `task` |
+| `token_cap_exceeded` | `budget.per_attempt_tokens` reached | (outcome `budget_exhausted`) |
+| `outcome_missing` / `outcome_invalid` | no valid Section 3.3 outcome after salvage turn | `agent_process` |
+| `overloaded` | provider capacity / rate limited | `infrastructure` |
+
+### B.3 Codex App-Server Reference Profile
+
+- Launch: `bash -c "<agent.command>"` (default `codex app-server`), `cwd` = workspace path,
+  scrubbed env (Section 15.2), stdio transport. Bound protocol-line size (10 MB recommended) and a
+  bounded inbound queue with backpressure or fail-fast overflow.
+- The installed Codex version's generated schema
+  (`codex app-server generate-json-schema`) is the protocol source of truth; this specification
+  never restates protocol shapes. On conflict, Codex controls protocol; Symphony controls
+  orchestration.
+- Startup: initialize and negotiate capabilities per the targeted protocol **before** the attempt
+  is charged; create or resume a thread with the workspace as the thread/turn `cwd`; supply the
+  documented approval/sandbox settings; advertise the `report_outcome` tool (schema = Section 3.3)
+  and any narrow typed tools; set the turn/session title to `<identifier>: <title>` when
+  supported.
+- Turns: first turn sends the rendered prompt; continuation turns within one attempt reuse the
+  live thread and send only the Section 5.3 continuation guidance. `session_id =
+  <thread_id>-<turn_id>`.
+- Token payloads: prefer absolute thread totals (`thread/tokenUsage/updated`-style payloads);
+  ignore delta-style fields (`last_token_usage`) when computing totals.
+- Approvals: per documented deployment policy (Section 15.4); auto-approvals emit
+  `approval_auto_approved`.
+- Shutdown on any end state: cancel pending requests, close transport, terminate the process
+  group, confirm exit within a bounded grace period, then release the lease.
