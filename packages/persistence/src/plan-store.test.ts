@@ -138,6 +138,7 @@ describe("submitted plan persistence", () => {
 
   it("pins the first authoritative Plan class to its running attempt", async () => {
     await expect(loadAttemptPlanGateState(opened.database, "attempt-1")).resolves.toEqual({
+      approvedPlan: false,
       changeClass: "standard",
       validatedPlan: false,
     });
@@ -164,6 +165,7 @@ describe("submitted plan persistence", () => {
       routing_reasons_json: '["risk.configured_path:packages/persistence/**"]',
     });
     await expect(loadAttemptPlanGateState(opened.database, "attempt-1")).resolves.toEqual({
+      approvedPlan: false,
       changeClass: "high_risk",
       validatedPlan: true,
     });
@@ -186,5 +188,48 @@ describe("submitted plan persistence", () => {
         validatedAt: "2026-07-13T10:02:00Z",
       }),
     ).rejects.toThrow("plan.authoritative_class_conflict");
+  });
+
+  it("recognizes an approved high-risk Plan handoff and supersedes it on revision", async () => {
+    await recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan: plan(1) });
+    await markPlanValidated(opened.database, {
+      attemptId: "attempt-1",
+      planId: "plan-1",
+      validatedAt: "2026-07-13T10:02:00Z",
+    });
+    opened.sqlite
+      .prepare("update plans set status = 'approved', approved_by_attempt_id = 'attempt-1'")
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, status
+        ) values (
+          'attempt-2', 'issue', 'issue-1', 'implementation', 2, '/tmp/work',
+          'config-1', 'deep', 'model', 'high', '[]', 'high_risk', 't1', 'running'
+        )`,
+      )
+      .run();
+
+    await expect(loadAttemptPlanGateState(opened.database, "attempt-2")).resolves.toEqual({
+      approvedPlan: true,
+      changeClass: "high_risk",
+      validatedPlan: false,
+    });
+
+    await recordSubmittedPlan(opened.database, {
+      attemptId: "attempt-2",
+      plan: { ...plan(2), created_by_attempt_id: "attempt-2" },
+    });
+    expect(opened.sqlite.prepare("select status from plans where id = 'plan-1'").get()).toEqual({
+      status: "superseded",
+    });
+    await expect(loadAttemptPlanGateState(opened.database, "attempt-2")).resolves.toEqual({
+      approvedPlan: false,
+      changeClass: "high_risk",
+      validatedPlan: false,
+    });
   });
 });

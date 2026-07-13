@@ -91,10 +91,10 @@ export async function consumeAgentSession(input: {
       const gate = await durable(input, () =>
         loadAttemptPlanGateState(input.database, input.bound.started.attempt_id),
       );
-      if (!gate.validatedPlan) {
+      if (!gate.validatedPlan && !gate.approvedPlan) {
         return rejectBound(input.bound, "implementation action started before a validated Plan");
       }
-      if (gate.changeClass === "high_risk") {
+      if (gate.changeClass === "high_risk" && gate.validatedPlan) {
         return rejectBound(input.bound, "high-risk implementation continued after Plan validation");
       }
     }
@@ -161,12 +161,22 @@ async function implementationTerminalGateFailure(
     loadAttemptPlanGateState(input.database, input.bound.started.attempt_id),
   );
   if (gate.changeClass === "high_risk") {
-    return gate.validatedPlan && status === "plan_ready"
-      ? null
-      : "high-risk implementation must stop with plan_ready";
+    if (gate.validatedPlan) {
+      return status === "plan_ready" ? null : "high-risk implementation must stop with plan_ready";
+    }
+    if (gate.approvedPlan) {
+      return status === "plan_ready"
+        ? "approved high-risk Plan must proceed to implementation"
+        : null;
+    }
+    return "high-risk implementation requires a validated or approved Plan";
   }
   if (status === "plan_ready") return "plan_ready requires a high-risk authoritative Plan";
-  if ((status === "completed" || status === "needs_rework") && !gate.validatedPlan) {
+  if (
+    (status === "completed" || status === "needs_rework") &&
+    !gate.validatedPlan &&
+    !gate.approvedPlan
+  ) {
     return "implementation outcome requires a validated Plan";
   }
   return null;

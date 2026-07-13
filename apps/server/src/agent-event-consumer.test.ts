@@ -329,6 +329,79 @@ describe("agent event consumption", () => {
     expect(cancel).toHaveBeenCalledWith("result_invalid");
   });
 
+  it("allows implementation actions and completion with an approved high-risk Plan handoff", async () => {
+    opened.sqlite.prepare("update attempts set change_class = 'high_risk'").run();
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values (
+          'builder-attempt', 'issue', 'issue-1', 'implementation', 2, '/tmp/work/issue-1',
+          'config-1', 'deep', 'model', 'high', '[]', 'high_risk',
+          '2026-07-13T09:00:00Z', '2026-07-13T09:30:00Z', 'closed', 'builder-result'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into plans (
+          id, work_ref_kind, work_ref_id, revision, status, approach,
+          acceptance_criteria_json, proposed_paths_json, verification_commands_json,
+          estimated_files, estimated_changed_lines, risk_facts_json,
+          created_by_attempt_id, created_at, validated_at, approved_by_attempt_id
+        ) values (
+          'approved-plan', 'issue', 'issue-1', 1, 'approved', 'Implement it',
+          '[]', '["src/feature.ts"]', '["pnpm test"]', 1, 10, '[]',
+          'builder-attempt', '2026-07-13T09:01:00Z', '2026-07-13T09:02:00Z', 'builder-attempt'
+        )`,
+      )
+      .run();
+    const result = { status: "completed", summary: "done" };
+
+    await expect(
+      consumeAgentSession({
+        attemptTokenCap: 1_000,
+        bound: bound([
+          {
+            action_id: "action-1",
+            attempt_id: "attempt-1",
+            cwd: "/tmp/work/issue-1",
+            event: "action_started",
+            exit_code: null,
+            kind: "file_change",
+            output_ref: null,
+            result_status: null,
+            session_id: "thread-1-turn-1",
+            summary: "Implement approved Plan",
+            timestamp: "2026-07-13T10:00:02Z",
+          },
+          {
+            attempt_id: "attempt-1",
+            event: "terminal_result_reported",
+            result,
+            session_id: "thread-1-turn-1",
+            timestamp: "2026-07-13T10:00:03Z",
+          },
+          {
+            attempt_id: "attempt-1",
+            event: "turn_completed",
+            provider_reason: "completed",
+            session_id: "thread-1-turn-1",
+            timestamp: "2026-07-13T10:00:04Z",
+          },
+        ]),
+        database: opened.database,
+        manifest,
+        newId: () => "usage-1",
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        serviceRunId: "run-1",
+        usdCap: 5,
+      }),
+    ).resolves.toEqual({ kind: "terminal_result", result });
+  });
+
   it("stores the cap-reaching sample and cancels before accepting further events", async () => {
     const cancel = vi.fn(async () => undefined);
     await expect(

@@ -63,7 +63,7 @@ export async function recordSubmittedPlan(
       update plans set status = 'superseded'
       where work_ref_kind = ${workRef.kind}
         and work_ref_id = ${workRef.id}
-        and status in ('draft', 'validated')
+        and status in ('draft', 'validated', 'approved')
     `.execute(transaction);
     await sql`
       insert into plans (
@@ -187,15 +187,27 @@ interface ClassificationTargetRow {
 export async function loadAttemptPlanGateState(
   database: Kysely<DatabaseSchema>,
   attemptId: string,
-): Promise<{ changeClass: ChangeClass; validatedPlan: boolean }> {
-  const result = await sql<{ change_class: ChangeClass; validated_plan: number }>`
+): Promise<{ approvedPlan: boolean; changeClass: ChangeClass; validatedPlan: boolean }> {
+  const result = await sql<{
+    approved_plan: number;
+    change_class: ChangeClass;
+    validated_plan: number;
+  }>`
     select attempt.change_class,
       exists(
         select 1 from plans plan
         where plan.created_by_attempt_id = attempt.id
           and plan.status = 'validated'
           and plan.validated_at is not null
-      ) as validated_plan
+      ) as validated_plan,
+      exists(
+        select 1 from plans plan
+        where plan.work_ref_kind = attempt.work_ref_kind
+          and plan.work_ref_id = attempt.work_ref_id
+          and plan.status = 'approved'
+          and plan.validated_at is not null
+          and plan.approved_by_attempt_id is not null
+      ) as approved_plan
     from attempts attempt
     where attempt.id = ${attemptId}
       and attempt.role = 'implementation'
@@ -203,7 +215,11 @@ export async function loadAttemptPlanGateState(
   `.execute(database);
   const row = result.rows[0];
   if (!row) throw new Error("plan.gate_attempt_missing");
-  return { changeClass: row.change_class, validatedPlan: row.validated_plan === 1 };
+  return {
+    approvedPlan: row.approved_plan === 1,
+    changeClass: row.change_class,
+    validatedPlan: row.validated_plan === 1,
+  };
 }
 
 export async function recordAuthoritativePlanClassification(
