@@ -52,7 +52,7 @@ command. A green but narrower test does not complete a broader item.
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, generated-contract drift checks, real subprocess boundaries, and production-build Playwright flow pass; full boundary matrix pending |
-| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, confirmed tree exit, SIGINT/SIGTERM idempotence, real SIGTERM production smoke, and a documented Windows-host/WSL release check pass; macOS runtime boundary and current WSL release evidence pending |
+| T09 | Linux, macOS, WSL development commands and signal handling | In progress | One-terminal source supervision, sibling-failure teardown, process-group signal escalation, Linux/WSL sandboxing, confirmed tree exit, SIGINT/SIGTERM idempotence, real SIGTERM production smoke, and a documented Windows-host/WSL release check pass; macOS runtime boundary and current WSL release evidence pending |
 | T10 | Node distribution and non-root multi-stage container | In progress | Built Node entrypoint, safe runtime options, one-port API/UI, health/readiness, durable lifecycle, production-only deploy layout, digest-pinned multi-stage image definition, numeric non-root user, volumes, Tini, and healthcheck pass static checks; Docker build/run pending because Docker is unavailable locally |
 | T11 | Exact dependency/toolchain pinning and update policy | In progress | Exact manifests/lockfile/toolchain, digest- and commit-pinned delivery inputs, and separate pnpm/Actions/Docker Dependabot schedules pass; built-image dependency inventory proof pending |
 | T12 | Deferred technologies remain absent | Implemented | Repository policy rejects deferred application, server, queue, database, workflow, and transport dependencies |
@@ -72,7 +72,7 @@ command. A green but narrower test does not complete a broader item.
 | D09 | Dependabot for pnpm, Actions, and Docker | Implemented | Valid weekly npm, GitHub Actions, and Docker updater configuration with major toolchain updates kept visible |
 | D10 | Fast staged-file hooks and optional pre-push verification | Not started | Hook fixture tests |
 | D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache, 14-day failed Playwright artifact retention, operator runbooks, WSL smoke procedure, and verified-digest rollback policy exist; publication and environment-specific rollback proof pending |
-| D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; dev/conformance pending |
+| D12 | Complete stable Make command interface | In progress | Setup, supervised dev, format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; conformance pending |
 
 ## Core conformance matrix
 
@@ -182,3 +182,4 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | First-run bootstrap and operational runbook slice |
 | 2026-07-13 | working tree | `make verify-fast` | 294 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Ordinary workflow startup, durable bootstrap operator override, restart-bound application, and secure persisted bind |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Ordinary startup configuration integration |
+| 2026-07-13 | working tree | `make verify-fast` | 296 tests; lint, contract/OpenAPI/client drift, and typecheck passed | One-terminal dev supervision, signal forwarding, and sibling-failure teardown |

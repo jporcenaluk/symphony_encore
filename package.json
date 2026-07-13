@@ -11,6 +11,7 @@
     "build": "pnpm -r --if-present build",
     "contracts:check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts --check",
     "contracts:generate": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts",
+    "dev": "node scripts/dev-supervisor.ts",
     "format": "biome check --write .",
     "image": "docker build --tag symphony-encore:verify .",
     "lint": "biome check . && markdownlint-cli2 && node scripts/repository-policy.ts && pnpm contracts:check && pnpm openapi:check",

@@ -34,6 +34,16 @@ workspace:
 Complete {{ issue.title }} and satisfy its acceptance criteria.
 ```
 
+For source development, run both required processes under the repository supervisor:
+
+```sh
+make dev
+```
+
+Vite prints its loopback browser URL and proxies Control API calls to the source server on port
+8080. Ctrl+C stops both process groups. If either process exits unexpectedly, the supervisor stops
+its sibling and returns a failing status.
+
 Replace every example tracker value. Keep credentials out of `WORKFLOW.md`; secret-valued config
 uses a `$VARIABLE` reference.
 

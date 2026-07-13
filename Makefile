@@ -8,7 +8,7 @@ setup:
 	corepack pnpm exec husky
 
 dev:
-	@node scripts/not-implemented.ts dev
+	corepack pnpm dev
 
 build:
 	corepack pnpm build
