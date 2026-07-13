@@ -10,9 +10,11 @@ import type {
   MutationAuthorization,
   SideEffectIntent,
   SideEffectReceipt,
+  SystemJob,
 } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
+  commitRepairRepositoryLink,
   commitRepositoryLinkAndReviewLane,
   createAuthorizedIntent,
   markIntentApplying,
@@ -186,6 +188,136 @@ export async function executeRepositoryPublication(input: {
   );
 }
 
+export async function executeRepairRepositoryPublication(input: {
+  database: OpenedDatabase["database"];
+  expiresAt: string;
+  failedMergeSha: string;
+  job: Extract<SystemJob, { kind: "repair" }>;
+  newId(): string;
+  now(): string;
+  readWorkspaceRevision(): Promise<string>;
+  repository: RepositoryHostingAdapter;
+  safety: PersistenceSafetyController;
+  serviceRunId: string;
+  target: PendingRepositoryPublication;
+}): Promise<void> {
+  if (input.target.repository !== input.job.repository) {
+    throw new Error("publication.repository_mismatch");
+  }
+  if ((await input.readWorkspaceRevision()) !== input.target.targetSha) {
+    throw new Error("publication.workspace_revision_mismatch");
+  }
+  const [repoOwner, repoName, extra] = input.job.repository.split("/");
+  if (!repoOwner || !repoName || extra !== undefined) {
+    throw new Error("publication.repository_invalid");
+  }
+  const workRef = { system_job_id: input.job.id } as const;
+  const repositoryTarget = `${input.job.repository}:system_job:${input.job.id}`;
+  const publish = composeSystemJobAuthorizedMutation(input, {
+    action: "repository.publish_branch",
+    decisionRuleIds: ["publication.verified", "repository.base_revision_exact"],
+    observedStateRef: `repository:${input.job.repository}:base:${input.target.baseSha}`,
+    payload: {
+      expected_base_sha: input.target.baseSha,
+      workspace: input.target.workspacePath,
+    },
+    target: repositoryTarget,
+    targetRevision: input.target.baseSha,
+  });
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: publish.authority.authorization,
+      intent: publish.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, publish.intent.id, input.now()),
+  );
+  const published = await input.repository.publishBranch(
+    workRef,
+    input.target.workspacePath,
+    input.target.baseSha,
+    publish.authority,
+  );
+  if (
+    published.headSha !== input.target.targetSha ||
+    !published.branch ||
+    published.mutation.resultRevision !== input.target.targetSha
+  ) {
+    throw new Error("publication.published_branch_mismatch");
+  }
+  await durable(input.safety, () =>
+    recordSideEffectReceipt(
+      input.database,
+      receipt(publish.intent.id, published.mutation, input.now()),
+    ),
+  );
+
+  const pullRequestMutation = composeSystemJobAuthorizedMutation(input, {
+    action: "repository.create_repair_pull_request",
+    decisionRuleIds: ["publication.verified", "repository.repair_cycle"],
+    observedStateRef: `repository:${input.job.repository}:failed_merge:${input.failedMergeSha}`,
+    payload: {
+      failed_merge_sha: input.failedMergeSha,
+      head_sha: published.headSha,
+      verification_record_id: input.target.verificationRecordId,
+    },
+    target: repositoryTarget,
+    targetRevision: input.failedMergeSha,
+  });
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: pullRequestMutation.authority.authorization,
+      intent: pullRequestMutation.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, pullRequestMutation.intent.id, input.now()),
+  );
+  const pullRequest = await input.repository.createRepairPullRequest(
+    workRef,
+    input.failedMergeSha,
+    [
+      { kind: "commit", sha: input.failedMergeSha },
+      { kind: "commit", sha: published.headSha },
+    ],
+    pullRequestMutation.authority,
+  );
+  if (
+    !Number.isSafeInteger(pullRequest.number) ||
+    pullRequest.number < 1 ||
+    !pullRequest.url ||
+    pullRequest.mutation.resultRevision !== published.headSha
+  ) {
+    throw new Error("publication.pull_request_identity_invalid");
+  }
+  const appliedAt = input.now();
+  await durable(input.safety, () =>
+    commitRepairRepositoryLink(input.database, {
+      expectedReadyReason: "pull_request_required",
+      link: {
+        base_ref: input.target.baseRef,
+        base_sha: input.target.baseSha,
+        branch: published.branch,
+        created_at: appliedAt,
+        cycle: input.target.cycle,
+        head_sha: published.headSha,
+        id: requiredId(input.newId()),
+        kind: "repair",
+        pull_request_number: pullRequest.number,
+        pull_request_url: pullRequest.url,
+        repo_name: repoName,
+        repo_owner: repoOwner,
+        state: "open",
+        updated_at: appliedAt,
+        work_ref: workRef,
+      },
+      nextReadyReason: "pull_request_hygiene_required",
+      receipt: receipt(pullRequestMutation.intent.id, pullRequest.mutation, appliedAt),
+    }),
+  );
+}
+
 function composeAuthorizedMutation(
   input: {
     expiresAt: string;
@@ -249,6 +381,90 @@ function composeAuthorizedMutation(
         target: authorization.target,
         targetRevision: authorization.target_revision,
         workRef: `issue:${input.issue.id}`,
+      },
+    },
+    intent: {
+      action: authorization.action,
+      attempt_id: input.target.attemptId,
+      authorization_id: authorization.id,
+      created_at: authorizedAt,
+      id: intentId,
+      idempotency_key: intentId,
+      request_payload_hash: sha256(JSON.stringify(mutation.payload)),
+      scope: "work",
+      service_run_id: input.serviceRunId,
+      status: "pending",
+      target: authorization.target,
+      target_revision: authorization.target_revision,
+      updated_at: authorizedAt,
+      work_ref: workRef,
+    },
+  };
+}
+
+function composeSystemJobAuthorizedMutation(
+  input: {
+    expiresAt: string;
+    job: Pick<SystemJob, "id">;
+    newId(): string;
+    now(): string;
+    serviceRunId: string;
+    target: Pick<PendingRepositoryPublication, "attemptId" | "configSnapshotId">;
+  },
+  mutation: {
+    action: string;
+    decisionRuleIds: readonly string[];
+    observedStateRef: string;
+    payload: unknown;
+    target: string;
+    targetRevision: string;
+  },
+): AuthorizedMutation {
+  const authorizedAt = input.now();
+  if (!Number.isFinite(Date.parse(authorizedAt)) || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error("publication.authorization_time_invalid");
+  }
+  const authorizationId = requiredId(input.newId());
+  const intentId = requiredId(input.newId());
+  const workRef = { system_job_id: input.job.id } as const;
+  const authorization: MutationAuthorization = {
+    action: mutation.action,
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy",
+    attempt_role: "implementation",
+    authorized_at: authorizedAt,
+    config_snapshot_id: input.target.configSnapshotId,
+    decision_rule_ids: [...mutation.decisionRuleIds],
+    expires_at: input.expiresAt,
+    id: authorizationId,
+    idempotency_key: intentId,
+    intent_id: intentId,
+    observed_state_ref: mutation.observedStateRef,
+    operator_capability: null,
+    scope: "work",
+    service_run_id: input.serviceRunId,
+    target: mutation.target,
+    target_revision: mutation.targetRevision,
+    work_ref: workRef,
+  };
+  return {
+    authority: {
+      authorization,
+      expectation: {
+        action: authorization.action,
+        actorId: authorization.actor_id,
+        actorKind: authorization.actor_kind,
+        attemptRole: authorization.attempt_role,
+        configSnapshotId: authorization.config_snapshot_id,
+        idempotencyKey: authorization.idempotency_key,
+        intentId: authorization.intent_id,
+        observedStateRef: authorization.observed_state_ref,
+        operatorCapability: authorization.operator_capability,
+        scope: authorization.scope,
+        serviceRunId: authorization.service_run_id,
+        target: authorization.target,
+        targetRevision: authorization.target_revision,
+        workRef: `system_job:${input.job.id}`,
       },
     },
     intent: {

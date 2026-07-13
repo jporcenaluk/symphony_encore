@@ -120,4 +120,33 @@ describe("dispatch budget ledger preparation", () => {
     expect(reservations).toHaveLength(3);
     expect(reservations.every((reservation) => reservation.id.endsWith(":tokens"))).toBe(true);
   });
+
+  it("creates a first-class SystemJob work budget without an issue ledger", async () => {
+    const reservations = await prepareDispatchBudget(opened.database, {
+      attemptId: "attempt-repair-1",
+      estimatedTokens: 200,
+      estimatedUsd: null,
+      limits: {
+        attemptTokens: 400,
+        attemptUsd: 5,
+        fleetTokens: 10_000,
+        fleetUsd: 50,
+        issueTokens: 2_000,
+        issueUsd: 10,
+      },
+      systemJobId: "repair-1",
+      updatedAt: "2026-07-13T10:00:00Z",
+    });
+
+    expect(reservations).toContainEqual({
+      amount: 200,
+      id: "budget:system_job:repair-1:tokens",
+      version: 1,
+    });
+    expect(
+      opened.sqlite
+        .prepare("select scope, scope_id from budget_ledgers where id = ?")
+        .get("budget:system_job:repair-1:tokens"),
+    ).toEqual({ scope: "system_job", scope_id: "repair-1" });
+  });
 });

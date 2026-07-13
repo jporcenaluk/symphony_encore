@@ -21,6 +21,7 @@ import {
   commitMergeQueueLanding,
   commitPostMergeRepairCycle,
   commitPostMergeSuccess,
+  commitPostMergeSystemJobSuccess,
   commitRepositoryBranchUpdate,
   createAuthorizedIntent,
   loadAuthorizedMergeLogins,
@@ -30,6 +31,7 @@ import {
   type PendingPostMerge,
   routeMergeQueuePrecondition,
   routeMergeQueueRetry,
+  routePostMergeFailure,
   routePostMergeRetry,
 } from "@symphony/persistence";
 
@@ -104,6 +106,7 @@ export async function executeMergeQueueLanding(input: {
       headSha: snapshot.head_sha,
       now: landingAt,
       repository: input.target.repository,
+      ...(input.workRef.kind === "system_job" ? { transitionId: requiredId(input.newId()) } : {}),
       workRef: input.workRef,
     }),
   );
@@ -220,6 +223,81 @@ export async function executePostMergeVerification(input: {
     commitPostMergeSuccess(input.database, {
       now: appliedAt,
       receipt: receipt(mutation.intent.id, lane, appliedAt),
+      transitionId: requiredId(input.newId()),
+      workRef: input.workRef,
+    }),
+  );
+  return { result: "completed" };
+}
+
+export async function executeSystemJobPostMergeVerification(input: {
+  acceptedCheckConclusions: readonly string[];
+  database: OpenedDatabase["database"];
+  newId(): string;
+  now(): string;
+  pollIntervalMs: number;
+  repository: RepositoryHostingAdapter;
+  requiredChecks: readonly string[];
+  safety: PersistenceSafetyController;
+  settleTimeoutMs: number;
+  target: PendingPostMerge;
+  workRef: { id: string; kind: "system_job" };
+}): Promise<{ reason?: string; result: "completed" | "failed" | "waiting" }> {
+  if (
+    !Number.isSafeInteger(input.pollIntervalMs) ||
+    input.pollIntervalMs <= 0 ||
+    !Number.isSafeInteger(input.settleTimeoutMs) ||
+    input.settleTimeoutMs <= 0
+  ) {
+    throw new Error("merge_queue.post_merge_duration_invalid");
+  }
+  const snapshot = await input.repository.fetchPostMergeStatus(
+    input.target.repository,
+    input.target.mergeSha,
+  );
+  if (snapshot.head_sha !== input.target.mergeSha || snapshot.pr_state !== "merged") {
+    throw new Error("merge_queue.post_merge_identity_mismatch");
+  }
+  const decision = evaluatePostMergeChecks(
+    snapshot.post_merge_checks,
+    input.target.mergeSha,
+    input.requiredChecks,
+    input.acceptedCheckConclusions,
+  );
+  const observedAt = input.now();
+  if (decision.decision === "wait") {
+    if (Date.parse(observedAt) - Date.parse(input.target.startedAt) >= input.settleTimeoutMs) {
+      await durable(input.safety, () =>
+        routePostMergeFailure(input.database, {
+          now: observedAt,
+          reason: `post_merge.timeout:${decision.reason}`,
+          workRef: input.workRef,
+        }),
+      );
+      return { reason: decision.reason, result: "failed" };
+    }
+    await durable(input.safety, () =>
+      routePostMergeRetry(input.database, {
+        now: observedAt,
+        retryDueAt: new Date(Date.parse(observedAt) + input.pollIntervalMs).toISOString(),
+        workRef: input.workRef,
+      }),
+    );
+    return { reason: decision.reason, result: "waiting" };
+  }
+  if (decision.decision === "fail") {
+    await durable(input.safety, () =>
+      routePostMergeFailure(input.database, {
+        now: observedAt,
+        reason: decision.reason,
+        workRef: input.workRef,
+      }),
+    );
+    return { reason: decision.reason, result: "failed" };
+  }
+  await durable(input.safety, () =>
+    commitPostMergeSystemJobSuccess(input.database, {
+      now: observedAt,
       transitionId: requiredId(input.newId()),
       workRef: input.workRef,
     }),

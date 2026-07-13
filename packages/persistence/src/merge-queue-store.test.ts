@@ -11,6 +11,7 @@ import {
   commitMergeQueueLanding,
   commitPostMergeRepairCycle,
   commitPostMergeSuccess,
+  commitPostMergeSystemJobSuccess,
   commitRepositoryBranchUpdate,
   loadAuthorizedMergeLogins,
   loadPendingBaseUpdate,
@@ -291,6 +292,111 @@ describe("merge queue persistence", () => {
         work_ref_kind: "system_job",
       },
     ]);
+    expect(
+      opened.sqlite
+        .prepare(
+          "select from_stage, to_stage, reason, exited_at from stage_transitions where work_ref_kind = 'system_job'",
+        )
+        .get(),
+    ).toEqual({
+      exited_at: null,
+      from_stage: null,
+      reason: "merge_queue.post_merge_failed",
+      to_stage: "queued",
+    });
+    await opened.close();
+  });
+
+  it("completes a repair SystemJob and releases its parent issue blocker", async () => {
+    const opened = await fixture();
+    opened.sqlite.prepare("update issues set state = 'In Progress'").run();
+    opened.sqlite
+      .prepare(
+        `update claims set mode = 'AwaitingHuman', reason = 'repair_in_progress:repair-1',
+          blocker_predicate = 'system_job:repair-1:not_terminal', origin_stage = 'In Progress'`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into parked_work (
+          work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+          parked_at, last_checked_at
+        ) values ('issue', 'issue-1', 'In Progress', 'repair_in_progress:repair-1',
+          'system_job:repair-1:not_terminal', 't0', 't0')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, parent_work_ref_kind, parent_work_ref_id, repository, workspace_path,
+          goal, acceptance_criteria_json, config_snapshot_id, status, created_at, started_at
+        ) values ('repair-1', 'repair', 'issue', 'issue-1', 'owner/repo',
+          '/work/_system/repair-repair-1', 'repair', '["restore"]', 'config-1',
+          'merge', 't0', 't1')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values ('attempt-repair-1', 'system_job', 'repair-1', 'implementation', 1,
+          '/work/_system/repair-repair-1', 'config-1', 'standard', 'model', 'medium', '[]',
+          'standard', 't0', 't1', 'closed', 'result-repair-1')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        "insert into terminal_results values ('result-repair-1', 'attempt-repair-1', 'implementation', 'implementation_outcome', '{}', 't1')",
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into stage_transitions (
+          id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+          timestamp_source
+        ) values ('stage-repair-merge', 'system_job', 'repair-1', 'review', 'merge',
+          'merge_queue.started', '2026-07-13T10:11:00Z', 'observed_estimate')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values ('system_job', 'repair-1', 'run-1', 'Ready', 't0', 't2', null,
+          'review', 'post_merge_verification_required')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into repository_merge_queue_entries (
+          work_ref_kind, work_ref_id, repository, state, head_sha, base_sha, merge_sha,
+          created_at, updated_at
+        ) values ('system_job', 'repair-1', 'owner/repo', 'post_merge', 'def5678',
+          'abc1234', 'fedcba9', 't2', 't2')`,
+      )
+      .run();
+
+    await commitPostMergeSystemJobSuccess(opened.database, {
+      now: "2026-07-13T10:12:00Z",
+      transitionId: "stage-repair-done",
+      workRef: { id: "repair-1", kind: "system_job" },
+    });
+
+    expect(opened.sqlite.prepare("select status, final_result_id from system_jobs").get()).toEqual({
+      final_result_id: "result-repair-1",
+      status: "done",
+    });
+    expect(
+      opened.sqlite
+        .prepare("select mode, reason, blocker_predicate from claims where work_ref_kind = 'issue'")
+        .get(),
+    ).toEqual({ blocker_predicate: null, mode: "Ready", reason: "repair_completed" });
+    expect(opened.sqlite.prepare("select resolved_at from parked_work").get()).toEqual({
+      resolved_at: "2026-07-13T10:12:00Z",
+    });
     await opened.close();
   });
 });

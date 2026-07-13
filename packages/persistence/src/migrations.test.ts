@@ -49,7 +49,24 @@ describe("production migrations", () => {
       { name: "workspace_checkout_base_ref", version: 12 },
       { name: "pull_request_gate_state", version: 13 },
       { name: "repository_merge_queue_state", version: 14 },
+      { name: "system_job_budget_scope", version: 15 },
     ]);
+  });
+
+  it("supports first-class SystemJob budget ledgers after upgrading existing budget data", async () => {
+    const opened = await temporaryDatabase();
+    await applyMigrations(opened.database);
+
+    expect(() =>
+      opened.sqlite
+        .prepare(
+          `insert into budget_ledgers (
+            id, scope, scope_id, unit, base_limit, effective_limit, updated_at
+          ) values ('budget:system_job:repair-1:tokens', 'system_job', 'repair-1',
+            'tokens', 1000, 1000, 't0')`,
+        )
+        .run(),
+    ).not.toThrow();
   });
 
   it("creates a durable table for every remaining Section 3 entity", async () => {

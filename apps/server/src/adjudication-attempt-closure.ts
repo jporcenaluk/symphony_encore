@@ -3,6 +3,7 @@ import {
   AGENT_ERROR_FAILURE_CLASS,
   type AgentErrorCode,
   type Issue,
+  type SystemJob,
   validateAdjudicationResult,
 } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
@@ -23,7 +24,7 @@ export async function closeAdjudicationAttempt(input: {
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
   endedAt: string;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   reservationId: string;
   safety: PersistenceSafetyController;
@@ -55,7 +56,7 @@ export async function closeAdjudicationAttempt(input: {
         settledLedgers,
         terminalResultId,
         usage: { inputTokens: settlement.inputTokens, outputTokens: settlement.outputTokens },
-        workRef: { id: input.issue.id, kind: "issue" },
+        workRef: reviewWorkRef(input.issue),
       });
       return consumption;
     }
@@ -79,7 +80,7 @@ export async function closeAdjudicationAttempt(input: {
             commands: [],
             decisions_fixed: [],
             files_changed: [...input.context.changedFiles],
-            goal: input.issue.title,
+            goal: "kind" in input.issue ? input.issue.goal : input.issue.title,
             open_items: input.issue.acceptance_criteria,
             revision: input.context.targetSha,
           },
@@ -93,7 +94,7 @@ export async function closeAdjudicationAttempt(input: {
         role: "adjudication",
       },
       usage: { inputTokens: settlement.inputTokens, outputTokens: settlement.outputTokens },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: reviewWorkRef(input.issue),
     });
     return consumption;
   } catch (error) {
@@ -101,6 +102,13 @@ export async function closeAdjudicationAttempt(input: {
     await input.safety.recordFailure(failure);
     throw failure;
   }
+}
+
+function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+  id: string;
+  kind: "issue" | "system_job";
+} {
+  return "kind" in work ? { id: work.id, kind: "system_job" } : { id: work.id, kind: "issue" };
 }
 
 function normalize(

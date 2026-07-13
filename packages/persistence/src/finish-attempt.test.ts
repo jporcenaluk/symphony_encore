@@ -10,6 +10,7 @@ import {
   loadAttemptSettlementState,
   loadFailureRetryState,
 } from "./finish-attempt.js";
+import { openBaselineStage } from "./stage-transition.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -91,7 +92,135 @@ const finish = {
   workRef: { id: "issue-1", kind: "issue" as const },
 };
 
+function finishAttemptRecord() {
+  return {
+    attemptNumber: 1,
+    changeClass: "standard" as const,
+    computeProfile: "standard" as const,
+    configSnapshotId: "config-1",
+    costUsd: null,
+    id: "attempt-repair",
+    model: "provider-model",
+    priceTableVersion: null,
+    reasoningEffort: "medium",
+    role: "implementation" as const,
+    routingReasons: ["classification.repair_floor"],
+    startedAt: "2026-07-13T10:00:00Z",
+    workspacePath: "/tmp/work/_system/repair-repair-1",
+  };
+}
+
 describe("attempt closure transaction", () => {
+  it("atomically aggregates SystemJob usage and advances its durable stage", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, parent_work_ref_kind, parent_work_ref_id, repository, workspace_path,
+          goal, acceptance_criteria_json, config_snapshot_id, status, created_at
+        ) values ('repair-1', 'repair', 'issue', 'issue-1', 'owner/repo',
+          '/tmp/work/_system/repair-repair-1', 'repair', '["restore"]', 'config-1',
+          'queued', '2026-07-13T09:59:00Z')`,
+      )
+      .run();
+    await openBaselineStage(opened.database, {
+      enteredAt: "2026-07-13T09:59:00Z",
+      id: "stage-repair-queued",
+      reason: "repair_created",
+      timestampSource: "observed_estimate",
+      toStage: "queued",
+      workRef: { id: "repair-1", kind: "system_job" },
+    });
+    const insertLedger = opened.sqlite.prepare(`
+      insert into budget_ledgers (
+        id, scope, scope_id, unit, base_limit, effective_limit, updated_at
+      ) values (?, ?, ?, 'tokens', 1000, 1000, 'now')
+    `);
+    insertLedger.run("attempt-repair-ledger", "attempt", "attempt-repair");
+    insertLedger.run("system-job-ledger", "system_job", "repair-1");
+    await createDispatch(opened.database, {
+      attempt: {
+        ...finishAttemptRecord(),
+        id: "attempt-repair",
+        workspacePath: "/tmp/work/_system/repair-repair-1",
+      },
+      claim: {
+        acquiredAt: "2026-07-13T10:00:00Z",
+        expiresAt: "2026-07-13T10:02:00Z",
+        holder: "service-1",
+        originStage: "queued",
+        reason: "system_job_dispatch",
+      },
+      reservation: {
+        id: "reservation-repair",
+        ledgers: [
+          { amount: 100, id: "attempt-repair-ledger", version: 1 },
+          { amount: 100, id: "system-job-ledger", version: 1 },
+          { amount: 100, id: "fleet-ledger", version: 2 },
+        ],
+      },
+      systemJobTransition: {
+        attemptId: "attempt-repair",
+        confirmedExternalRevision: null,
+        enteredAt: "2026-07-13T10:00:00Z",
+        expectedFromStage: "queued",
+        id: "stage-repair-running",
+        reason: "system_job_dispatch",
+        timestampSource: "observed_estimate",
+        toStage: "running",
+        workRef: { id: "repair-1", kind: "system_job" },
+      },
+      workRef: { id: "repair-1", kind: "system_job" },
+    });
+
+    await finishAttempt(opened.database, {
+      attemptId: "attempt-repair",
+      costUsd: null,
+      endedAt: "2026-07-13T10:01:00Z",
+      failureClass: null,
+      nextClaim: { mode: "Ready", reason: "independent_verification_required" },
+      reservationId: "reservation-repair",
+      settledLedgers: [
+        { actualAmount: 75, id: "attempt-repair-ledger" },
+        { actualAmount: 75, id: "fleet-ledger" },
+        { actualAmount: 75, id: "system-job-ledger" },
+      ],
+      systemJobStageTransition: {
+        attemptId: "attempt-repair",
+        confirmedExternalRevision: null,
+        enteredAt: "2026-07-13T10:01:00Z",
+        expectedFromStage: "running",
+        id: "stage-repair-review",
+        reason: "implementation.completed",
+        timestampSource: "observed_estimate",
+        toStage: "review",
+        workRef: { id: "repair-1", kind: "system_job" },
+      },
+      terminalResult: {
+        id: "result-repair",
+        kind: "implementation_outcome",
+        payload: { status: "completed" },
+        role: "implementation",
+      },
+      usage: { inputTokens: 50, outputTokens: 25 },
+      workRef: { id: "repair-1", kind: "system_job" },
+    });
+
+    expect(
+      opened.sqlite
+        .prepare(
+          "select status, input_tokens, output_tokens from system_jobs where id = 'repair-1'",
+        )
+        .get(),
+    ).toEqual({ input_tokens: 50, output_tokens: 25, status: "review" });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select from_stage, to_stage from stage_transitions where id = 'stage-repair-review'",
+        )
+        .get(),
+    ).toEqual({ from_stage: "running", to_stage: "review" });
+  });
+
   it("loads the exact open usage and reservation units needed for closure", async () => {
     await expect(
       loadAttemptSettlementState(opened.database, {

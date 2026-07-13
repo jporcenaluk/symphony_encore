@@ -61,8 +61,10 @@ import {
   loadPendingMergeQueue,
   loadPendingPostMerge,
   loadPendingPullRequestGate,
+  loadPendingRepairPublication,
   loadPendingRepositoryPublication,
   loadPendingReviewCoordination,
+  loadSystemJob,
   type OpenedDatabase,
   observeIssue,
   promoteDueRetryClaims,
@@ -84,6 +86,8 @@ import {
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
+import { startPlannedInitialSystemJobAttemptLifecycle } from "./initial-system-job-attempt-lifecycle.js";
+import { planInitialSystemJobAttempt } from "./initial-system-job-attempt-planner.js";
 import {
   startPlannedAdjudicationAttemptLifecycle,
   startPlannedIntegrativeReviewAttemptLifecycle,
@@ -99,11 +103,15 @@ import {
   executeBaseUpdate,
   executeMergeQueueLanding,
   executePostMergeVerification,
+  executeSystemJobPostMergeVerification,
 } from "./merge-queue.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
 import { runPullRequestHygiene } from "./pull-request-hygiene.js";
-import { executeRepositoryPublication } from "./repository-publication.js";
+import {
+  executeRepairRepositoryPublication,
+  executeRepositoryPublication,
+} from "./repository-publication.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -156,6 +164,7 @@ export function createProductionScheduler(input: {
       { acceptanceCriteriaHeading: stringValue(values, "tracker.acceptance_criteria_heading") },
     );
   const running = new Map<string, RunningIssueRecord>();
+  const runningSystemJobAttempts = new Set<string>();
   const completions = new Set<Promise<void>>();
   const safety = new PersistenceSafetyController(async (failure) => {
     let stopError: unknown;
@@ -195,7 +204,9 @@ export function createProductionScheduler(input: {
       }
     },
     onRunningLoaded(records) {
-      running.clear();
+      for (const attemptId of running.keys()) {
+        if (!runningSystemJobAttempts.has(attemptId)) running.delete(attemptId);
+      }
       for (const record of records) running.set(record.attemptId, record);
     },
     safety,
@@ -250,6 +261,8 @@ export function createProductionScheduler(input: {
       for (const claim of recoveryState.ready) {
         if (!safety.canDispatch()) break;
         const isReviewCoordination = claim.reason === "review_coordination_required";
+        const isSystemJobDispatch =
+          claim.reason === "system_job_dispatch_required" && "system_job_id" in claim.work_ref;
         const isRepositoryPublication =
           claim.reason === "pull_request_required" && repositoryHostingAdapter !== undefined;
         const isPullRequestHygiene =
@@ -288,22 +301,460 @@ export function createProductionScheduler(input: {
           isReviewRework ||
           isImplementationRetry;
         if (
-          (!isPlanReview &&
-            !isIndependentVerification &&
-            !isIntegrativeReview &&
-            !isAdjudication &&
-            !isReviewCoordination &&
-            !isRepositoryPublication &&
-            !isPullRequestHygiene &&
-            !isMergeQueue &&
-            !isPostMerge &&
-            !isBaseUpdate &&
-            !isSpecialistReview &&
-            !isImplementationContinuation) ||
-          !("issue_id" in claim.work_ref)
+          !isPlanReview &&
+          !isSystemJobDispatch &&
+          !isIndependentVerification &&
+          !isIntegrativeReview &&
+          !isAdjudication &&
+          !isReviewCoordination &&
+          !isRepositoryPublication &&
+          !isPullRequestHygiene &&
+          !isMergeQueue &&
+          !isPostMerge &&
+          !isBaseUpdate &&
+          !isSpecialistReview &&
+          !isImplementationContinuation
         ) {
           continue;
         }
+        if (isSystemJobDispatch && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const planned = await planInitialSystemJobAttempt({
+              adapter: agent,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              database: input.database,
+              job,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              serviceRunId: input.serviceRunId,
+              submitPlanSchema: PlanSchema,
+              terminalResultSchema: ImplementationOutcomeSchema,
+            });
+            const started = await startPlannedInitialSystemJobAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              job,
+              maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
+              maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
+              maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              onPlanSubmitted: createInitialPlanSubmissionHandler({
+                attemptId: planned.attemptId,
+                database: input.database,
+                issue: job,
+                now: () => new Date().toISOString(),
+                provisionalClassification: provisionalClassificationForAttempt(
+                  planned.dispatch.attempt,
+                ),
+                riskPathPatterns: stringList(values, "class.risk_paths"),
+                safety,
+                trivialMaxChangedLines: numberValue(values, "class.trivial_max_changed_lines"),
+                trivialPathPatterns: stringList(values, "class.trivial_patterns"),
+                workspacePath: planned.dispatch.attempt.workspacePath,
+              }),
+              planned,
+              repositoryAdapter,
+              retryJitterSample: Math.random(),
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            availableSlots -= 1;
+            runningSystemJobAttempts.add(planned.attemptId);
+            running.set(planned.attemptId, {
+              attemptId: planned.attemptId,
+              attemptLane: "running",
+              expectedExpiresAt: planned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId: systemJobId,
+              lastEventAt: started.bound.started.timestamp,
+              processGroupId: started.bound.session.processGroupId,
+              processId: started.bound.session.processId,
+              workspacePath: planned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              started.completion,
+              () => {
+                running.delete(planned.attemptId);
+                runningSystemJobAttempts.delete(planned.attemptId);
+              },
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: planned.attemptId, error, system_job_id: systemJobId },
+                  "repair SystemJob attempt lifecycle failed",
+                ),
+            );
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob dispatch skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isIndependentVerification && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const target = await loadPendingIndependentVerification(
+              input.database,
+              { id: systemJobId, kind: "system_job" },
+              claim.reason,
+            );
+            if (!target) {
+              throw new Error(`scheduler.verification_target_missing:${systemJobId}`);
+            }
+            await runPendingIndependentVerification({
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              command: stringValue(values, "workspace.verify_command"),
+              database: input.database,
+              expectedReadyReason: claim.reason,
+              ...(input.verification?.execute ? { execute: input.verification.execute } : {}),
+              newId: randomUUID,
+              ...(input.verification?.readRevision
+                ? { readRevision: input.verification.readRevision }
+                : {}),
+              safety,
+              sourceEnvironment: input.environment,
+              target,
+              timeoutMs: numberValue(values, "hooks.timeout_ms"),
+              verifyNoneReason: nullableString(values, "workspace.verify_none_reason"),
+              verifiedReadyReason: "pull_request_required",
+              workRef: { id: systemJobId, kind: "system_job" },
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob verification skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isRepositoryPublication && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const target = await loadPendingRepairPublication(input.database, systemJobId);
+            await executeRepairRepositoryPublication({
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              failedMergeSha: target.failedMergeSha,
+              job,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              readWorkspaceRevision: () =>
+                input.verification?.readRevision
+                  ? input.verification.readRevision({
+                      sourceEnvironment: input.environment,
+                      timeoutMs: numberValue(values, "hooks.timeout_ms"),
+                      workspace: target.workspacePath,
+                      workspaceRoot: stringValue(values, "workspace.root"),
+                    })
+                  : readWorkspaceHeadRevision({
+                      commandRunner: createNodeWorkspaceCommandRunner(),
+                      environment: input.environment,
+                      timeoutMs: numberValue(values, "hooks.timeout_ms"),
+                      workspace: target.workspacePath,
+                      workspaceRoot: stringValue(values, "workspace.root"),
+                    }),
+              repository: repositoryHostingAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              target,
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob publication skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isPullRequestHygiene && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const target = await loadPendingPullRequestGate(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!target) throw new Error(`scheduler.pull_request_gate_missing:${systemJobId}`);
+            await runPullRequestHygiene({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              fetchPullRequestSnapshot: (workRef) =>
+                repositoryHostingAdapter.fetchPullRequestSnapshot(workRef),
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              quietPeriodMs: numberValue(values, "review.quiet_period_ms"),
+              requiredChecks: stringList(values, "review.required_checks"),
+              settleTimeoutMs: numberValue(values, "review.settle_timeout_ms"),
+              target,
+              workRef: { id: systemJobId, kind: "system_job" },
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob pull-request hygiene skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isIntegrativeReview && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const target = await loadPendingIntegrativeReview(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!target) throw new Error(`scheduler.review_target_missing:${systemJobId}`);
+            const context = await (
+              input.review?.collectEvidence ?? collectIntegrativeReviewContext
+            )({
+              baseSha: target.baseSha,
+              changeClass: target.changeClass,
+              commandRunner: createNodeWorkspaceCommandRunner(),
+              sourceEnvironment: input.environment,
+              targetSha: target.targetSha,
+              timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+              verificationRecordId: target.verificationRecordId,
+              workspace: target.workspacePath,
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            const planned = await planIntegrativeReviewAttempt({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              context,
+              database: input.database,
+              issue: job,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              serviceRunId: input.serviceRunId,
+              terminalResultSchema: ReviewResultSchema,
+            });
+            const started = await startPlannedIntegrativeReviewAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: job,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              planned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            availableSlots -= 1;
+            runningSystemJobAttempts.add(planned.attemptId);
+            running.set(planned.attemptId, {
+              attemptId: planned.attemptId,
+              attemptLane: "review",
+              expectedExpiresAt: planned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId: systemJobId,
+              lastEventAt: started.bound.started.timestamp,
+              processGroupId: started.bound.session.processGroupId,
+              processId: started.bound.session.processId,
+              workspacePath: planned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              started.completion,
+              () => {
+                running.delete(planned.attemptId);
+                runningSystemJobAttempts.delete(planned.attemptId);
+              },
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: planned.attemptId, error, system_job_id: systemJobId },
+                  "repair SystemJob integrative review lifecycle failed",
+                ),
+            );
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob integrative review skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isReviewCoordination && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const pending = await loadPendingReviewCoordination(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!pending) {
+              throw new Error(`scheduler.review_coordination_missing:${systemJobId}`);
+            }
+            let requiredSpecialistNames: readonly string[] = [];
+            if (pending.changeClass === "high_risk") {
+              const context = await (
+                input.review?.collectEvidence ?? collectIntegrativeReviewContext
+              )({
+                baseSha: pending.targetBaseSha,
+                changeClass: pending.changeClass,
+                commandRunner: createNodeWorkspaceCommandRunner(),
+                sourceEnvironment: input.environment,
+                targetSha: pending.targetSha,
+                timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+                verificationRecordId: pending.verificationRecordId,
+                workspace: pending.workspacePath,
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+              requiredSpecialistNames = selectRequiredSpecialists(
+                parseReviewSpecialists(values["review.specialists"]),
+                {
+                  acceptanceCriteriaPresent: job.acceptance_criteria.length > 0,
+                  changedLines: context.changedLines,
+                  changedPaths: context.changedFiles,
+                  facts: new Set(pending.riskFacts),
+                  proposedPaths: pending.proposedPaths,
+                },
+              ).map((required) => required.specialist.name);
+              const routed = await routeNextReviewSpecialist(input.database, {
+                requiredSpecialistNames,
+                updatedAt: new Date().toISOString(),
+                workRef: { id: systemJobId, kind: "system_job" },
+              });
+              if (routed) continue;
+            }
+            const conflicts = await routeReviewAdjudication(input.database, {
+              updatedAt: new Date().toISOString(),
+              workRef: { id: systemJobId, kind: "system_job" },
+            });
+            if (conflicts.length > 0) continue;
+            await commitOrdinaryReviewSet(input.database, {
+              createdAt: new Date().toISOString(),
+              id: randomUUID(),
+              requiredSpecialistNames,
+              workRef: { id: systemJobId, kind: "system_job" },
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob review coordination skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if (isMergeQueue && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            if (repositoryMergeActive) continue;
+            const target = await loadPendingMergeQueue(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!target) throw new Error(`scheduler.merge_queue_target_missing:${systemJobId}`);
+            await executeMergeQueueLanding({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              landingPolicy: "squash",
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              repository: repositoryHostingAdapter,
+              requiredChecks: stringList(values, "review.required_checks"),
+              safety,
+              serviceRunId: input.serviceRunId,
+              target,
+              workRef: { id: systemJobId, kind: "system_job" },
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob merge queue skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          break;
+        }
+        if (isPostMerge && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const target = await loadPendingPostMerge(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!target) throw new Error(`scheduler.post_merge_target_missing:${systemJobId}`);
+            await executeSystemJobPostMergeVerification({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              repository: repositoryHostingAdapter,
+              requiredChecks: stringList(values, "review.required_checks"),
+              safety,
+              settleTimeoutMs: numberValue(values, "review.settle_timeout_ms"),
+              target,
+              workRef: { id: systemJobId, kind: "system_job" },
+            });
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob post-merge verification skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          break;
+        }
+        if (!("issue_id" in claim.work_ref)) continue;
         const issueId = claim.work_ref.issue_id;
         try {
           const stored = await loadIssue(input.database, issueId);
@@ -1333,7 +1784,13 @@ function initialAttemptConfiguration(
 function plannedProvisionalClassification(
   planned: Awaited<ReturnType<typeof planInitialIssueAttempt>>,
 ): ProvisionalClassification {
-  const attempt = planned.record.dispatch.attempt;
+  return provisionalClassificationForAttempt(planned.record.dispatch.attempt);
+}
+
+function provisionalClassificationForAttempt(attempt: {
+  changeClass: "high_risk" | "standard" | "trivial";
+  routingReasons: readonly string[];
+}): ProvisionalClassification {
   const classificationReasons = attempt.routingReasons.filter(
     (reason) => !reason.startsWith("route."),
   );
@@ -1473,6 +1930,11 @@ function createLazyGitHubWorkspaceAdapter(
   };
   return {
     populateIssueWorkspace: (request) => load().populateIssueWorkspace(request),
+    populateSystemJobWorkspace: (request) => {
+      const operation = load().populateSystemJobWorkspace;
+      if (!operation) throw new Error("workspace.system_job_population_unsupported");
+      return operation(request);
+    },
   };
 }
 

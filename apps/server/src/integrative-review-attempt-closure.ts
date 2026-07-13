@@ -5,6 +5,7 @@ import {
   type Issue,
   type ReviewResult,
   ReviewResultSchema,
+  type SystemJob,
 } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
@@ -24,7 +25,7 @@ interface CloseReviewAttemptInput {
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
   endedAt: string;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   reservationId: string;
   safety: PersistenceSafetyController;
@@ -75,7 +76,7 @@ async function closeReviewAttempt(
         targetSha: input.context.targetSha,
         terminalResultId,
         usage: { inputTokens: settlement.inputTokens, outputTokens: settlement.outputTokens },
-        workRef: { id: input.issue.id, kind: "issue" },
+        workRef: reviewWorkRef(input.issue),
       });
       return consumption;
     }
@@ -99,7 +100,7 @@ async function closeReviewAttempt(
             commands: [],
             decisions_fixed: [],
             files_changed: [...input.context.changedFiles],
-            goal: input.issue.title,
+            goal: "kind" in input.issue ? input.issue.goal : input.issue.title,
             open_items: input.issue.acceptance_criteria,
             revision: input.context.targetSha,
           },
@@ -113,7 +114,7 @@ async function closeReviewAttempt(
         role: reviewerRole,
       },
       usage: { inputTokens: settlement.inputTokens, outputTokens: settlement.outputTokens },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: reviewWorkRef(input.issue),
     });
     return consumption;
   } catch (error) {
@@ -121,6 +122,13 @@ async function closeReviewAttempt(
     await input.safety.recordFailure(failure);
     throw failure;
   }
+}
+
+function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+  id: string;
+  kind: "issue" | "system_job";
+} {
+  return "kind" in work ? { id: work.id, kind: "system_job" } : { id: work.id, kind: "issue" };
 }
 
 function normalizeConsumption(

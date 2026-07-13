@@ -103,6 +103,52 @@ describe("GitHub trusted workspace population", () => {
     });
   });
 
+  it("populates a repair SystemJob under the isolated _system workspace root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "symphony-github-system-workspace-"));
+    directories.push(root);
+    const workspace = path.join(root, "_system", "repair-repair-1");
+    const baseSha = "0123456789abcdef0123456789abcdef01234567";
+    const run = vi.fn<WorkspaceCommandRunner["run"]>(async (request) => {
+      if (request.command === "gh") {
+        await mkdir(workspace, { recursive: true });
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      if (request.arguments.includes("rev-parse")) {
+        return { exitCode: 0, stderr: "", stdout: `${baseSha}\n` };
+      }
+      return { exitCode: 0, stderr: "", stdout: "" };
+    });
+    const adapter = createGitHubWorkspaceRepositoryAdapter({
+      api: api({
+        repository: {
+          defaultBranchRef: { name: "main", target: { oid: baseSha } },
+          nameWithOwner: "ORG/repo",
+        },
+      }),
+      commandRunner: { run },
+      environment: {},
+      timeoutMs: 5_000,
+    });
+
+    await expect(
+      adapter.populateSystemJobWorkspace?.({
+        id: "repair-1",
+        kind: "repair",
+        repository: "ORG/repo",
+        workspaceRoot: root,
+      }),
+    ).resolves.toMatchObject({
+      localBranch: expect.stringMatching(/^symphony\/system-repair-/u),
+      workspacePath: workspace,
+    });
+    expect(run).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        arguments: ["repo", "clone", "ORG/repo", workspace, "--", "--no-checkout"],
+      }),
+    );
+  });
+
   it("fails closed and removes a partial checkout when local branch creation fails", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "symphony-github-workspace-"));
     directories.push(root);

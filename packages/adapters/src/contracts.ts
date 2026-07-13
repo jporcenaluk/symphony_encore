@@ -180,4 +180,10 @@ export interface WorkspaceRepositoryAdapter {
     repository: string;
     workspaceRoot: string;
   }): Promise<WorkspacePopulation>;
+  populateSystemJobWorkspace?(input: {
+    id: string;
+    kind: "repair" | "synthesis";
+    repository: string;
+    workspaceRoot: string;
+  }): Promise<WorkspacePopulation>;
 }

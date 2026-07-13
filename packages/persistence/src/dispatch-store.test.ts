@@ -225,6 +225,15 @@ describe("dispatch transaction", () => {
       toStage: "queued",
       workRef: { id: "job-1", kind: "system_job" },
     });
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values ('system_job', 'job-1', 'service-1', 'Ready', ?, ?, null,
+          'queued', 'system_job_dispatch_required')`,
+      )
+      .run("2026-07-13T09:59:00Z", "2026-07-13T09:59:00Z");
 
     await createDispatch(opened.database, {
       ...dispatch,
@@ -233,6 +242,7 @@ describe("dispatch transaction", () => {
         id: "attempt-job-1",
         workspacePath: "/tmp/work/job-1",
       },
+      expectedReadyReason: "system_job_dispatch_required",
       reservation: { ...dispatch.reservation, id: "reservation-job-1" },
       systemJobTransition: {
         attemptId: "attempt-job-1",

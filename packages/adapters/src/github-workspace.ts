@@ -4,7 +4,11 @@ import { lstat, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceRepositoryAdapter } from "./contracts.js";
 import type { GhCliApiClient } from "./gh-cli-api.js";
-import { issueWorkspacePath, resolveAssignedWorkspace } from "./workspace-boundary.js";
+import {
+  issueWorkspacePath,
+  resolveAssignedWorkspace,
+  systemJobWorkspacePath,
+} from "./workspace-boundary.js";
 
 const GH_ENVIRONMENT_KEYS = [
   "GH_CONFIG_DIR",
@@ -98,6 +102,85 @@ export function createGitHubWorkspaceRepositoryAdapter(options: {
       assertLexicalDescendant(workspaceRoot, workspacePath);
       if (await pathExists(workspacePath)) throw new Error("workspace.already_exists");
       const localBranch = localBranchName(input.identifier);
+      try {
+        await runRequired(options.commandRunner, {
+          arguments: ["repo", "clone", input.repository, workspacePath, "--", "--no-checkout"],
+          command: "gh",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GH_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const resolvedWorkspace = await resolveAssignedWorkspace(workspaceRoot, workspacePath);
+        await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "switch", "--create", localBranch, baseSha],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const revision = await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "rev-parse", "HEAD"],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        if (
+          revision.stdout.trim().toLocaleLowerCase("en-US") !== baseSha.toLocaleLowerCase("en-US")
+        ) {
+          throw new Error("workspace.base_revision_mismatch");
+        }
+        const createdAt = now();
+        if (!Number.isFinite(Date.parse(createdAt))) throw new Error("workspace.timestamp_invalid");
+        return {
+          baseRef: defaultBranch.name,
+          baseSha,
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt,
+          localBranch,
+          repository: input.repository,
+          workspacePath: resolvedWorkspace,
+        };
+      } catch (error) {
+        await rm(workspacePath, { force: true, recursive: true });
+        throw error;
+      }
+    },
+    async populateSystemJobWorkspace(input) {
+      const [owner, name, extra] = input.repository.split("/");
+      if (!owner || !name || extra !== undefined) throw new Error("workspace.repository_invalid");
+      if (!input.id) throw new Error("workspace.identifier_invalid");
+      if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+        throw new Error("workspace.timeout_invalid");
+      }
+      const metadata = await options.api.graphql<RepositoryMetadataResponse>(
+        REPOSITORY_METADATA_QUERY,
+        { name, owner },
+      );
+      const repository = metadata.data.repository;
+      const defaultBranch = repository?.defaultBranchRef;
+      const baseSha = defaultBranch?.target.oid;
+      if (
+        !repository ||
+        repository.nameWithOwner.toLocaleLowerCase("en-US") !==
+          input.repository.toLocaleLowerCase("en-US") ||
+        !defaultBranch ||
+        !defaultBranch.name ||
+        typeof baseSha !== "string" ||
+        !/^[A-Fa-f0-9]{7,64}$/u.test(baseSha)
+      ) {
+        throw new Error("workspace.repository_metadata_invalid");
+      }
+      await mkdir(input.workspaceRoot, { recursive: true });
+      const workspaceRoot = await realpath(input.workspaceRoot);
+      const workspacePath = systemJobWorkspacePath(workspaceRoot, input.kind, input.id);
+      assertLexicalDescendant(workspaceRoot, workspacePath);
+      if (await pathExists(workspacePath)) throw new Error("workspace.already_exists");
+      await mkdir(path.dirname(workspacePath), { recursive: true });
+      const localBranch = systemJobLocalBranchName(input.kind, input.id);
       try {
         await runRequired(options.commandRunner, {
           arguments: ["repo", "clone", input.repository, workspacePath, "--", "--no-checkout"],
@@ -338,6 +421,11 @@ function localBranchName(identifier: string): string {
       .slice(0, 48) || "work";
   const digest = createHash("sha256").update(identifier).digest("hex").slice(0, 12);
   return `symphony/${label}-${digest}`;
+}
+
+function systemJobLocalBranchName(kind: "repair" | "synthesis", id: string): string {
+  const digest = createHash("sha256").update(`${kind}:${id}`).digest("hex").slice(0, 12);
+  return `symphony/system-${kind}-${digest}`;
 }
 
 function assertLexicalDescendant(root: string, candidate: string): void {

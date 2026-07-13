@@ -35,6 +35,7 @@ export interface DispatchInput {
     originStage: string;
     reason: string;
   };
+  expectedReadyReason?: string;
   issueMutation?: {
     authorization: MutationAuthorization;
     event: AppendEventRecordInput;
@@ -44,6 +45,7 @@ export interface DispatchInput {
     id: string;
     ledgers: readonly { amount: number; id: string; version: number }[];
   };
+  systemJobEvent?: AppendEventRecordInput;
   systemJobTransition?: StageTransitionInput;
   workRef: { kind: "issue" | "system_job"; id: string };
 }
@@ -68,17 +70,31 @@ export async function createDispatch(
         ${input.attempt.startedAt}, null, 'created', null, null, 0, 0, 0, ${input.attempt.costUsd}
       )
     `.execute(transaction);
-    await sql`
-      insert into claims (
-        work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
-        expires_at, origin_stage, reason, retry_due_at, blocker_predicate,
-        question_id, approval_request_id, last_comment_cursor
-      ) values (
-        ${input.workRef.kind}, ${input.workRef.id}, ${input.claim.holder}, 'Running',
-        ${input.claim.acquiredAt}, ${input.claim.acquiredAt}, ${input.claim.expiresAt},
-        ${input.claim.originStage}, ${input.claim.reason}, null, null, null, null, null
-      )
-    `.execute(transaction);
+    if (input.expectedReadyReason) {
+      const claim = await sql`
+        update claims
+        set holder = ${input.claim.holder}, mode = 'Running',
+            acquired_at = ${input.claim.acquiredAt}, updated_at = ${input.claim.acquiredAt},
+            expires_at = ${input.claim.expiresAt}, origin_stage = ${input.claim.originStage},
+            reason = ${input.claim.reason}, retry_due_at = null, blocker_predicate = null,
+            question_id = null, approval_request_id = null
+        where work_ref_kind = ${input.workRef.kind} and work_ref_id = ${input.workRef.id}
+          and mode = 'Ready' and reason = ${input.expectedReadyReason}
+      `.execute(transaction);
+      if (claim.numAffectedRows !== 1n) throw new Error("dispatch.ready_claim_mismatch");
+    } else {
+      await sql`
+        insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason, retry_due_at, blocker_predicate,
+          question_id, approval_request_id, last_comment_cursor
+        ) values (
+          ${input.workRef.kind}, ${input.workRef.id}, ${input.claim.holder}, 'Running',
+          ${input.claim.acquiredAt}, ${input.claim.acquiredAt}, ${input.claim.expiresAt},
+          ${input.claim.originStage}, ${input.claim.reason}, null, null, null, null, null
+        )
+      `.execute(transaction);
+    }
     await sql`
       insert into budget_reservations (
         id, work_ref_kind, work_ref_id, attempt_id, system_job_id,
@@ -142,6 +158,11 @@ export async function createDispatch(
         throw new Error("dispatch.system_job_not_queued");
       }
       await transitionStageInTransaction(transaction, input.systemJobTransition);
+      if (input.systemJobEvent) {
+        await appendEventRecordInTransaction(transaction, input.systemJobEvent);
+      }
+    } else if (input.systemJobEvent) {
+      throw new Error("dispatch.system_job_event_requires_transition");
     }
   });
 }

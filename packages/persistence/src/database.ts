@@ -935,6 +935,72 @@ const repositoryMergeQueueStateMigration: RepositoryMigration = {
   version: 14,
 };
 
+const systemJobBudgetScopeMigration: RepositoryMigration = {
+  checksum: "sha256:ad34234aef825c6919fcedbed6e52f73459502f5efd335c4e784324be19bfc70",
+  name: "system_job_budget_scope",
+  async up(database) {
+    await sql`alter table budget_reservation_ledgers rename to budget_reservation_ledgers_v14`.execute(
+      database,
+    );
+    await sql`alter table budget_adjustments rename to budget_adjustments_v14`.execute(database);
+    await sql`alter table budget_ledgers rename to budget_ledgers_v14`.execute(database);
+    await sql`
+      create table budget_ledgers (
+        id text primary key,
+        scope text not null check (scope in ('attempt', 'issue', 'system_job', 'rolling_24h')),
+        scope_id text not null,
+        unit text not null check (unit in ('tokens', 'usd')),
+        base_limit real not null check (base_limit > 0),
+        adjustment real not null default 0,
+        effective_limit real not null check (effective_limit > 0),
+        reserved real not null default 0 check (reserved >= 0),
+        consumed real not null default 0 check (consumed >= 0),
+        overrun real not null default 0 check (overrun >= 0),
+        version integer not null default 1 check (version > 0),
+        updated_at text not null,
+        unique (scope, scope_id, unit)
+      ) strict
+    `.execute(database);
+    await sql`
+      insert into budget_ledgers
+      select * from budget_ledgers_v14
+    `.execute(database);
+    await sql`
+      create table budget_reservation_ledgers (
+        reservation_id text not null references budget_reservations(id) on delete restrict,
+        ledger_id text not null references budget_ledgers(id) on delete restrict,
+        reserved_amount real not null check (reserved_amount >= 0),
+        primary key (reservation_id, ledger_id)
+      ) strict
+    `.execute(database);
+    await sql`
+      insert into budget_reservation_ledgers
+      select * from budget_reservation_ledgers_v14
+    `.execute(database);
+    await sql`
+      create table budget_adjustments (
+        id text primary key,
+        ledger_id text not null references budget_ledgers(id),
+        action text not null check (action in ('set_limit', 'add_allowance', 'start_new_allowance_epoch')),
+        amount real not null,
+        reason text not null,
+        operator_action_id text not null unique references operator_actions(id),
+        prior_version integer not null check (prior_version >= 0),
+        new_version integer not null check (new_version = prior_version + 1),
+        created_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      insert into budget_adjustments
+      select * from budget_adjustments_v14
+    `.execute(database);
+    await sql`drop table budget_reservation_ledgers_v14`.execute(database);
+    await sql`drop table budget_adjustments_v14`.execute(database);
+    await sql`drop table budget_ledgers_v14`.execute(database);
+  },
+  version: 15,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -950,6 +1016,7 @@ export const CORE_MIGRATIONS = [
   workspaceCheckoutBaseRefMigration,
   pullRequestGateStateMigration,
   repositoryMergeQueueStateMigration,
+  systemJobBudgetScopeMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

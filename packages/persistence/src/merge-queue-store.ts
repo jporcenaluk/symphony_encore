@@ -3,7 +3,10 @@ import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 import { recordSideEffectReceiptInTransaction } from "./side-effect-store.js";
-import { transitionStageInTransaction } from "./stage-transition.js";
+import {
+  openBaselineStageInTransaction,
+  transitionStageInTransaction,
+} from "./stage-transition.js";
 
 type WorkRef = { id: string; kind: "issue" | "system_job" };
 
@@ -137,11 +140,31 @@ export async function beginRepositoryBranchUpdate(
     headSha: string;
     now: string;
     repository: string;
+    transitionId?: string;
     workRef: WorkRef;
   },
 ): Promise<void> {
   validateTimestamp(input.now);
   await database.transaction().execute(async (transaction) => {
+    if (input.workRef.kind === "system_job") {
+      if (!input.transitionId) throw new Error("merge_queue.transition_identity_missing");
+      const job = await sql`
+        update system_jobs set status = 'merge'
+        where id = ${input.workRef.id} and status = 'review'
+      `.execute(transaction);
+      if (job.numAffectedRows !== 1n) throw new Error("merge_queue.system_job_not_review");
+      await transitionStageInTransaction(transaction, {
+        attemptId: null,
+        confirmedExternalRevision: null,
+        enteredAt: input.now,
+        expectedFromStage: "review",
+        id: input.transitionId,
+        reason: "merge_queue.started",
+        timestampSource: "observed_estimate",
+        toStage: "merge",
+        workRef: input.workRef,
+      });
+    }
     await sql`
       insert into repository_merge_queue_entries (
         work_ref_kind, work_ref_id, repository, state, head_sha, base_sha,
@@ -261,7 +284,7 @@ export async function loadPendingPostMerge(
            verification.config_snapshot_id,
            queue.created_at,
            queue.merge_sha,
-           issue.provider_revision,
+           coalesce(issue.provider_revision, job.config_snapshot_id) as provider_revision,
            queue.repository
     from claims claim
     join repository_merge_queue_entries queue
@@ -269,9 +292,12 @@ export async function loadPendingPostMerge(
       and queue.work_ref_id = claim.work_ref_id
       and queue.state = 'post_merge'
       and queue.merge_sha is not null
-    join issues issue
+    left join issues issue
       on claim.work_ref_kind = 'issue'
       and issue.id = claim.work_ref_id
+    left join system_jobs job
+      on claim.work_ref_kind = 'system_job'
+      and job.id = claim.work_ref_id
     join review_sets review_set
       on review_set.work_ref_kind = claim.work_ref_kind
       and review_set.work_ref_id = claim.work_ref_id
@@ -474,6 +500,89 @@ export async function commitPostMergeSuccess(
   });
 }
 
+export async function commitPostMergeSystemJobSuccess(
+  database: Kysely<DatabaseSchema>,
+  input: { now: string; transitionId: string; workRef: WorkRef },
+): Promise<void> {
+  validateTimestamp(input.now);
+  if (input.workRef.kind !== "system_job" || !input.transitionId) {
+    throw new Error("merge_queue.system_job_completion_input_invalid");
+  }
+  await database.transaction().execute(async (transaction) => {
+    const jobRow = await sql<{
+      parent_work_ref_id: string | null;
+      parent_work_ref_kind: "issue" | "system_job" | null;
+    }>`
+      select parent_work_ref_kind, parent_work_ref_id
+      from system_jobs where id = ${input.workRef.id} and status = 'merge'
+    `.execute(transaction);
+    const job = jobRow.rows[0];
+    if (!job) throw new Error("merge_queue.system_job_not_review");
+    const latestResult = await sql<{ terminal_result_id: string }>`
+      select terminal_result_id
+      from attempts
+      where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+        and terminal_result_id is not null
+      order by attempt_number desc
+      limit 1
+    `.execute(transaction);
+    const finalResultId = latestResult.rows[0]?.terminal_result_id;
+    if (!finalResultId) throw new Error("merge_queue.system_job_result_missing");
+    await transitionStageInTransaction(transaction, {
+      attemptId: null,
+      confirmedExternalRevision: null,
+      enteredAt: input.now,
+      expectedFromStage: "merge",
+      id: input.transitionId,
+      reason: "merge_queue.post_merge_checks_passed",
+      timestampSource: "observed_estimate",
+      toStage: "done",
+      workRef: input.workRef,
+    });
+    const updatedJob = await sql`
+      update system_jobs
+      set status = 'done', ended_at = ${input.now}, final_result_id = ${finalResultId}
+      where id = ${input.workRef.id} and status = 'merge'
+    `.execute(transaction);
+    if (updatedJob.numAffectedRows !== 1n) throw new Error("merge_queue.system_job_not_review");
+    const queue = await sql`
+      update repository_merge_queue_entries
+      set state = 'completed', updated_at = ${input.now}
+      where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+        and state = 'post_merge'
+    `.execute(transaction);
+    if (queue.numAffectedRows !== 1n) throw new Error("merge_queue.entry_not_post_merge");
+    const claim = await sql`
+      delete from claims
+      where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready' and reason = 'post_merge_verification_required'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("merge_queue.claim_not_post_merge");
+    if (job.parent_work_ref_kind && job.parent_work_ref_id) {
+      await sql`
+        update parked_work
+        set resolved_at = ${input.now}, last_checked_at = ${input.now}
+        where work_ref_kind = ${job.parent_work_ref_kind}
+          and work_ref_id = ${job.parent_work_ref_id}
+          and resolved_at is null
+          and blocker_predicate = ${`system_job:${input.workRef.id}:not_terminal`}
+      `.execute(transaction);
+      const parentClaim = await sql`
+        update claims
+        set mode = 'Ready', reason = 'repair_completed', updated_at = ${input.now},
+            blocker_predicate = null, question_id = null, approval_request_id = null
+        where work_ref_kind = ${job.parent_work_ref_kind}
+          and work_ref_id = ${job.parent_work_ref_id}
+          and mode = 'AwaitingHuman'
+          and reason = ${`repair_in_progress:${input.workRef.id}`}
+      `.execute(transaction);
+      if (parentClaim.numAffectedRows !== 1n) {
+        throw new Error("merge_queue.repair_parent_claim_missing");
+      }
+    }
+  });
+}
+
 export async function routePostMergeRetry(
   database: Kysely<DatabaseSchema>,
   input: { now: string; retryDueAt: string; workRef: WorkRef },
@@ -640,6 +749,14 @@ export async function commitPostMergeRepairCycle(
         'queued', 0, 0, null, ${input.now}, null, null, null
       )
     `.execute(transaction);
+    await openBaselineStageInTransaction(transaction, {
+      enteredAt: input.now,
+      id: `${input.transitionId}:repair-job`,
+      reason: "merge_queue.post_merge_failed",
+      timestampSource: "receipt",
+      toStage: "queued",
+      workRef: { id: input.repairJobId, kind: "system_job" },
+    });
     await sql`
       insert into claims (
         work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,

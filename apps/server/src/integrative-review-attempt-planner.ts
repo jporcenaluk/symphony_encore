@@ -4,7 +4,7 @@ import {
   issueWorkspacePath,
   resolveRequiredSkills,
 } from "@symphony/adapters";
-import type { AgentAdapterManifest, Issue } from "@symphony/contracts";
+import type { AgentAdapterManifest, Issue, SystemJob } from "@symphony/contracts";
 import {
   type ComputeProfile,
   type ComputeRiskFloorRule,
@@ -69,7 +69,7 @@ interface ReviewPlanningInput {
   configuration: IntegrativeReviewAttemptConfiguration;
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   now(): string;
   serviceRunId: string;
@@ -175,7 +175,7 @@ async function planReviewAttempt(
   });
   const attemptId = requiredId(input.newId());
   const reservationId = requiredId(input.newId());
-  const workRef = { id: input.issue.id, kind: "issue" as const };
+  const workRef = reviewWorkRef(input.issue);
   const attemptNumber = await nextAttemptNumber(input.database, workRef);
   const history = await listAttemptUsageHistory(input.database, {
     limit: input.configuration.historyWindowSamples,
@@ -206,8 +206,8 @@ async function planReviewAttempt(
     attemptId,
     estimatedTokens,
     estimatedUsd,
-    issueId: input.issue.id,
     limits: input.configuration.budgetLimits,
+    ...(workRef.kind === "issue" ? { issueId: workRef.id } : { systemJobId: workRef.id }),
     updatedAt: now,
   });
   const dispatch: DispatchInput = {
@@ -224,7 +224,10 @@ async function planReviewAttempt(
       role: mode.role,
       routingReasons: [...route.reasons, ...mode.routingReasons],
       startedAt: now,
-      workspacePath: issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
+      workspacePath:
+        "kind" in input.issue
+          ? input.issue.workspace_path
+          : issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
     },
     claim: {
       acquiredAt: now,
@@ -252,7 +255,10 @@ async function planReviewAttempt(
   };
 }
 
-function renderPrompt(issue: Issue, context: IntegrativeReviewContext): string {
+function renderPrompt(
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  context: IntegrativeReviewContext,
+): string {
   return [
     "You are the fresh-context integrative reviewer for an immutable implementation.",
     "Review the full diff against the issue acceptance criteria and repository rules.",
@@ -275,7 +281,7 @@ function renderPrompt(issue: Issue, context: IntegrativeReviewContext): string {
 }
 
 function renderSpecialistPrompt(
-  issue: Issue,
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
   context: IntegrativeReviewContext,
   selection: SpecialistSelection,
 ): string {
@@ -306,7 +312,7 @@ function renderSpecialistPrompt(
 }
 
 function renderAdjudicationPrompt(
-  issue: Issue,
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
   context: IntegrativeReviewContext,
   conflicts: readonly AdjudicationConflictInput[],
 ): string {
@@ -328,7 +334,10 @@ function renderAdjudicationPrompt(
   ].join("\n");
 }
 
-function assertTarget(issue: Issue, context: IntegrativeReviewContext): void {
+function assertTarget(
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  context: IntegrativeReviewContext,
+): void {
   if (
     !issue.id ||
     !/^[A-Fa-f0-9]{7,64}$/u.test(context.baseSha) ||
@@ -338,6 +347,13 @@ function assertTarget(issue: Issue, context: IntegrativeReviewContext): void {
   ) {
     throw new Error("review.target_invalid");
   }
+}
+
+function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+  id: string;
+  kind: "issue" | "system_job";
+} {
+  return "kind" in work ? { id: work.id, kind: "system_job" } : { id: work.id, kind: "issue" };
 }
 
 function resolvedProfiles(manifest: AgentAdapterManifest) {

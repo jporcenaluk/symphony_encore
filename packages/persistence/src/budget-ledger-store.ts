@@ -29,10 +29,9 @@ export async function prepareDispatchBudget(
     attemptId: string;
     estimatedTokens: number;
     estimatedUsd: number | null;
-    issueId: string;
     limits: DispatchBudgetLimits;
     updatedAt: string;
-  },
+  } & ({ issueId: string; systemJobId?: never } | { issueId?: never; systemJobId: string }),
 ): Promise<DispatchBudgetReservationLedger[]> {
   requirePositive(input.estimatedTokens, "budget.invalid_token_estimate");
   if (input.estimatedUsd !== null) {
@@ -41,6 +40,11 @@ export async function prepareDispatchBudget(
   for (const [name, value] of Object.entries(input.limits)) {
     requirePositive(value, `budget.invalid_limit:${name}`);
   }
+  const workScope =
+    input.issueId !== undefined
+      ? { id: input.issueId, scope: "issue" as const }
+      : { id: input.systemJobId, scope: "system_job" as const };
+  if (!workScope.id) throw new Error("budget.invalid_work_scope");
   if (!Number.isFinite(Date.parse(input.updatedAt))) throw new Error("budget.invalid_timestamp");
 
   return database.transaction().execute(async (transaction) => {
@@ -71,9 +75,9 @@ export async function prepareDispatchBudget(
         amount: input.estimatedTokens,
         baseLimit: input.limits.issueTokens,
         hot: true,
-        id: `budget:issue:${input.issueId}:tokens`,
-        scope: "issue" as const,
-        scopeId: input.issueId,
+        id: `budget:${workScope.scope}:${workScope.id}:tokens`,
+        scope: workScope.scope,
+        scopeId: workScope.id,
         unit: "tokens" as const,
       },
       ...(input.estimatedUsd === null
@@ -83,9 +87,9 @@ export async function prepareDispatchBudget(
               amount: input.estimatedUsd,
               baseLimit: input.limits.issueUsd,
               hot: true,
-              id: `budget:issue:${input.issueId}:usd`,
-              scope: "issue" as const,
-              scopeId: input.issueId,
+              id: `budget:${workScope.scope}:${workScope.id}:usd`,
+              scope: workScope.scope,
+              scopeId: workScope.id,
               unit: "usd" as const,
             },
           ]),
@@ -130,7 +134,7 @@ async function ensureLedger(
     baseLimit: number;
     hot: boolean;
     id: string;
-    scope: "attempt" | "issue" | "rolling_24h";
+    scope: "attempt" | "issue" | "system_job" | "rolling_24h";
     scopeId: string;
     unit: "tokens" | "usd";
     updatedAt: string;

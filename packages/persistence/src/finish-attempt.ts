@@ -2,6 +2,7 @@ import { isImplementationOutcome } from "@symphony/contracts";
 import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import { type StageTransitionInput, transitionStageInTransaction } from "./stage-transition.js";
 
 interface SettlementInput {
   actualAmount: number;
@@ -36,6 +37,7 @@ export interface FinishAttemptInput {
     retryNumber: number;
   };
   settledLedgers: readonly SettlementInput[];
+  systemJobStageTransition?: StageTransitionInput;
   terminalResult: {
     id: string;
     kind: string;
@@ -217,6 +219,44 @@ export async function finishAttemptInTransaction(
       )
     `.execute(transaction);
 
+  if (input.workRef.kind === "system_job") {
+    const aggregate = await sql`
+      update system_jobs
+      set input_tokens = input_tokens + ${input.usage.inputTokens},
+          output_tokens = output_tokens + ${input.usage.outputTokens},
+          cost_usd = case
+            when ${input.costUsd} is null then cost_usd
+            else coalesce(cost_usd, 0) + ${input.costUsd}
+          end
+      where id = ${input.workRef.id}
+    `.execute(transaction);
+    if (aggregate.numAffectedRows !== 1n) throw new Error("attempt.system_job_missing");
+  }
+  if (input.systemJobStageTransition) {
+    const transition = input.systemJobStageTransition;
+    if (
+      input.workRef.kind !== "system_job" ||
+      transition.workRef.kind !== "system_job" ||
+      transition.workRef.id !== input.workRef.id ||
+      transition.attemptId !== input.attemptId ||
+      !isSystemJobStatus(transition.toStage)
+    ) {
+      throw new Error("attempt.system_job_transition_invalid");
+    }
+    const job = await sql`
+      update system_jobs
+      set status = ${transition.toStage},
+          ended_at = case when ${transition.toStage} in ('done', 'failed') then ${input.endedAt} else ended_at end,
+          final_result_id = case
+            when ${transition.toStage} in ('done', 'failed') then ${input.terminalResult.id}
+            else final_result_id
+          end
+      where id = ${input.workRef.id} and status = ${transition.expectedFromStage}
+    `.execute(transaction);
+    if (job.numAffectedRows !== 1n) throw new Error("attempt.system_job_stage_mismatch");
+    await transitionStageInTransaction(transaction, transition);
+  }
+
   const links = await sql<ReservationLedgerRow>`
       select ledger_id, reserved_amount
       from budget_reservation_ledgers
@@ -336,4 +376,18 @@ export async function finishAttemptInTransaction(
         resolved_at = null
     `.execute(transaction);
   }
+}
+
+function isSystemJobStatus(value: string): boolean {
+  return [
+    "queued",
+    "running",
+    "review",
+    "merge",
+    "rework",
+    "human",
+    "budget_exhausted",
+    "failed",
+    "done",
+  ].includes(value);
 }

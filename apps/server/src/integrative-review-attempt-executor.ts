@@ -1,5 +1,10 @@
 import type { AgentAdapter, WorkspaceRepositoryAdapter } from "@symphony/adapters";
-import { AGENT_ERROR_FAILURE_CLASS, type AgentErrorCode, type Issue } from "@symphony/contracts";
+import {
+  AGENT_ERROR_FAILURE_CLASS,
+  type AgentErrorCode,
+  type Issue,
+  type SystemJob,
+} from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
@@ -11,6 +16,7 @@ import {
 import { type BoundAgentSession, launchAndBindAgentSession } from "./agent-session-binding.js";
 import type { PlannedIntegrativeReviewAttempt } from "./integrative-review-attempt-planner.js";
 import { prepareIssueWorkspace } from "./issue-workspace-manager.js";
+import { prepareSystemJobWorkspace } from "./system-job-workspace-manager.js";
 
 export interface ExecutePlannedIntegrativeReviewAttemptInput {
   adapter: AgentAdapter;
@@ -20,7 +26,7 @@ export interface ExecutePlannedIntegrativeReviewAttemptInput {
   beforeRunCommand: string | null;
   database: OpenedDatabase["database"];
   hookTimeoutMs: number;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   now(): string;
   planned: PlannedIntegrativeReviewAttempt;
@@ -41,7 +47,7 @@ export async function executePlannedIntegrativeReviewAttempt(
     expectedReadyReason: "review_required",
     launchFailureReason: "integrative_review_launch_failed",
     role: "integrative_review",
-    title: `integrative-review:${input.issue.id}: ${input.issue.title}`,
+    title: `integrative-review:${input.issue.id}: ${workTitle(input.issue)}`,
   });
 }
 
@@ -52,7 +58,7 @@ export async function executePlannedSpecialistReviewAttempt(
     expectedReadyReason: `specialist_review_required:${encodeURIComponent(input.specialistName)}`,
     launchFailureReason: `specialist_review_launch_failed:${encodeURIComponent(input.specialistName)}`,
     role: "specialist_review",
-    title: `specialist-review:${input.specialistName}:${input.issue.id}: ${input.issue.title}`,
+    title: `specialist-review:${input.specialistName}:${input.issue.id}: ${workTitle(input.issue)}`,
   });
 }
 
@@ -63,7 +69,7 @@ export async function executePlannedAdjudicationAttempt(
     expectedReadyReason: "adjudication_required",
     launchFailureReason: "adjudication_launch_failed",
     role: "adjudication",
-    title: `adjudication:${input.issue.id}: ${input.issue.title}`,
+    title: `adjudication:${input.issue.id}: ${workTitle(input.issue)}`,
   });
 }
 
@@ -81,18 +87,32 @@ async function executePlannedReviewAttempt(
     expectedReadyReason: mode.expectedReadyReason,
   });
   try {
-    const prepared = await prepareIssueWorkspace({
-      afterCreateCommand: input.afterCreateCommand,
-      allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
-      beforeRunCommand: input.beforeRunCommand,
-      database: input.database,
-      hookTimeoutMs: input.hookTimeoutMs,
-      issue: input.issue,
-      repositoryAdapter: input.repositoryAdapter,
-      safety: input.safety,
-      sourceEnvironment: input.sourceEnvironment,
-      workspaceRoot: input.workspaceRoot,
-    });
+    const prepared =
+      "kind" in input.issue
+        ? await prepareSystemJobWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            job: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          })
+        : await prepareIssueWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            issue: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          });
     if (
       prepared.population.workspacePath !== input.planned.dispatch.attempt.workspacePath ||
       prepared.population.baseSha !== input.planned.context.baseSha
@@ -119,6 +139,17 @@ async function executePlannedReviewAttempt(
     await closeLaunchFailure(input, error, mode);
     throw error;
   }
+}
+
+function workTitle(work: Issue | Extract<SystemJob, { kind: "repair" }>): string {
+  return "kind" in work ? work.goal : work.title;
+}
+
+function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+  id: string;
+  kind: "issue" | "system_job";
+} {
+  return "kind" in work ? { id: work.id, kind: "system_job" } : { id: work.id, kind: "issue" };
 }
 
 async function closeLaunchFailure(
@@ -155,7 +186,7 @@ async function closeLaunchFailure(
             commands: [],
             decisions_fixed: [],
             files_changed: [...input.planned.context.changedFiles],
-            goal: input.issue.title,
+            goal: workTitle(input.issue),
             open_items: input.issue.acceptance_criteria,
             revision: input.planned.context.targetSha,
           },
@@ -166,7 +197,7 @@ async function closeLaunchFailure(
         role: mode.role,
       },
       usage: { inputTokens: 0, outputTokens: 0 },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: reviewWorkRef(input.issue),
     });
   } catch (persistenceError) {
     const failure =

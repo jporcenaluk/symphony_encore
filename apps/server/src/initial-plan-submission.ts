@@ -18,7 +18,7 @@ import {
 export function createInitialPlanSubmissionHandler(input: {
   attemptId: string;
   database: OpenedDatabase["database"];
-  issue: Issue;
+  issue: Pick<Issue, "acceptance_criteria">;
   now(): string;
   provisionalClassification: ProvisionalClassification;
   riskPathPatterns: readonly string[];

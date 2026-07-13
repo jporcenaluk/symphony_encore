@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { queueSynthesisSystemJob } from "./system-job-store.js";
+import { loadSystemJob, queueSynthesisSystemJob } from "./system-job-store.js";
 
 const databases: OpenedDatabase[] = [];
 const directories: string[] = [];
@@ -41,6 +41,29 @@ function request(id: string) {
 }
 
 describe("synthesis SystemJob queue", () => {
+  it("loads a typed repair job with its parent work reference", async () => {
+    const opened = await database();
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, parent_work_ref_kind, parent_work_ref_id, repository, workspace_path,
+          goal, acceptance_criteria_json, config_snapshot_id, status, input_tokens,
+          output_tokens, cost_usd, created_at, started_at, ended_at, final_result_id
+        ) values ('repair-1', 'repair', 'issue', 'issue-1', 'example/repo',
+          '/tmp/work/_system/repair-repair-1', 'Repair failed merge', '["Restore checks"]',
+          'config-1', 'queued', 0, 0, null, 't0', null, null, null)`,
+      )
+      .run();
+
+    await expect(loadSystemJob(opened.database, "repair-1")).resolves.toMatchObject({
+      acceptance_criteria: ["Restore checks"],
+      id: "repair-1",
+      kind: "repair",
+      parent_work_ref: { issue_id: "issue-1" },
+      status: "queued",
+    });
+  });
+
   it("atomically preserves one active synthesis job", async () => {
     const opened = await database();
 

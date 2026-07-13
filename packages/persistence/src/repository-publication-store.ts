@@ -91,6 +91,32 @@ export async function loadPendingRepositoryPublication(
   };
 }
 
+export async function loadPendingRepairPublication(
+  database: Kysely<DatabaseSchema>,
+  systemJobId: string,
+): Promise<PendingRepositoryPublication & { failedMergeSha: string }> {
+  const publication = await loadPendingRepositoryPublication(database, {
+    id: systemJobId,
+    kind: "system_job",
+  });
+  if (!publication) throw new Error("publication.repair_target_missing");
+  const result = await sql<{ merge_sha: string; repository: string }>`
+    select queue.merge_sha, job.repository
+    from system_jobs job
+    join repository_merge_queue_entries queue
+      on queue.work_ref_kind = job.parent_work_ref_kind
+      and queue.work_ref_id = job.parent_work_ref_id
+      and queue.state = 'failed'
+    where job.id = ${systemJobId} and job.kind = 'repair' and job.status = 'review'
+  `.execute(database);
+  const row = result.rows[0];
+  if (!row || !/^[A-Fa-f0-9]{7,64}$/u.test(row.merge_sha)) {
+    throw new Error("publication.failed_merge_missing");
+  }
+  if (row.repository !== publication.repository) throw new Error("publication.repository_mismatch");
+  return { ...publication, failedMergeSha: row.merge_sha };
+}
+
 export async function commitRepositoryLinkAndReviewLane(
   database: Kysely<DatabaseSchema>,
   input: {
@@ -169,6 +195,71 @@ export async function commitRepositoryLinkAndReviewLane(
         and work_ref_id = ${issueId}
         and mode = 'Ready'
         and reason = ${input.expectedReadyReason}
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("publication.claim_not_ready");
+  });
+}
+
+export async function commitRepairRepositoryLink(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    expectedReadyReason: string;
+    link: RepositoryLink;
+    nextReadyReason: string;
+    receipt: SideEffectReceipt;
+  },
+): Promise<void> {
+  if (!("system_job_id" in input.link.work_ref) || input.link.kind !== "repair") {
+    throw new Error("publication.repair_link_required");
+  }
+  if (input.receipt.result_revision !== input.link.head_sha) {
+    throw new Error("publication.repair_revision_mismatch");
+  }
+  const systemJobId = input.link.work_ref.system_job_id;
+  await database.transaction().execute(async (transaction) => {
+    await recordSideEffectReceiptInTransaction(transaction, input.receipt);
+    const job = await sql<{ status: string }>`
+      select status from system_jobs where id = ${systemJobId} and kind = 'repair'
+    `.execute(transaction);
+    if (job.rows[0]?.status !== "review") throw new Error("publication.repair_stage_mismatch");
+    const [existing] = (
+      await sql<{ id: string; head_sha: string; pull_request_number: number }>`
+        select id, head_sha, pull_request_number
+        from repository_links
+        where work_ref_kind = 'system_job'
+          and work_ref_id = ${systemJobId}
+          and cycle = ${input.link.cycle}
+          and kind = 'repair'
+      `.execute(transaction)
+    ).rows;
+    if (existing) {
+      if (
+        existing.id !== input.link.id ||
+        existing.head_sha !== input.link.head_sha ||
+        existing.pull_request_number !== input.link.pull_request_number
+      ) {
+        throw new Error("publication.repository_link_conflict");
+      }
+    } else {
+      await sql`
+        insert into repository_links (
+          id, work_ref_kind, work_ref_id, cycle, kind, repo_owner, repo_name,
+          branch, pull_request_number, pull_request_url, head_sha, base_ref, base_sha,
+          state, created_at, updated_at
+        ) values (
+          ${input.link.id}, 'system_job', ${systemJobId}, ${input.link.cycle}, 'repair',
+          ${input.link.repo_owner}, ${input.link.repo_name}, ${input.link.branch},
+          ${input.link.pull_request_number}, ${input.link.pull_request_url},
+          ${input.link.head_sha}, ${input.link.base_ref}, ${input.link.base_sha},
+          ${input.link.state}, ${input.link.created_at}, ${input.link.updated_at}
+        )
+      `.execute(transaction);
+    }
+    const claim = await sql`
+      update claims
+      set reason = ${input.nextReadyReason}, updated_at = ${input.receipt.applied_at}
+      where work_ref_kind = 'system_job' and work_ref_id = ${systemJobId}
+        and mode = 'Ready' and reason = ${input.expectedReadyReason}
     `.execute(transaction);
     if (claim.numAffectedRows !== 1n) throw new Error("publication.claim_not_ready");
   });
