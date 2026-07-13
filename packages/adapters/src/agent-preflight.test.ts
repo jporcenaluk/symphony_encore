@@ -97,6 +97,9 @@ describe("agent manifest preflight", () => {
       manifest,
       protocolSchemaHash: "sha256:protocol",
       resolvedSkills,
+      role: "implementation",
+      submitPlanSchema: null,
+      terminalResultSchema: {},
     });
   });
 

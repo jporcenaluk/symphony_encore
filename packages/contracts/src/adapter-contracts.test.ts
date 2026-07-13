@@ -7,11 +7,27 @@ import {
   AgentEventSchema,
   PullRequestSnapshotSchema,
   TrackerIssuePageSchema,
+  validateAgentToolArguments,
   validateCompletePage,
   validatePullRequestSnapshot,
 } from "./adapter-contracts.js";
 
 describe("normalized agent adapter contracts", () => {
+  it("validates serialized JSON schemas used by provider tool calls", () => {
+    const schema = {
+      additionalProperties: false,
+      properties: { outcome: { const: "success" }, tokens: { minimum: 0, type: "integer" } },
+      required: ["outcome", "tokens"],
+      type: "object",
+    };
+
+    expect(validateAgentToolArguments(schema, { outcome: "success", tokens: 3 })).toBe(true);
+    expect(validateAgentToolArguments(schema, { outcome: "wrong", tokens: 3 })).toBe(false);
+    expect(validateAgentToolArguments(schema, { extra: true, outcome: "success", tokens: 3 })).toBe(
+      false,
+    );
+  });
+
   it("accepts absolute token usage and rejects provider-specific extras", () => {
     const event = {
       attempt_id: "attempt-1",

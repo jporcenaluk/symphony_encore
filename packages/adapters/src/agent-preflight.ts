@@ -90,6 +90,9 @@ export function validateAgentPreflight(input: {
     manifest: input.manifest,
     protocolSchemaHash: input.manifest.protocol.schema_hash,
     resolvedSkills: input.resolvedSkills.map((skill) => ({ ...skill })),
+    role: input.request.role,
+    submitPlanSchema: input.request.submitPlanSchema ?? null,
+    terminalResultSchema: input.request.terminalResultSchema,
   };
 }
 

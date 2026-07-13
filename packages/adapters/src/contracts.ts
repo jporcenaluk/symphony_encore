@@ -119,6 +119,7 @@ export interface AgentPreflightRequest {
   requiredCapabilities: readonly string[];
   requiredSkills: readonly { contentHash: string; name: string; resolvedPath: string }[];
   role: string;
+  submitPlanSchema?: Readonly<Record<string, unknown>>;
   terminalResultSchema: Readonly<Record<string, unknown>>;
 }
 
@@ -127,6 +128,9 @@ export interface AgentPreflightResult {
   manifest: AgentAdapterManifest;
   protocolSchemaHash: string;
   resolvedSkills: readonly { contentHash: string; name: string; resolvedPath: string }[];
+  role: string;
+  submitPlanSchema: Readonly<Record<string, unknown>> | null;
+  terminalResultSchema: Readonly<Record<string, unknown>>;
 }
 
 export interface AgentLaunchRequest {
@@ -134,7 +138,9 @@ export interface AgentLaunchRequest {
   command: string;
   environment: Readonly<Record<string, string>>;
   preflight: AgentPreflightResult;
+  profile: "deep" | "economy" | "standard";
   prompt: string;
+  title: string;
   workspacePath: string;
 }
 

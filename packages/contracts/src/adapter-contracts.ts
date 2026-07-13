@@ -1,4 +1,4 @@
-import { type Static, Type } from "@sinclair/typebox";
+import { Kind, type Static, type TSchema, Type } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 
 import { IssueSchema } from "./entity-records.js";
@@ -252,6 +252,118 @@ export const AgentAdapterManifestSchema = Type.Object(
   { additionalProperties: false },
 );
 export type AgentAdapterManifest = Static<typeof AgentAdapterManifestSchema>;
+
+export function validateAgentToolArguments(
+  schema: Readonly<Record<string, unknown>>,
+  value: unknown,
+): boolean {
+  if (Kind in schema) return Value.Check(schema as TSchema, value);
+  return checkJsonSchema(schema, value);
+}
+
+function checkJsonSchema(schema: unknown, value: unknown): boolean {
+  if (typeof schema === "boolean") return schema;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
+  const rule = schema as Record<string, unknown>;
+  if ("const" in rule && !deepEqual(rule.const, value)) return false;
+  if (Array.isArray(rule.enum) && !rule.enum.some((candidate) => deepEqual(candidate, value))) {
+    return false;
+  }
+  if (Array.isArray(rule.allOf) && !rule.allOf.every((part) => checkJsonSchema(part, value))) {
+    return false;
+  }
+  if (Array.isArray(rule.anyOf) && !rule.anyOf.some((part) => checkJsonSchema(part, value))) {
+    return false;
+  }
+  if (
+    Array.isArray(rule.oneOf) &&
+    rule.oneOf.filter((part) => checkJsonSchema(part, value)).length !== 1
+  ) {
+    return false;
+  }
+  if (rule.not !== undefined && checkJsonSchema(rule.not, value)) return false;
+  if (rule.type === undefined) return true;
+  if (Array.isArray(rule.type)) {
+    return rule.type.some((type) => checkJsonSchema({ ...rule, type }, value));
+  }
+  if (rule.type === "null") return value === null;
+  if (rule.type === "boolean") return typeof value === "boolean";
+  if (rule.type === "number" || rule.type === "integer") {
+    if (typeof value !== "number" || !Number.isFinite(value)) return false;
+    if (rule.type === "integer" && !Number.isInteger(value)) return false;
+    if (typeof rule.minimum === "number" && value < rule.minimum) return false;
+    if (typeof rule.maximum === "number" && value > rule.maximum) return false;
+    return true;
+  }
+  if (rule.type === "string") {
+    if (typeof value !== "string") return false;
+    if (typeof rule.minLength === "number" && value.length < rule.minLength) return false;
+    if (typeof rule.maxLength === "number" && value.length > rule.maxLength) return false;
+    if (typeof rule.pattern === "string" && !new RegExp(rule.pattern, "u").test(value))
+      return false;
+    return true;
+  }
+  if (rule.type === "array") {
+    if (!Array.isArray(value)) return false;
+    if (typeof rule.minItems === "number" && value.length < rule.minItems) return false;
+    if (typeof rule.maxItems === "number" && value.length > rule.maxItems) return false;
+    if (rule.uniqueItems === true && new Set(value.map(stableJson)).size !== value.length)
+      return false;
+    if (rule.items !== undefined && !value.every((item) => checkJsonSchema(rule.items, item))) {
+      return false;
+    }
+    if (rule.contains !== undefined) {
+      const matches = value.filter((item) => checkJsonSchema(rule.contains, item)).length;
+      const minimum = typeof rule.minContains === "number" ? rule.minContains : 1;
+      const maximum =
+        typeof rule.maxContains === "number" ? rule.maxContains : Number.POSITIVE_INFINITY;
+      if (matches < minimum || matches > maximum) return false;
+    }
+    return true;
+  }
+  if (rule.type === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const object = value as Record<string, unknown>;
+    if (
+      Array.isArray(rule.required) &&
+      !rule.required.every((key) => typeof key === "string" && key in object)
+    ) {
+      return false;
+    }
+    const properties =
+      rule.properties && typeof rule.properties === "object" && !Array.isArray(rule.properties)
+        ? (rule.properties as Record<string, unknown>)
+        : {};
+    for (const [key, propertyValue] of Object.entries(object)) {
+      if (key in properties) {
+        if (!checkJsonSchema(properties[key], propertyValue)) return false;
+      } else if (rule.additionalProperties === false) {
+        return false;
+      } else if (
+        rule.additionalProperties &&
+        typeof rule.additionalProperties === "object" &&
+        !checkJsonSchema(rule.additionalProperties, propertyValue)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function stableJson(value: unknown): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
+function deepEqual(left: unknown, right: unknown): boolean {
+  return stableJson(left) === stableJson(right);
+}
 
 export const TrackerIssuePageSchema = Type.Object(
   {
