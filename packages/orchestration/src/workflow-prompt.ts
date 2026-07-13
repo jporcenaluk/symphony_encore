@@ -15,22 +15,50 @@ export type WorkflowPromptContext = Readonly<Record<WorkflowPromptRoot, unknown>
 const ROOTS = new Set<string>(WORKFLOW_PROMPT_ROOTS);
 const UNSAFE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const EXPRESSION = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u;
-const INTERPOLATION = /\{\{([\s\S]*?)\}\}/gu;
+
+interface Interpolation {
+  readonly end: number;
+  readonly expression: string;
+  readonly start: number;
+}
 
 export function validateWorkflowPromptTemplate(prompt: string): void {
-  const unmatched = prompt.replace(INTERPOLATION, "");
-  if (unmatched.includes("{{") || unmatched.includes("}}")) {
-    throw new Error("workflow.template_unterminated");
-  }
-  for (const match of prompt.matchAll(INTERPOLATION)) validateExpression(match[1] ?? "");
+  parseInterpolations(prompt);
 }
 
 export function renderWorkflowPrompt(prompt: string, context: WorkflowPromptContext): string {
-  validateWorkflowPromptTemplate(prompt);
-  return prompt.replace(INTERPOLATION, (_token, source: string) => {
-    const expression = source.trim();
-    return renderValue(resolveValue(expression, context), expression);
-  });
+  const interpolations = parseInterpolations(prompt);
+  const rendered: string[] = [];
+  let cursor = 0;
+  for (const interpolation of interpolations) {
+    rendered.push(prompt.slice(cursor, interpolation.start));
+    rendered.push(
+      renderValue(resolveValue(interpolation.expression, context), interpolation.expression),
+    );
+    cursor = interpolation.end;
+  }
+  rendered.push(prompt.slice(cursor));
+  return rendered.join("");
+}
+
+function parseInterpolations(prompt: string): Interpolation[] {
+  const interpolations: Interpolation[] = [];
+  let cursor = 0;
+  while (cursor < prompt.length) {
+    const start = prompt.indexOf("{{", cursor);
+    const strayEnd = prompt.indexOf("}}", cursor);
+    if (strayEnd !== -1 && (start === -1 || strayEnd < start)) {
+      throw new Error("workflow.template_unterminated");
+    }
+    if (start === -1) break;
+    const closing = prompt.indexOf("}}", start + 2);
+    if (closing === -1) throw new Error("workflow.template_unterminated");
+    const expression = prompt.slice(start + 2, closing).trim();
+    validateExpression(expression);
+    interpolations.push({ end: closing + 2, expression, start });
+    cursor = closing + 2;
+  }
+  return interpolations;
 }
 
 function validateExpression(source: string): string[] {

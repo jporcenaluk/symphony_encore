@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { checkGeneratedOpenApi, renderOpenApi, writeGeneratedOpenApi } from "./generate-openapi.js";
+import {
+  checkGeneratedOpenApi,
+  renderControlApiClientFromDocument,
+  renderOpenApi,
+  writeGeneratedOpenApi,
+} from "./generate-openapi.js";
 
 const directories: string[] = [];
 
@@ -38,5 +43,37 @@ describe("generated OpenAPI contract", () => {
     await writeGeneratedOpenApi(target);
     await expect(checkGeneratedOpenApi(target)).resolves.toBe(true);
     expect(await readFile(target, "utf8")).toBe(await renderOpenApi());
+  });
+
+  it("rejects schema-controlled code tokens before client source construction", () => {
+    expect(() =>
+      renderControlApiClientFromDocument({
+        paths: {
+          "/health`); globalThis.compromised = true; request(`": {
+            get: { operationId: "getHealth" },
+          },
+        },
+      }),
+    ).toThrow("openapi.operation_contract_mismatch:getHealth");
+
+    expect(() =>
+      renderControlApiClientFromDocument({
+        paths: {
+          "/health": {
+            "get`); globalThis.compromised = true; request(`": { operationId: "getHealth" },
+          },
+        },
+      }),
+    ).toThrow("openapi.operation_contract_mismatch:getHealth");
+
+    expect(() =>
+      renderControlApiClientFromDocument({
+        paths: {
+          "/health": {
+            get: { operationId: "getHealth(); globalThis.compromised = true" },
+          },
+        },
+      }),
+    ).toThrow("openapi.unsupported_operation:getHealth(); globalThis.compromised = true");
   });
 });

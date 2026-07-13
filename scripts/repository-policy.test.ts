@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
@@ -62,6 +62,37 @@ test("declares the required workspace and Make target contract", () => {
     "verify",
     "conformance",
   ]);
+});
+
+test("installs and verifies the pinned Linux sandbox runtime before verification", async () => {
+  const source = await readFile(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf8");
+  const sandboxInstall = source.match(
+    / {6}- name: Install pinned Linux sandbox runtime\n([\s\S]*?)(?=\n {6}- )/u,
+  )?.[0];
+
+  assert(sandboxInstall, "expected the verify job to install the Linux sandbox runtime");
+  assert.match(sandboxInstall, /if: runner\.os == 'Linux'/u);
+  assert.match(sandboxInstall, /BUBBLEWRAP_VERSION: 0\.9\.0-1ubuntu0\.1/u);
+  assert.match(
+    sandboxInstall,
+    /apt-get install --no-install-recommends --yes "bubblewrap=\$\{BUBBLEWRAP_VERSION\}"/u,
+  );
+  assert.match(sandboxInstall, /dpkg-query[\s\S]*installed_version/u);
+  assert.match(sandboxInstall, /test "\$installed_version" = "\$BUBBLEWRAP_VERSION"/u);
+  assert.match(sandboxInstall, /test "\$\(command -v bwrap\)" = \/usr\/bin\/bwrap/u);
+  assert(source.indexOf(sandboxInstall) < source.indexOf("      - run: make verify-fast"));
+});
+
+test("holds every Dependabot version ecosystem for the reviewed cooldown", async () => {
+  const source = await readFile(path.join(process.cwd(), ".github", "dependabot.yml"), "utf8");
+  const updaterBlocks = source.split(/^ {2}- package-ecosystem: /mu).slice(1);
+
+  assert.equal(updaterBlocks.length, 3);
+  for (const ecosystem of ["npm", "github-actions", "docker"]) {
+    const block = updaterBlocks.find((candidate) => candidate.startsWith(`${ecosystem}\n`));
+    assert(block, `expected ${ecosystem} updater`);
+    assert.match(block, /^ {4}cooldown:\n {6}default-days: 7$/mu);
+  }
 });
 
 test("rejects bare pnpm in root package scripts", async () => {

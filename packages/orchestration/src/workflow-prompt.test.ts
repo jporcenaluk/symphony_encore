@@ -58,4 +58,10 @@ describe("workflow prompt rendering", () => {
       }),
     ).toThrow("workflow.template_value_invalid:attempt.elapsed");
   });
+
+  it("fails closed in linear time for adversarial repeated interpolation prefixes", () => {
+    const hostile = "{{{{a".repeat(100_000);
+
+    expect(() => renderWorkflowPrompt(hostile, context)).toThrow("workflow.template_unterminated");
+  });
 });

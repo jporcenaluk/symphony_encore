@@ -63,36 +63,93 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
   }
 }
 
-const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
-  completeBootstrap: "BootstrapResponse",
-  getBootstrapStatus: "BootstrapStatusResponse",
-  getControlState: "ControlState",
-  getHealth: "HealthResponse",
-  getReady: "ReadyResponse",
-  login: "LoginResponse",
-  mutateConfigurationOverride: "ConfigurationOverrideMutationResponse",
-  listEvents: "EventRecordPage",
-  streamEvents: "ControlEventStreamRequest",
-};
+interface OperationDefinition {
+  readonly method: string;
+  readonly operationId: string;
+  readonly path: string;
+  readonly returnType: string;
+}
+
+const OPERATIONS = {
+  completeBootstrap: {
+    method: "POST",
+    operationId: "completeBootstrap",
+    path: "/api/v1/bootstrap",
+    returnType: "BootstrapResponse",
+  },
+  getBootstrapStatus: {
+    method: "GET",
+    operationId: "getBootstrapStatus",
+    path: "/api/v1/bootstrap",
+    returnType: "BootstrapStatusResponse",
+  },
+  getControlState: {
+    method: "GET",
+    operationId: "getControlState",
+    path: "/api/v1/state",
+    returnType: "ControlState",
+  },
+  getHealth: {
+    method: "GET",
+    operationId: "getHealth",
+    path: "/health",
+    returnType: "HealthResponse",
+  },
+  getReady: {
+    method: "GET",
+    operationId: "getReady",
+    path: "/ready",
+    returnType: "ReadyResponse",
+  },
+  listEvents: {
+    method: "GET",
+    operationId: "listEvents",
+    path: "/api/v1/events",
+    returnType: "EventRecordPage",
+  },
+  login: {
+    method: "POST",
+    operationId: "login",
+    path: "/api/v1/auth/login",
+    returnType: "LoginResponse",
+  },
+  mutateConfigurationOverride: {
+    method: "PUT",
+    operationId: "mutateConfigurationOverride",
+    path: "/api/v1/config/overrides/{key}",
+    returnType: "ConfigurationOverrideMutationResponse",
+  },
+  streamEvents: {
+    method: "GET",
+    operationId: "streamEvents",
+    path: "/api/v1/events/stream",
+    returnType: "ControlEventStreamRequest",
+  },
+} as const satisfies Record<string, OperationDefinition>;
 
 export async function renderControlApiClient(): Promise<string> {
-  const document = await buildOpenApiDocument();
-  const operations: { method: string; operationId: string; path: string; returnType: string }[] =
-    [];
+  return renderControlApiClientFromDocument(await buildOpenApiDocument());
+}
+
+export function renderControlApiClientFromDocument(document: OpenApiDocument): string {
+  const operations: OperationDefinition[] = [];
+  const seen = new Set<string>();
   for (const [operationPath, pathItem] of Object.entries(document.paths ?? {})) {
     for (const [method, operation] of Object.entries(pathItem)) {
       if (operation.operationId === undefined) continue;
-      const returnType = OPERATION_RETURN_TYPES[operation.operationId];
-      if (returnType === undefined) {
-        throw new Error(`openapi.unsupported_operation:${operation.operationId}`);
+      const definition = resolveOperationDefinition(operation.operationId);
+      if (operationPath !== definition.path || method.toUpperCase() !== definition.method) {
+        throw new Error(`openapi.operation_contract_mismatch:${definition.operationId}`);
       }
-      operations.push({
-        method: method.toUpperCase(),
-        operationId: operation.operationId,
-        path: operationPath,
-        returnType,
-      });
+      if (seen.has(definition.operationId)) {
+        throw new Error(`openapi.duplicate_operation:${definition.operationId}`);
+      }
+      seen.add(definition.operationId);
+      operations.push(definition);
     }
+  }
+  if (seen.size !== Object.keys(OPERATIONS).length) {
+    throw new Error("openapi.operation_set_incomplete");
   }
 
   const methods = operations
@@ -220,6 +277,31 @@ ${methods}
   };
 }
 `;
+}
+
+function resolveOperationDefinition(operationId: string): OperationDefinition {
+  switch (operationId) {
+    case "completeBootstrap":
+      return OPERATIONS.completeBootstrap;
+    case "getBootstrapStatus":
+      return OPERATIONS.getBootstrapStatus;
+    case "getControlState":
+      return OPERATIONS.getControlState;
+    case "getHealth":
+      return OPERATIONS.getHealth;
+    case "getReady":
+      return OPERATIONS.getReady;
+    case "listEvents":
+      return OPERATIONS.listEvents;
+    case "login":
+      return OPERATIONS.login;
+    case "mutateConfigurationOverride":
+      return OPERATIONS.mutateConfigurationOverride;
+    case "streamEvents":
+      return OPERATIONS.streamEvents;
+    default:
+      throw new Error(`openapi.unsupported_operation:${operationId}`);
+  }
 }
 
 export async function checkGeneratedOpenApi(target: string): Promise<boolean> {
