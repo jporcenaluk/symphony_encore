@@ -71,31 +71,31 @@ ShellCheck, Docker, SQLite.
 
 ### Step 1: Write the failing contract tests
 
-- [ ] Add a compile-time and runtime assertion for the exact 35 Core IDs from `SPEC.md` Section
+- [x] Add a compile-time and runtime assertion for the exact 35 Core IDs from `SPEC.md` Section
   19.2, with no omissions or extras.
-- [ ] Bind each Core entry to its section/bullet ordinal, normalized requirement-text hash, required
+- [x] Bind each Core entry to its section/bullet ordinal, normalized requirement-text hash, required
   adapters, and required platforms; fail when Section 19.2 count, order, or text drifts.
-- [ ] Add schema tests for one evidence result per ID containing the evidence command/test,
+- [x] Add schema tests for one evidence result per ID containing the evidence command/test,
   revision, status, producer version, exit code, environment/platform, artifact digest, and optional
   external artifact reference.
-- [ ] Reject unknown IDs, duplicate IDs, missing IDs, failed/skipped/partial results, empty evidence,
+- [x] Reject unknown IDs, duplicate IDs, missing IDs, failed/skipped/partial results, empty evidence,
   and results from a different revision.
-- [ ] Represent adapter and Real Integration evidence separately so neither can be inferred from
+- [x] Represent adapter and Real Integration evidence separately so neither can be inferred from
   Core unit evidence.
-- [ ] Represent Section 1-18 normative-requirement evidence separately from the 35 Section 19.2
+- [x] Represent Section 1-18 normative-requirement evidence separately from the 35 Section 19.2
   Core test results; neither set can substitute for the other.
-- [ ] Run `corepack pnpm --filter @symphony/contracts test -- conformance.test.ts` and confirm the new
+- [x] Run `corepack pnpm --filter @symphony/contracts test -- conformance.test.ts` and confirm the new
   tests fail for the missing implementation.
 
 ### Step 2: Implement the smallest typed manifest
 
-- [ ] Add readonly ID tuples, derived unions, TypeBox schemas, and validation helpers without
+- [x] Add readonly ID tuples, derived unions, TypeBox schemas, and validation helpers without
   importing persistence, server, or script modules.
-- [ ] Keep hashing, filesystem, Git, and command execution outside the contracts package; store
+- [x] Keep hashing, filesystem, Git, and command execution outside the contracts package; store
   reviewed manifest hashes as literals and recompute them in tests/scripts.
-- [ ] Export the contract from the package barrel.
-- [ ] Rerun the focused test and `corepack pnpm --filter @symphony/contracts typecheck`.
-- [ ] Review for a single source of truth: no second handwritten Core ID list is permitted.
+- [x] Export the contract from the package barrel.
+- [x] Rerun the focused test and `corepack pnpm --filter @symphony/contracts typecheck`.
+- [x] Review for a single source of truth: no second handwritten Core ID list is permitted.
 
 ## Task 2A: Produce trusted evidence from canonical execution
 
@@ -191,23 +191,23 @@ ShellCheck, Docker, SQLite.
 
 ### Step 1: Add repository-policy regressions first
 
-- [ ] Add a fixture/test that executes the canonical verification entry in an environment where no
+- [x] Add a fixture/test that executes the canonical verification entry in an environment where no
   global `pnpm` shim is on `PATH` but Node/Corepack are available.
-- [ ] Add workflow-policy assertions for pinned Node, pinned package manager, frozen lockfile,
+- [x] Add workflow-policy assertions for pinned Node, pinned package manager, frozen lockfile,
   explicit shell-safe quoting, and the canonical verification target.
-- [ ] Add actionlint regression fixtures for the current SC2016, SC2035, and SC2251 sites.
-- [ ] Run `corepack pnpm vitest run scripts/repository-policy.test.ts` and confirm the new cases
+- [x] Add actionlint regression fixtures for the current SC2016, SC2035, and SC2251 sites.
+- [x] Run `corepack pnpm vitest run scripts/repository-policy.test.ts` and confirm the new cases
   expose the current behavior.
 
 ### Step 2: Establish one repository-owned invocation
 
-- [ ] Make setup activate the `packageManager`-pinned pnpm through Corepack.
-- [ ] Ensure package scripts and Make targets do not recursively rely on an unprovisioned bare
+- [x] Make setup activate the `packageManager`-pinned pnpm through Corepack.
+- [x] Ensure package scripts and Make targets do not recursively rely on an unprovisioned bare
   `pnpm` binary.
-- [ ] Make Linux, macOS, and release workflows enter through the same setup and verification graph.
-- [ ] Fix the three shell findings by changing quoting/globbing/control flow, not by suppressing
+- [x] Make Linux, macOS, and release workflows enter through the same setup and verification graph.
+- [x] Fix the three shell findings by changing quoting/globbing/control flow, not by suppressing
   ShellCheck.
-- [ ] Run the focused policy tests and actionlint locally.
+- [x] Run the focused policy tests and actionlint locally.
 
 ## Task 5: Repair the production-owned container smoke boundary
 
@@ -222,19 +222,19 @@ ShellCheck, Docker, SQLite.
 
 ### Step 1: Prove the current ownership defect
 
-- [ ] Add a test or isolated invocation showing deployment-root `require('better-sqlite3')` fails
+- [x] Add a test or isolated invocation showing deployment-root `require('better-sqlite3')` fails
   while the server package owns the dependency.
-- [ ] Confirm the smoke requirement: start as non-root, use a read-only root filesystem, write only
+- [x] Confirm the smoke requirement: start as non-root, use a read-only root filesystem, write only
   approved volumes, persist SQLite across restart, answer health/readiness, and terminate cleanly.
 
 ### Step 2: Move smoke behavior behind its owner
 
-- [ ] Invoke the native module through a server-package production boundary rather than relying on
+- [x] Invoke the native module through a server-package production boundary rather than relying on
   root dependency hoisting.
-- [ ] Preserve the non-root/read-only/persistence/restart/shutdown assertions.
-- [ ] Do not claim dispatch-capable conformance in this task; Codex/GitHub/bubblewrap image content
+- [x] Preserve the non-root/read-only/persistence/restart/shutdown assertions.
+- [x] Do not claim dispatch-capable conformance in this task; Codex/GitHub/bubblewrap image content
   belongs to W4/W10 and must receive its own behavioral proof.
-- [ ] Run the focused local entry point. If Docker is unavailable locally, record that as an
+- [x] Run the focused local entry point. If Docker is unavailable locally, record that as an
   external execution gap and use remote image CI for proof after push.
 
 ## Task 6: Align canonical local gates

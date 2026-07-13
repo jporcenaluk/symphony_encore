@@ -1,4 +1,16 @@
-import { readFile, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -19,8 +31,53 @@ describe("repository-owned Git hooks", () => {
     const commitMessage = await readFile(path.join(root, ".husky", "commit-msg"), "utf8");
     const makefile = await readFile(path.join(root, "Makefile"), "utf8");
     expect(commitMessage).toContain('node scripts/validate-commit-message.ts "$1"');
+    expect(makefile).toMatch(/install:\n\tcorepack pnpm install --frozen-lockfile/u);
     expect(makefile).toMatch(
-      /setup:\n\tcorepack pnpm install --frozen-lockfile\n\tnode scripts\/install-gitleaks\.ts\n\tnode --import \.\/scripts\/typescript-source-loader\.mjs scripts\/verify-gitleaks\.ts\n\tcorepack pnpm exec husky/u,
+      /setup: install\n\tnode scripts\/install-gitleaks\.ts\n\tnode --import \.\/scripts\/typescript-source-loader\.mjs scripts\/verify-gitleaks\.ts\n\tcorepack pnpm exec husky/u,
     );
   });
+
+  it("runs a nested Corepack pnpm script without a pnpm shim on PATH", async () => {
+    const root = process.cwd();
+    const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {
+      packageManager: string;
+      scripts: { build: string };
+    };
+    const temporaryRoot = await mkdtemp(path.join(tmpdir(), "symphony-clean-path-"));
+    const bin = path.join(temporaryRoot, "bin");
+    const project = path.join(temporaryRoot, "project");
+    await Promise.all([mkdir(bin), mkdir(project)]);
+
+    try {
+      await Promise.all([
+        symlink(process.execPath, path.join(bin, "node")),
+        symlink(
+          await realpath(path.join(path.dirname(process.execPath), "corepack")),
+          path.join(bin, "corepack"),
+        ),
+        symlink(await realpath("/bin/sh"), path.join(bin, "sh")),
+      ]);
+      await writeFile(
+        path.join(project, "package.json"),
+        JSON.stringify({
+          name: "clean-path-corepack-regression",
+          packageManager: manifest.packageManager,
+          private: true,
+          scripts: { nested: manifest.scripts.build },
+        }),
+        "utf8",
+      );
+
+      await expect(access(path.join(bin, "pnpm"))).rejects.toMatchObject({ code: "ENOENT" });
+      const result = spawnSync(path.join(bin, "corepack"), ["pnpm", "run", "nested"], {
+        cwd: project,
+        encoding: "utf8",
+        env: { ...process.env, PATH: bin },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      await rm(temporaryRoot, { force: true, recursive: true });
+    }
+  }, 30_000);
 });

@@ -15,6 +15,7 @@ export const REQUIRED_WORKSPACES = [
 ] as const;
 
 export const REQUIRED_MAKE_TARGETS = [
+  "install",
   "setup",
   "dev",
   "build",
@@ -185,6 +186,34 @@ function findCycle(graph: Map<string, string[]>): string[] | undefined {
   return undefined;
 }
 
+function hasSingleQuotedNodeInterpolation(source: string): boolean {
+  for (const match of source.matchAll(/node -e\s+'([^'\n]*)'/gu)) {
+    if (match[1]?.includes("${")) return true;
+  }
+  for (const match of source.matchAll(/node -e\s+'\s*\n([\s\S]*?)^\s*'\s*$/gmu)) {
+    if (match[1]?.includes("${")) return true;
+  }
+  return false;
+}
+
+function workflowJobSource(source: string, name: string): string | undefined {
+  const start = new RegExp(`^  ${name}:\\s*$`, "mu").exec(source);
+  if (!start) return undefined;
+  const job = source.slice(start.index + start[0].length);
+  const nextJob = /^ {2}[a-zA-Z0-9_-]+:\s*$/mu.exec(job);
+  return nextJob ? job.slice(0, nextJob.index) : job;
+}
+
+function hasUnqualifiedPnpmToken(command: string): boolean {
+  const source = command.replace(/\\\r?\n/gu, " ");
+  for (const match of source.matchAll(/(^|[\s;&|()])pnpm(?=$|[\s;&|()])/gu)) {
+    const tokenIndex = (match.index ?? 0) + (match[1]?.length ?? 0);
+    const prefix = source.slice(0, tokenIndex);
+    if (!/(?:^|[\s;&|()])corepack[ \t]+$/u.test(prefix)) return true;
+  }
+  return false;
+}
+
 export async function validateRepository(root: string): Promise<string[]> {
   const violations: string[] = [];
   const rootManifest = await manifestAt(path.join(root, "package.json"));
@@ -201,6 +230,11 @@ export async function validateRepository(root: string): Promise<string[]> {
   }
   if (rootManifest?.packageManager !== "pnpm@11.12.0") {
     violations.push("package.json packageManager must pin pnpm 11.12.0");
+  }
+  for (const [name, command] of Object.entries(rootManifest?.scripts ?? {})) {
+    if (hasUnqualifiedPnpmToken(command)) {
+      violations.push(`root script ${name} must invoke corepack pnpm`);
+    }
   }
 
   if (dockerfile !== undefined) {
@@ -227,6 +261,15 @@ export async function validateRepository(root: string): Promise<string[]> {
     if (!makefile || !new RegExp(`^${target}:`, "mu").test(makefile)) {
       violations.push(`Makefile is missing required target ${target}`);
     }
+  }
+  if (
+    !makefile ||
+    !/^install:\s*\n\tcorepack pnpm install --frozen-lockfile\s*$/mu.test(makefile)
+  ) {
+    violations.push("Makefile install must use corepack pnpm install --frozen-lockfile");
+  }
+  if (!makefile || !/^setup:\s+install\s*$/mu.test(makefile)) {
+    violations.push("Makefile setup must depend on install");
   }
   for (const packagePath of REQUIRED_WORKSPACES) {
     if (!workspace?.split(/\r?\n/u).some((line) => line.trim() === `- ${packagePath}`)) {
@@ -297,11 +340,98 @@ export async function validateRepository(root: string): Promise<string[]> {
 
   for (const file of await workflowFiles(root)) {
     const source = await readFile(file, "utf8");
+    const relativeFile = path.relative(root, file);
     for (const match of source.matchAll(/\buses:\s*[^\s@]+@([^\s#]+)/gu)) {
       if (!/^[a-f0-9]{40}$/u.test(match[1] ?? "")) {
         violations.push(
           `${path.relative(root, file)} action references must use a full 40-character commit SHA`,
         );
+      }
+    }
+    if (hasSingleQuotedNodeInterpolation(source)) {
+      violations.push(`${relativeFile} contains an SC2016-prone interpolation in single-quoted JS`);
+    }
+    if (/^\s*sha256sum[^\n]*\*\.cdx\.json\b/mu.test(source)) {
+      violations.push(`${relativeFile} contains an SC2035-prone checksum glob`);
+    }
+    violations.push(
+      ...Array.from(
+        source.matchAll(/^\s*!\s+(?:gh release view|docker buildx imagetools inspect)\b/gmu),
+        () => `${relativeFile} contains an SC2251-prone standalone negation`,
+      ),
+    );
+    if (path.basename(file) === "ci.yml") {
+      const verifyJob = workflowJobSource(source, "verify");
+      const publishJob = workflowJobSource(source, "publish");
+      if (
+        !verifyJob ||
+        !/^\s*- run: make install\s*$/mu.test(verifyJob) ||
+        !publishJob ||
+        !/^\s*- run: make install\s*$/mu.test(publishJob)
+      ) {
+        violations.push("ci.yml verification and publication jobs must use make install");
+      }
+      if (!verifyJob || !/^\s*- run: make verify-fast\s*$/mu.test(verifyJob)) {
+        violations.push("ci.yml verification job must use make verify-fast");
+      }
+    }
+    if (path.basename(file) === "release.yml") {
+      const exactImageReference = 'image_reference="$' + "{IMAGE}:$" + '{TAG}"';
+      const exactManifestPath =
+        'registry_manifest_path="/v2/$' + "{REPOSITORY}/manifests/$" + '{TAG}"';
+      const lowerImageReference = '"$' + '{image_reference,,}"';
+      const lowerManifestPath = '"$' + '{registry_manifest_path,,}"';
+      if (
+        !/gh api[\s\S]*--include/u.test(source) ||
+        !/release_status[\s\S]*!= "404"/u.test(source) ||
+        !source.includes("release.preflight.github.unavailable")
+      ) {
+        violations.push("release.yml GitHub release preflight must fail closed except on HTTP 404");
+      }
+      if (
+        !source.includes("image_probe_error") ||
+        !source.includes(exactImageReference) ||
+        !source.includes(exactManifestPath) ||
+        !source.includes(lowerImageReference) ||
+        !source.includes(lowerManifestPath) ||
+        !source.includes("(404|manifest[[:space:]]unknown|not[[:space:]]found)") ||
+        !source.includes("release.preflight.image.unavailable")
+      ) {
+        violations.push("release.yml image-tag preflight must fail closed except on not-found");
+      }
+      const draftRelease = source.indexOf("gh release create");
+      const finalRelease = source.indexOf('gh release edit "$TAG" --draft=false');
+      const imagePromotion = source.indexOf("docker buildx imagetools create");
+      if (
+        draftRelease < 0 ||
+        finalRelease < draftRelease ||
+        imagePromotion < finalRelease ||
+        !source.slice(draftRelease, finalRelease).includes("--draft")
+      ) {
+        violations.push("release.yml must finalize release before semantic image promotion");
+      }
+      if (
+        !source.includes("trap cleanup_release EXIT") ||
+        !source.includes('gh release delete "$TAG" --yes')
+      ) {
+        violations.push("release.yml must clean up release when image promotion fails");
+      }
+      const digestVerification = source.indexOf('[[ "$promoted_digest" != "$source_digest" ]]');
+      const transactionComplete = source.indexOf("cleanup_required=false");
+      if (
+        digestVerification < imagePromotion ||
+        transactionComplete < digestVerification ||
+        !source.includes("release.cleanup.image_tag_manual_required")
+      ) {
+        violations.push("release.yml must verify promoted digest before completing transaction");
+      }
+      const imageAttemptArmed = source.indexOf("image_tag_attempted=true");
+      if (
+        imageAttemptArmed < 0 ||
+        imageAttemptArmed > imagePromotion ||
+        !source.includes('[[ "$image_tag_attempted" == "true" ]]')
+      ) {
+        violations.push("release.yml must arm uncertain image cleanup before promotion attempt");
       }
     }
   }

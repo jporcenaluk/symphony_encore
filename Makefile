@@ -1,10 +1,12 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := verify-fast
 
-.PHONY: setup dev build start format lint typecheck test test-integration test-e2e image verify-fast verify conformance
+.PHONY: install setup dev build start format lint typecheck test test-integration test-e2e image verify-fast verify conformance
 
-setup:
+install:
 	corepack pnpm install --frozen-lockfile
+
+setup: install
 	node scripts/install-gitleaks.ts
 	node --import ./scripts/typescript-source-loader.mjs scripts/verify-gitleaks.ts
 	corepack pnpm exec husky

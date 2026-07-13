@@ -38,7 +38,6 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$SHA" origin/main
           test "$(git rev-parse "$TAG^{commit}")" = "$SHA"
-          ! gh release view "$TAG" >/dev/null 2>&1
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
@@ -70,17 +69,100 @@ jobs:
           ignore-unfixed: true
           image-ref: ${{ env.IMAGE }}:sha-${{ env.SHA }}
           severity: CRITICAL,HIGH
-      - name: Promote without rebuilding
+      - name: Publish release and promote without rebuilding
         run: |
-          ! docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>&1
-          docker buildx imagetools create \
-            --tag "${IMAGE}:${TAG}" \
-            "${IMAGE}:sha-${SHA}"
-          test "$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}')" = \
-            "$(docker buildx imagetools inspect "${IMAGE}:sha-${SHA}" --format '{{json .Manifest.Digest}}')"
-      - name: Publish immutable release evidence
-        run: |
+          release_response=""
+          if release_response="$(gh api \
+            --method GET \
+            --include \
+            "repos/${REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
+            echo "release.preflight.github.exists" >&2
+            exit 1
+          fi
+          release_status="$(printf '%s\n' "$release_response" | \
+            sed -n 's/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)"
+          if [[ "$release_status" != "404" ]]; then
+            echo "release.preflight.github.unavailable" >&2
+            exit 1
+          fi
+
+          image_probe_error="${RUNNER_TEMP}/symphony-image-preflight-error"
+          if docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>"$image_probe_error"; then
+            rm -f "$image_probe_error"
+            echo "release.preflight.image.exists" >&2
+            exit 1
+          fi
+          image_absent=false
+          image_reference="${IMAGE}:${TAG}"
+          registry_manifest_path="/v2/${REPOSITORY}/manifests/${TAG}"
+          while IFS= read -r provider_line || [[ -n "$provider_line" ]]; do
+            provider_line_lower="${provider_line,,}"
+            if [[ "$provider_line_lower" != *"${image_reference,,}"* && \
+              "$provider_line_lower" != *"${registry_manifest_path,,}"* ]]; then
+              continue
+            fi
+            if [[ "$provider_line_lower" =~ \
+              (^|[^[:alnum:]_])(404|manifest[[:space:]]unknown|not[[:space:]]found)([^[:alnum:]_]|$) ]]; then
+              image_absent=true
+              break
+            fi
+          done < "$image_probe_error"
+          if [[ "$image_absent" != "true" ]]; then
+            rm -f "$image_probe_error"
+            echo "release.preflight.image.unavailable" >&2
+            exit 1
+          fi
+          rm -f "$image_probe_error"
+
+          source_digest=""
+          if ! source_digest="$(docker buildx imagetools inspect \
+            "${IMAGE}:sha-${SHA}" \
+            --format '{{json .Manifest.Digest}}' 2>/dev/null)"; then
+            echo "release.preflight.source_digest_unavailable" >&2
+            exit 1
+          fi
+
+          cleanup_required=true
+          image_tag_attempted=false
+          cleanup_release() {
+            if [[ "$cleanup_required" == "true" ]]; then
+              if gh release delete "$TAG" --yes >/dev/null 2>&1; then
+                echo "release.cleanup.completed" >&2
+              else
+                echo "release.cleanup.failed" >&2
+              fi
+              if [[ "$image_tag_attempted" == "true" ]]; then
+                echo "release.cleanup.image_tag_manual_required" >&2
+              fi
+            fi
+          }
+          trap cleanup_release EXIT
+
           gh release create "$TAG" release-assets/* \
+            --draft \
             --generate-notes \
             --title "Symphony Encore ${TAG}" \
             --verify-tag
+          gh release edit "$TAG" --draft=false
+          image_tag_attempted=true
+          if docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG}" \
+            "${IMAGE}:sha-${SHA}"; then
+            :
+          else
+            echo "release.promotion.image_failed" >&2
+            exit 1
+          fi
+          promoted_digest=""
+          if ! promoted_digest="$(docker buildx imagetools inspect \
+            "${IMAGE}:${TAG}" \
+            --format '{{json .Manifest.Digest}}' 2>/dev/null)"; then
+            echo "release.promotion.digest_unavailable" >&2
+            exit 1
+          fi
+          if [[ "$promoted_digest" != "$source_digest" ]]; then
+            echo "release.promotion.digest_mismatch" >&2
+            exit 1
+          fi
+          cleanup_required=false
+          trap - EXIT

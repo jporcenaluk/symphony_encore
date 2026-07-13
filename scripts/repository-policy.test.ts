@@ -22,6 +22,17 @@ async function fixture(files: Record<string, string>): Promise<string> {
   return root;
 }
 
+function validMakefile(): string {
+  return [
+    "install:",
+    "\tcorepack pnpm install --frozen-lockfile",
+    "setup: install",
+    ...REQUIRED_MAKE_TARGETS.filter((target) => target !== "install" && target !== "setup").flatMap(
+      (target) => [`${target}:`, "\t@true"],
+    ),
+  ].join("\n");
+}
+
 test("declares the required workspace and Make target contract", () => {
   assert.deepEqual(REQUIRED_WORKSPACES, [
     "apps/server",
@@ -35,6 +46,7 @@ test("declares the required workspace and Make target contract", () => {
     "packages/test-support",
   ]);
   assert.deepEqual(REQUIRED_MAKE_TARGETS, [
+    "install",
     "setup",
     "dev",
     "build",
@@ -52,7 +64,163 @@ test("declares the required workspace and Make target contract", () => {
   ]);
 });
 
-test("accepts an acyclic inward-pointing package graph", async () => {
+test("rejects bare pnpm in root package scripts", async () => {
+  const bareCommands = {
+    after_assignment: "VERIFY=1 pnpm test",
+    after_do: "while false; do pnpm test; done",
+    after_newline: "printf ready\npnpm test",
+    after_pipe: "printf ready | pnpm test",
+    after_then: "if true; then pnpm test; fi",
+    in_subshell: "(pnpm test)",
+    initial: "pnpm -r --if-present build",
+  };
+  const qualifiedCommands = {
+    qualified_after_assignment: "VERIFY=1 corepack pnpm test",
+    qualified_after_do: "while false; do corepack pnpm test; done",
+    qualified_after_newline: "printf ready\ncorepack pnpm test",
+    qualified_after_pipe: "printf ready | corepack pnpm test",
+    qualified_after_then: "if true; then corepack pnpm test; fi",
+    qualified_in_subshell: "(corepack pnpm test)",
+    qualified_initial: "corepack pnpm -r --if-present build",
+  };
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+      scripts: { ...bareCommands, ...qualifiedCommands },
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+  });
+
+  const violations = await validateRepository(root);
+  for (const name of Object.keys(bareCommands)) {
+    assert(
+      violations.includes(`root script ${name} must invoke corepack pnpm`),
+      `expected ${name} to be rejected`,
+    );
+  }
+  for (const name of Object.keys(qualifiedCommands)) {
+    assert(!violations.includes(`root script ${name} must invoke corepack pnpm`));
+  }
+});
+
+test("requires fail-closed release preflights and failure-safe publication ordering", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    ".github/workflows/release.yml": `steps:
+  - run: |
+      if gh release view "$TAG" >/dev/null 2>&1; then exit 1; fi
+  - run: |
+      if docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then exit 1; fi
+  - run: docker buildx imagetools create --tag "$IMAGE:$TAG" "$IMAGE:sha-$SHA"
+  - run: image_tag_attempted=true
+  - run: gh release create "$TAG" release-assets/*
+`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(
+    violations.includes("release.yml GitHub release preflight must fail closed except on HTTP 404"),
+  );
+  assert(
+    violations.includes("release.yml image-tag preflight must fail closed except on not-found"),
+  );
+  assert(violations.includes("release.yml must finalize release before semantic image promotion"));
+  assert(violations.includes("release.yml must clean up release when image promotion fails"));
+  assert(
+    violations.includes("release.yml must verify promoted digest before completing transaction"),
+  );
+  assert(
+    violations.includes("release.yml must arm uncertain image cleanup before promotion attempt"),
+  );
+});
+
+test("rejects an unscoped registry not-found classifier", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    ".github/workflows/release.yml": `steps:
+  - run: |
+      gh api --include repos/example/releases/tags/v1.0.0
+      if [[ "$release_status" != "404" ]]; then echo release.preflight.github.unavailable; fi
+      image_probe_error="$RUNNER_TEMP/error"
+      grep --quiet 'not found' "$image_probe_error"
+      echo release.preflight.image.unavailable
+      trap cleanup_release EXIT
+      gh release create "$TAG" --draft
+      gh release edit "$TAG" --draft=false
+      docker buildx imagetools create "$IMAGE:sha-$SHA"
+      [[ "$promoted_digest" != "$source_digest" ]]
+      if [[ "$image_tag_attempted" == "true" ]]; then echo release.cleanup.image_tag_manual_required; fi
+      cleanup_required=false
+      gh release delete "$TAG" --yes
+`,
+  });
+
+  assert(
+    (await validateRepository(root)).includes(
+      "release.yml image-tag preflight must fail closed except on not-found",
+    ),
+  );
+});
+
+test("accepts only an absence classifier scoped to the exact image tag or manifest path", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    ".github/workflows/release.yml": `steps:
+  - run: |
+      gh api --include repos/example/releases/tags/v1.0.0
+      if [[ "$release_status" != "404" ]]; then echo release.preflight.github.unavailable; fi
+      image_probe_error="$RUNNER_TEMP/error"
+      image_reference="\${IMAGE}:\${TAG}"
+      registry_manifest_path="/v2/\${REPOSITORY}/manifests/\${TAG}"
+      while IFS= read -r provider_line || [[ -n "$provider_line" ]]; do
+        provider_line_lower="\${provider_line,,}"
+        if [[ "$provider_line_lower" != *"\${image_reference,,}"* && "$provider_line_lower" != *"\${registry_manifest_path,,}"* ]]; then continue; fi
+        if [[ "$provider_line_lower" =~ (^|[^[:alnum:]_])(404|manifest[[:space:]]unknown|not[[:space:]]found)([^[:alnum:]_]|$) ]]; then image_absent=true; fi
+      done < "$image_probe_error"
+      echo release.preflight.image.unavailable
+      trap cleanup_release EXIT
+      gh release create "$TAG" --draft
+      gh release edit "$TAG" --draft=false
+      image_tag_attempted=true
+      docker buildx imagetools create "$IMAGE:sha-$SHA"
+      [[ "$promoted_digest" != "$source_digest" ]]
+      if [[ "$image_tag_attempted" == "true" ]]; then echo release.cleanup.image_tag_manual_required; fi
+      cleanup_required=false
+      gh release delete "$TAG" --yes
+`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(
+    !violations.includes("release.yml image-tag preflight must fail closed except on not-found"),
+  );
+  assert(
+    !violations.includes("release.yml must arm uncertain image cleanup before promotion attempt"),
+  );
+});
+
+test("requires the repository-owned frozen install target and setup dependency", async () => {
   const root = await fixture({
     "package.json": JSON.stringify({
       engines: { node: ">=24.0.0 <25" },
@@ -60,6 +228,90 @@ test("accepts an acyclic inward-pointing package graph", async () => {
     }),
     ".node-version": "24.17.0\n",
     Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(
+    violations.some((item) =>
+      item.includes("Makefile install must use corepack pnpm install --frozen-lockfile"),
+    ),
+  );
+  assert(violations.some((item) => item.includes("Makefile setup must depend on install")));
+});
+
+test("rejects workflow portability patterns caught by ShellCheck", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    ".github/workflows/ci.yml": `steps:
+  - run: make install
+  - run: make verify-fast
+  - run: |
+      node -e '
+        console.log(\`image: \${process.env.IMAGE}\`);
+      '
+      sha256sum *.cdx.json > checksums.txt
+`,
+    ".github/workflows/release.yml": `steps:
+  - run: |
+      ! gh release view "$TAG"
+      ! docker buildx imagetools inspect "$IMAGE:$TAG"
+`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(violations.some((item) => item.includes("SC2016")));
+  assert(violations.some((item) => item.includes("SC2035")));
+  assert.equal(violations.filter((item) => item.includes("SC2251")).length, 2);
+});
+
+test("requires CI verification and publication to use the canonical install target", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    ".github/workflows/ci.yml": `jobs:
+  verify:
+    steps:
+      - run: make install
+      - run: make install
+      - run: corepack pnpm verify-fast
+  publish:
+    steps:
+      - run: make verify-fast
+      - run: make build
+`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(
+    violations.some((item) =>
+      item.includes("ci.yml verification and publication jobs must use make install"),
+    ),
+  );
+  assert(
+    violations.some((item) => item.includes("ci.yml verification job must use make verify-fast")),
+  );
+});
+
+test("accepts an acyclic inward-pointing package graph", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     "packages/domain/package.json": JSON.stringify({ name: "@symphony/domain" }),
     "packages/contracts/package.json": JSON.stringify({
@@ -78,7 +330,7 @@ test("rejects forbidden domain dependencies and workspace cycles", async () => {
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     "packages/domain/package.json": JSON.stringify({
       name: "@symphony/domain",
@@ -103,7 +355,7 @@ test("rejects technologies deferred by the stack contract", async () => {
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
   });
 
@@ -121,7 +373,7 @@ test("rejects workspace dependencies that point outward", async () => {
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     "packages/domain/package.json": JSON.stringify({ name: "@symphony/domain" }),
     "packages/contracts/package.json": JSON.stringify({ name: "@symphony/contracts" }),
@@ -146,7 +398,7 @@ test("rejects Node package builds that resolve production imports to TypeScript 
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     "packages/domain/package.json": JSON.stringify({
       name: "@symphony/domain",
@@ -169,7 +421,7 @@ test("rejects unresolved conflict markers in repository-owned text", async () =>
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     "src/conflicted.ts":
       "<<<<<<< ours\nconst value = 1;\n=======\nconst value = 2;\n>>>>>>> theirs\n",
@@ -187,7 +439,7 @@ test("rejects floating GitHub Action references", async () => {
       packageManager: "pnpm@11.12.0",
     }),
     ".node-version": "24.17.0\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
     ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v4\n",
   });
@@ -207,7 +459,7 @@ test("rejects mutable or root production container definitions", async () => {
     }),
     ".node-version": "24.17.0\n",
     Dockerfile: "FROM node:24-slim\nUSER root\nCMD node apps/server/dist/main.js\n",
-    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    Makefile: validMakefile(),
     "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
   });
 

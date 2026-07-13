@@ -16,9 +16,10 @@ counts are not completion evidence.
   branch is documentation-ahead of the pull-request head until the next intentional push.
 - Pull request: draft PR `#3`, <https://github.com/jporcenaluk/wheelsparrow/pull/3>.
 - Pull-request head: `090cd6b818097e72524d462ab03208625a94155e`.
-- Local deterministic gates at the audited runtime revision: `make verify-fast` passed 161 test
-  files and 581 tests, lint, Markdown, repository policy, strict TypeScript, and generated
-  contract/OpenAPI/client drift; the separate `make build` command also passed.
+- Local deterministic baseline at the audited runtime revision: `make verify-fast` passed 161 test
+  files and 581 tests. The current working tree passes the repaired Corepack command graph with 163
+  files and 617 tests, lint, Markdown, repository policy, strict TypeScript, generated contract,
+  OpenAPI/client drift, and `make build`; exact-head remote proof remains pending.
 - Remote state at that revision: CodeQL passed; the main CI workflow failed; the required aggregate
   check is not green.
 - Core Conformance: not achieved.
@@ -46,9 +47,9 @@ Each row records implementation, direct evidence, status, remaining work, depend
 The normalized baseline contains 761 independently statusable contracts:
 
 - `SPEC.md`: 54 implemented, 242 partial, 28 missing, and 3 awaiting external proof out of 327;
-- `TECH_STACK.md`: 65 implemented, 113 partial, 8 missing, and 18 awaiting external proof out of
+- `TECH_STACK.md`: 66 implemented, 112 partial, 8 missing, and 18 awaiting external proof out of
   204; and
-- `CICD.md`: 34 implemented, 134 partial, 42 missing, and 20 awaiting external proof out of 230.
+- `CICD.md`: 34 implemented, 137 partial, 39 missing, and 20 awaiting external proof out of 230.
 
 These counts describe requirement disposition, not percentage completion: rows differ substantially
 in size and risk, and no partial row counts as conformance.
@@ -61,9 +62,12 @@ in size and risk, and no partial row counts as conformance.
 
 ## Core Conformance
 
-The exact 35-ID registry must be moved from this prose ledger into a typed, SPEC-bound evidence
-contract before it can produce a trustworthy report. At present, only `C-DUR-03` has direct evidence
-strong enough to retain a checked status.
+The exact 35-ID registry is now a typed, SPEC-bound evidence contract in
+`packages/contracts/src/conformance.ts`. Its tests bind the seven headings, bullet order, normalized
+requirement hashes, required platforms, and the four selected Core adapter kinds. This is a trust
+boundary for future evidence, not proof that the cases ran: the canonical producer and fail-closed
+reporter remain pending. At present, only `C-DUR-03` has direct behavioral evidence strong enough to
+retain a checked status.
 
 - [x] `C-DUR-03` Process ownership verification, tree termination, and interrupted-attempt closure.
 - [ ] `C-WF-01` through `C-WF-07` — workflow/configuration compositions remain incomplete.
@@ -100,9 +104,11 @@ failure classes.
    Guard Decision/ReviewSet behavior are not implemented.
 8. The Control API, accessible operator UI, durable LogRecord history, notifications, quality
    metrics, retention, and tombstones are incomplete.
-9. The current conformance reporter can derive a false success from ledger prose and produces an
-   output-formatting regression after an incomplete run.
-10. Clean-runner package-manager setup, workflow shell checks, and image smoke are failing remotely.
+9. The current conformance reporter still derives status from ledger prose and produces an
+   output-formatting regression after an incomplete run; the new typed evidence contract is not yet
+   connected to canonical execution or reporting.
+10. Clean-runner package-manager, workflow-shell, and image-smoke defects are repaired in the
+    current working tree, but none has fresh exact-head remote proof yet.
 
 ## Current verification evidence
 
