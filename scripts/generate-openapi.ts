@@ -64,6 +64,8 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
 }
 
 const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
+  completeBootstrap: "BootstrapResponse",
+  getBootstrapStatus: "BootstrapStatusResponse",
   getControlState: "ControlState",
   getHealth: "HealthResponse",
   getReady: "ReadyResponse",
@@ -116,6 +118,9 @@ export async function renderControlApiClient(): Promise<string> {
       if (operation.operationId === "login") {
         return `    login: (input) => request<LoginResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
       }
+      if (operation.operationId === "completeBootstrap") {
+        return `    completeBootstrap: (input) => request<BootstrapResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
+      }
       if (operation.operationId === "mutateConfigurationOverride") {
         return `    mutateConfigurationOverride: (key, input, csrfToken) =>
       request<ConfigurationOverrideMutationResponse>(
@@ -133,6 +138,9 @@ export async function renderControlApiClient(): Promise<string> {
  * Do not edit by hand; run \`pnpm openapi:generate\`.
  */
 import type {
+  BootstrapRequest,
+  BootstrapResponse,
+  BootstrapStatusResponse,
   ConfigurationOverrideMutation,
   ConfigurationOverrideMutationResponse,
   ControlState,
@@ -164,13 +172,15 @@ ${operations
         ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;"
         : operation.operationId === "login"
           ? "  login(input: LoginRequest): Promise<LoginResponse>;"
-          : operation.operationId === "mutateConfigurationOverride"
-            ? `  mutateConfigurationOverride(
+          : operation.operationId === "completeBootstrap"
+            ? "  completeBootstrap(input: BootstrapRequest): Promise<BootstrapResponse>;"
+            : operation.operationId === "mutateConfigurationOverride"
+              ? `  mutateConfigurationOverride(
     key: string,
     input: ConfigurationOverrideMutation,
     csrfToken: string,
   ): Promise<ConfigurationOverrideMutationResponse>;`
-            : `  ${operation.operationId}(): Promise<${operation.returnType}>;`,
+              : `  ${operation.operationId}(): Promise<${operation.returnType}>;`,
   )
   .join("\n")}
 }

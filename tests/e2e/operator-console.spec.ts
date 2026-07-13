@@ -35,6 +35,19 @@ const events = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/v1/bootstrap", async (route) => {
+    await route.fulfill({
+      json: {
+        error: {
+          code: "not_found",
+          current_version: null,
+          details: {},
+          message: "The requested resource does not exist",
+        },
+      },
+      status: 404,
+    });
+  });
   await page.route("**/api/v1/auth/login", async (route) => {
     await route.fulfill({
       json: {
@@ -94,4 +107,35 @@ test("operates the protected console without executing hostile content", async (
   await expect(page.getByRole("link", { exact: true, name: "History" })).toBeVisible();
   await expect(page.getByRole("link", { exact: true, name: "Settings" })).toBeVisible();
   expect(browserErrors).toEqual([]);
+});
+
+test("completes loopback bootstrap before exposing operator login", async ({ page }) => {
+  await page.route("**/api/v1/bootstrap", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        json: { candidate_hash: "sha256:browser-candidate", status: "required" },
+      });
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({
+      auth_subject: "local:admin",
+      bootstrap_credential: "browser one-time credential",
+      confirmed_candidate_hash: "sha256:browser-candidate",
+      password: "browser local password",
+      tracker_login: null,
+    });
+    await route.fulfill({ json: { status: "completed" } });
+  });
+
+  await page.goto("/operations");
+  await expect(page.getByRole("heading", { name: "First-run authority" })).toBeVisible();
+  await expect(page.getByText("sha256:browser-candidate", { exact: true })).toBeVisible();
+  await page.getByLabel("Type the complete candidate hash").fill("sha256:browser-candidate");
+  await page.getByLabel("One-time bootstrap credential").fill("browser one-time credential");
+  await page.getByLabel("Local administrator password").fill("browser local password");
+  await page.getByRole("button", { name: "Create durable administrator" }).click();
+
+  await expect(page.getByRole("heading", { name: "Operator sign in" })).toBeVisible();
+  await expect(page.getByText("browser one-time credential", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("browser local password", { exact: true })).toHaveCount(0);
 });

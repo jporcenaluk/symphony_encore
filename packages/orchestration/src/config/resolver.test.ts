@@ -105,6 +105,27 @@ describe("configuration resolution", () => {
     );
   });
 
+  it("exempts only the missing initial operator for a pristine store", () => {
+    const { human: _human, ...workflowWithoutOperators } = validWorkflow;
+    const result = resolveConfiguration({
+      context: { ...context, pristineStore: true },
+      workflow: workflowWithoutOperators,
+    });
+
+    expect(result.errors).not.toContainEqual({
+      code: "config.required",
+      key: "human.operators",
+    });
+    expect(result.errors).not.toContainEqual({
+      code: "config.operator_capability_missing",
+      key: "human.operators",
+    });
+    expect(result.errors).toContainEqual({
+      code: "config.required",
+      key: "bootstrap.admin_credential",
+    });
+  });
+
   it("rejects literal or unresolved secret values", () => {
     const literal = resolveConfiguration({
       context,

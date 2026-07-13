@@ -1,12 +1,16 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 export interface RuntimeOptions {
+  bootstrapAuthSubject?: string;
+  bootstrapCredentialHash?: string;
   databasePath: string;
   host: string;
   port: number;
   secureCookies: boolean;
   sessionTtlMs: number;
   uiRoot: string;
+  workflowPath: string;
   workspaceRoot: string;
 }
 
@@ -25,8 +29,27 @@ export function parseRuntimeOptions(
   );
   if (!isLoopback(host) && !allowNonLoopback) throw new Error("runtime.non_loopback_ack_required");
   if (!isLoopback(host) && !secureCookies) throw new Error("runtime.secure_cookies_required");
+  const bootstrapAuthSubject = nonEmpty(
+    environment.SYMPHONY_BOOTSTRAP_AUTH_SUBJECT,
+    "SYMPHONY_BOOTSTRAP_AUTH_SUBJECT",
+  );
+  const bootstrapCredential = nonEmpty(
+    environment.SYMPHONY_BOOTSTRAP_CREDENTIAL,
+    "SYMPHONY_BOOTSTRAP_CREDENTIAL",
+  );
+  if ((bootstrapAuthSubject === undefined) !== (bootstrapCredential === undefined)) {
+    throw new Error("runtime.bootstrap_authority_incomplete");
+  }
 
   return {
+    ...(bootstrapAuthSubject && bootstrapCredential
+      ? {
+          bootstrapAuthSubject,
+          bootstrapCredentialHash: `sha256:${createHash("sha256")
+            .update(bootstrapCredential)
+            .digest("hex")}`,
+        }
+      : {}),
     databasePath: resolveOptionPath(
       environment.SYMPHONY_DATABASE_PATH,
       cwd,
@@ -48,6 +71,12 @@ export function parseRuntimeOptions(
       cwd,
       path.join("apps", "web", "dist"),
       "SYMPHONY_UI_ROOT",
+    ),
+    workflowPath: resolveOptionPath(
+      environment.SYMPHONY_WORKFLOW_PATH,
+      cwd,
+      "WORKFLOW.md",
+      "SYMPHONY_WORKFLOW_PATH",
     ),
     workspaceRoot: resolveOptionPath(
       environment.SYMPHONY_WORKSPACE_ROOT,

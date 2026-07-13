@@ -12,6 +12,7 @@ describe("production runtime options", () => {
       secureCookies: false,
       sessionTtlMs: 28_800_000,
       uiRoot: path.join("/srv/symphony", "apps", "web", "dist"),
+      workflowPath: path.join("/srv/symphony", "WORKFLOW.md"),
       workspaceRoot: path.join("/srv/symphony", ".symphony", "workspaces"),
     });
   });
@@ -24,6 +25,7 @@ describe("production runtime options", () => {
           SYMPHONY_PORT: "49152",
           SYMPHONY_SESSION_TTL_MS: "60000",
           SYMPHONY_UI_ROOT: "build/ui",
+          SYMPHONY_WORKFLOW_PATH: "config/WORKFLOW.md",
           SYMPHONY_WORKSPACE_ROOT: "state/workspaces",
         },
         "/srv/symphony",
@@ -33,6 +35,7 @@ describe("production runtime options", () => {
       port: 49_152,
       sessionTtlMs: 60_000,
       uiRoot: "/srv/symphony/build/ui",
+      workflowPath: "/srv/symphony/config/WORKFLOW.md",
       workspaceRoot: "/srv/symphony/state/workspaces",
     });
   });
@@ -63,5 +66,25 @@ describe("production runtime options", () => {
     expect(() => parseRuntimeOptions({ SYMPHONY_SECURE_COOKIES: "yes" }, "/srv/symphony")).toThrow(
       "runtime.invalid_boolean:SYMPHONY_SECURE_COOKIES",
     );
+  });
+
+  it("hashes trusted bootstrap authority without retaining the credential", () => {
+    const options = parseRuntimeOptions(
+      {
+        SYMPHONY_BOOTSTRAP_AUTH_SUBJECT: "local:admin",
+        SYMPHONY_BOOTSTRAP_CREDENTIAL: "one-time-secret",
+      },
+      "/srv/symphony",
+    );
+
+    expect(options).toMatchObject({
+      bootstrapAuthSubject: "local:admin",
+      bootstrapCredentialHash:
+        "sha256:9769f061ca1f0907de3ca4da3f23937ea28a5cea0b048c0b5ee585f73fa92dbc",
+    });
+    expect(JSON.stringify(options)).not.toContain("one-time-secret");
+    expect(() =>
+      parseRuntimeOptions({ SYMPHONY_BOOTSTRAP_CREDENTIAL: "orphan" }, "/srv/symphony"),
+    ).toThrow("runtime.bootstrap_authority_incomplete");
   });
 });

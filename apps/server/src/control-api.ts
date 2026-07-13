@@ -2,6 +2,9 @@ import swagger from "@fastify/swagger";
 import { type TypeBoxTypeProvider, TypeBoxValidatorCompiler } from "@fastify/type-provider-typebox";
 import {
   type ActiveServiceState,
+  BootstrapRequestSchema,
+  BootstrapResponseSchema,
+  BootstrapStatusResponseSchema,
   ConfigurationOverrideMutationResponseSchema,
   ConfigurationOverrideMutationSchema,
   ConfigurationOverrideParamsSchema,
@@ -19,7 +22,7 @@ import {
   LoginResponseSchema,
   ReadyResponseSchema,
 } from "@symphony/contracts";
-import Fastify, { type FastifyBaseLogger, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyReply, type FastifyRequest } from "fastify";
 
 import { encodeServerSentEvent, resolveEventResumeCursor } from "./event-stream.js";
 
@@ -32,6 +35,23 @@ export interface OperatorPrincipal {
 export interface ControlApiDependencies {
   authenticate(request: FastifyRequest): Promise<OperatorPrincipal | null>;
   authenticateMutation(request: FastifyRequest): Promise<OperatorPrincipal | null>;
+  bootstrap?: {
+    complete(input: {
+      authSubject: string;
+      bootstrapCredential: string;
+      confirmedCandidateHash: string;
+      password: string;
+      trackerLogin: string | null;
+    }): Promise<
+      | { kind: "completed" }
+      | { kind: "already_initialized" }
+      | { kind: "operator_store_missing_nonpristine" }
+      | { kind: "credential_mismatch" }
+      | { kind: "candidate_mismatch" }
+      | { kind: "validation_failed"; message: string }
+    >;
+    status(): Promise<{ candidateHash: string; kind: "required" } | { kind: "disabled" }>;
+  };
   login(input: { authSubject: string; password: string }): Promise<{
     csrfToken: string;
     expiresAt: string;
@@ -105,6 +125,77 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
       },
     });
   });
+
+  server.get(
+    "/api/v1/bootstrap",
+    {
+      schema: {
+        operationId: "getBootstrapStatus",
+        response: { 200: BootstrapStatusResponseSchema, 404: ErrorEnvelopeSchema },
+        summary: "Read loopback-only first-run bootstrap state",
+        tags: ["authentication"],
+      },
+    },
+    async (request, reply) => {
+      if (!dependencies.bootstrap || !isLoopbackAddress(request.ip)) {
+        return notFound(reply);
+      }
+      const status = await dependencies.bootstrap.status();
+      if (status.kind === "disabled") return notFound(reply);
+      reply.header("cache-control", "no-store");
+      return reply.code(200).send({ candidate_hash: status.candidateHash, status: status.kind });
+    },
+  );
+
+  server.post(
+    "/api/v1/bootstrap",
+    {
+      schema: {
+        body: BootstrapRequestSchema,
+        operationId: "completeBootstrap",
+        response: {
+          200: BootstrapResponseSchema,
+          403: ErrorEnvelopeSchema,
+          404: ErrorEnvelopeSchema,
+          409: ErrorEnvelopeSchema,
+          422: ErrorEnvelopeSchema,
+        },
+        summary: "Complete loopback-only first-run bootstrap",
+        tags: ["authentication"],
+      },
+    },
+    async (request, reply) => {
+      if (!dependencies.bootstrap || !isLoopbackAddress(request.ip)) {
+        return notFound(reply);
+      }
+      reply.header("cache-control", "no-store");
+      const result = await dependencies.bootstrap.complete({
+        authSubject: request.body.auth_subject,
+        bootstrapCredential: request.body.bootstrap_credential,
+        confirmedCandidateHash: request.body.confirmed_candidate_hash,
+        password: request.body.password,
+        trackerLogin: request.body.tracker_login,
+      });
+      if (result.kind === "completed") return reply.code(200).send({ status: "completed" });
+      const status =
+        result.kind === "credential_mismatch"
+          ? 403
+          : result.kind === "validation_failed"
+            ? 422
+            : 409;
+      return reply.code(status).send({
+        error: {
+          code: `bootstrap.${result.kind}`,
+          current_version: null,
+          details: {},
+          message:
+            result.kind === "validation_failed"
+              ? result.message
+              : "Bootstrap could not be completed with the supplied authority and candidate",
+        },
+      });
+    },
+  );
 
   server.get(
     "/health",
@@ -473,6 +564,26 @@ function serializeSessionCookie(token: string, expiresAt: string, secure: boolea
     `Expires=${expires.toUTCString()}`,
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+}
+
+function isLoopbackAddress(address: string): boolean {
+  return (
+    address === "127.0.0.1" ||
+    address === "::1" ||
+    address === "::ffff:127.0.0.1" ||
+    address.startsWith("127.")
+  );
+}
+
+function notFound(reply: FastifyReply) {
+  return reply.code(404).send({
+    error: {
+      code: "not_found",
+      current_version: null,
+      details: {},
+      message: "The requested resource does not exist",
+    },
+  });
 }
 
 export type ControlApi = Awaited<ReturnType<typeof createControlApi>>;

@@ -18,11 +18,14 @@ import {
 export interface PersistentControlApiInput {
   authenticate: ControlApiDependencies["authenticate"];
   authenticateMutation: ControlApiDependencies["authenticateMutation"];
+  bootstrap?: ControlApiDependencies["bootstrap"];
   database: OpenedDatabase["database"];
   login: ControlApiDependencies["login"];
   logger?: FastifyBaseLogger;
   newActionId?: () => string;
   now?: () => string;
+  readControlState?: ControlApiDependencies["readControlState"];
+  readServiceStatus?: ControlApiDependencies["readServiceStatus"];
   sessionCookieSecure: boolean;
   validateConfigurationOverride(input: {
     key: string;
@@ -35,6 +38,7 @@ export async function createPersistentControlApi(input: PersistentControlApiInpu
   return createControlApi({
     authenticate: input.authenticate,
     authenticateMutation: input.authenticateMutation,
+    ...(input.bootstrap ? { bootstrap: input.bootstrap } : {}),
     login: input.login,
     ...(input.logger ? { logger: input.logger } : {}),
     async mutateConfigurationOverride(request) {
@@ -74,8 +78,8 @@ export async function createPersistentControlApi(input: PersistentControlApiInpu
         next_cursor: result.nextCursor,
       };
     },
-    readControlState: () => readControlState(input.database),
-    readServiceStatus: () => readServiceStatus(input.database),
+    readControlState: input.readControlState ?? (() => readControlState(input.database)),
+    readServiceStatus: input.readServiceStatus ?? (() => readServiceStatus(input.database)),
     sessionCookieSecure: input.sessionCookieSecure,
     streamEvents: ({ afterCursor, signal }) =>
       streamEventRecords(input.database, {

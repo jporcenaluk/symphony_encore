@@ -545,6 +545,35 @@ textarea:disabled {
   line-height: 1.65;
 }
 
+.bootstrap-card {
+  width: min(100%, 760px);
+}
+
+.candidate-panel {
+  display: grid;
+  gap: 0.55rem;
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--line-bright);
+  background: var(--ink-deep);
+}
+
+.candidate-panel span {
+  color: var(--acid);
+  font-family: var(--mono);
+  font-size: 0.69rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.candidate-panel code {
+  overflow-wrap: anywhere;
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
 .login-card form {
   display: grid;
   gap: 12px;

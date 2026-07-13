@@ -3,6 +3,9 @@
  * Do not edit by hand; run `pnpm openapi:generate`.
  */
 import type {
+  BootstrapRequest,
+  BootstrapResponse,
+  BootstrapStatusResponse,
   ConfigurationOverrideMutation,
   ConfigurationOverrideMutationResponse,
   ControlState,
@@ -26,6 +29,8 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
+  getBootstrapStatus(): Promise<BootstrapStatusResponse>;
+  completeBootstrap(input: BootstrapRequest): Promise<BootstrapResponse>;
   getHealth(): Promise<HealthResponse>;
   login(input: LoginRequest): Promise<LoginResponse>;
   mutateConfigurationOverride(
@@ -70,6 +75,8 @@ export function createControlApiClient(
     return payload as T;
   };
   return {
+    getBootstrapStatus: () => request<BootstrapStatusResponse>("/api/v1/bootstrap", "GET"),
+    completeBootstrap: (input) => request<BootstrapResponse>("/api/v1/bootstrap", "POST", input),
     getHealth: () => request<HealthResponse>("/health", "GET"),
     login: (input) => request<LoginResponse>("/api/v1/auth/login", "POST", input),
     mutateConfigurationOverride: (key, input, csrfToken) =>

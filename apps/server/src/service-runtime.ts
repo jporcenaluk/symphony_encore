@@ -10,20 +10,31 @@ import {
 import {
   applyMigrations,
   beginServiceRun,
+  type ConfigurationSnapshot,
   inspectBootstrapEligibility,
   loadLatestConfigurationSnapshot,
   openDatabase,
+  readControlState,
+  readServiceStatus,
   stopServiceRun,
 } from "@symphony/persistence";
 import type { FastifyBaseLogger } from "fastify";
 
 import { startHttpRuntime } from "./http-runtime.js";
+import { createLocalBootstrap } from "./local-bootstrap.js";
 import { createLocalSessionAuth } from "./local-session-auth.js";
 import { createPersistentControlApi } from "./persistent-control-api.js";
 import type { RuntimeOptions } from "./runtime-options.js";
 import { recoverLinuxStartupState } from "./startup-recovery.js";
 
 export interface ProductionServiceInput {
+  bootstrap?: {
+    authSubject: string;
+    candidateHash: string;
+    configSnapshot: ConfigurationSnapshot;
+    credentialHash: string;
+    operatorId: string;
+  };
   hostId?: string;
   listen?: (options: { host: string; port: number }) => Promise<string>;
   logger?: FastifyBaseLogger;
@@ -42,32 +53,85 @@ export async function startProductionService(input: ProductionServiceInput) {
   try {
     await applyMigrations(opened.database);
     const eligibility = await inspectBootstrapEligibility(opened.database);
-    if (eligibility.kind === "pristine") throw new Error("runtime.bootstrap_required");
     if (eligibility.kind === "operator_store_missing_nonpristine") {
       throw new Error("runtime.operator_store_missing_nonpristine");
     }
-    const snapshot = await loadLatestConfigurationSnapshot(opened.database);
-    if (snapshot === undefined) throw new Error("runtime.configuration_snapshot_missing");
+    const initialSnapshot =
+      eligibility.kind === "initialized"
+        ? await loadLatestConfigurationSnapshot(opened.database)
+        : undefined;
+    if (eligibility.kind === "initialized" && initialSnapshot === undefined) {
+      throw new Error("runtime.configuration_snapshot_missing");
+    }
+    if (eligibility.kind === "pristine" && !input.bootstrap) {
+      throw new Error("runtime.bootstrap_required");
+    }
+    if (eligibility.kind === "pristine" && !isLoopbackHost(input.options.host)) {
+      throw new Error("runtime.bootstrap_loopback_required");
+    }
+    const bootstrapInput = eligibility.kind === "pristine" ? input.bootstrap : undefined;
 
-    const serviceRunId = input.serviceRunId?.() ?? randomUUID();
-    await beginServiceRun(opened.database, {
-      hostId: input.hostId ?? os.hostname(),
-      id: serviceRunId,
-      serviceVersion: "0.0.0",
-      startReason: "startup",
-      startedAt: now(),
-      startupConfigSnapshotId: snapshot.id,
-    });
+    let serviceRunId: string | undefined;
+    async function activate(snapshot: ConfigurationSnapshot) {
+      if (serviceRunId !== undefined) throw new Error("runtime.service_already_activated");
+      const nextServiceRunId = input.serviceRunId?.() ?? randomUUID();
+      await beginServiceRun(opened.database, {
+        hostId: input.hostId ?? os.hostname(),
+        id: nextServiceRunId,
+        serviceVersion: "0.0.0",
+        startReason: "startup",
+        startedAt: now(),
+        startupConfigSnapshotId: snapshot.id,
+      });
+      await recoverLinuxStartupState({
+        completedAt: now(),
+        database: opened.database,
+        async loadLatestHandoff(attemptId) {
+          throw new Error(`recovery.handoff_missing:${attemptId}`);
+        },
+        quarantineId: nextServiceRunId,
+        serviceRunId: nextServiceRunId,
+        terminalResultId: (attemptId) => `interrupted:${attemptId}:${nextServiceRunId}`,
+        workspaceRoot: input.options.workspaceRoot,
+      });
+      serviceRunId = nextServiceRunId;
+    }
+
     const auth = createLocalSessionAuth({
       database: opened.database,
       sessionTtlMs: input.options.sessionTtlMs,
     });
+    const bootstrap = bootstrapInput
+      ? createLocalBootstrap({
+          afterCompleted: () => activate(bootstrapInput.configSnapshot),
+          authSubject: bootstrapInput.authSubject,
+          candidateHash: bootstrapInput.candidateHash,
+          configSnapshot: bootstrapInput.configSnapshot,
+          database: opened.database,
+          expectedCredentialHash: bootstrapInput.credentialHash,
+          newActionId: randomUUID,
+          now,
+          operatorId: bootstrapInput.operatorId,
+        })
+      : undefined;
     const server = await createPersistentControlApi({
       authenticate: auth.authenticate,
       authenticateMutation: auth.authenticateMutation,
+      ...(bootstrap ? { bootstrap } : {}),
       database: opened.database,
       login: auth.login,
       ...(input.logger ? { logger: input.logger } : {}),
+      readControlState: () =>
+        serviceRunId === undefined
+          ? Promise.resolve(bootstrapControlState(input.bootstrap?.candidateHash ?? "unavailable"))
+          : readControlState(opened.database),
+      readServiceStatus: () =>
+        serviceRunId === undefined
+          ? Promise.resolve({
+              id: `bootstrap:${input.bootstrap?.candidateHash ?? "unavailable"}`,
+              state: "starting" as const,
+            })
+          : readServiceStatus(opened.database),
       sessionCookieSecure: input.options.secureCookies,
       validateConfigurationOverride,
     });
@@ -79,33 +143,33 @@ export async function startProductionService(input: ProductionServiceInput) {
       server,
       uiRoot: input.options.uiRoot,
     });
-    await recoverLinuxStartupState({
-      completedAt: now(),
-      database: opened.database,
-      async loadLatestHandoff(attemptId) {
-        throw new Error(`recovery.handoff_missing:${attemptId}`);
-      },
-      quarantineId: serviceRunId,
-      serviceRunId,
-      terminalResultId: (attemptId) => `interrupted:${attemptId}:${serviceRunId}`,
-      workspaceRoot: input.options.workspaceRoot,
-    });
+    if (bootstrapInput) {
+      (input.output ?? ((line) => process.stdout.write(`${line}\n`)))(
+        `Bootstrap candidate: ${bootstrapInput.candidateHash}`,
+      );
+    } else if (initialSnapshot) {
+      await activate(initialSnapshot);
+    }
 
     let closed = false;
     return {
       async close() {
         if (closed) return;
         closed = true;
-        await stopServiceRun(opened.database, {
-          endedAt: now(),
-          endReason: "signal",
-          serviceRunId,
-        });
+        if (serviceRunId !== undefined) {
+          await stopServiceRun(opened.database, {
+            endedAt: now(),
+            endReason: "signal",
+            serviceRunId,
+          });
+        }
         await httpRuntime?.close();
         await opened.close();
       },
       server,
-      serviceRunId,
+      get serviceRunId() {
+        return serviceRunId;
+      },
       url: httpRuntime.url,
     };
   } catch (error) {
@@ -113,6 +177,24 @@ export async function startProductionService(input: ProductionServiceInput) {
     await opened.close();
     throw error;
   }
+}
+
+function bootstrapControlState(candidateHash: string) {
+  return {
+    dispatch_enabled: false,
+    mutations_enabled: false,
+    service_run: {
+      id: `bootstrap:${candidateHash}`,
+      service_version: "0.0.0",
+      started_at: "bootstrap",
+      status: "starting" as const,
+    },
+    version: `bootstrap:${candidateHash}`,
+  };
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
 function validateConfigurationOverride(input: {

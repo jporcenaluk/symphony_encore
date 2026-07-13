@@ -17,6 +17,7 @@ describe("generated OpenAPI contract", () => {
   it("renders every registered Control API route", async () => {
     const document = JSON.parse(await renderOpenApi()) as { paths: Record<string, unknown> };
     expect(Object.keys(document.paths)).toEqual([
+      "/api/v1/bootstrap",
       "/health",
       "/api/v1/auth/login",
       "/api/v1/config/overrides/{key}",

@@ -10,7 +10,8 @@ command. A green but narrower test does not complete a broader item.
 
 - Branch target: `feat/symphony-encore-core`.
 - Current milestone: first-run bootstrap, container, and canonical delivery pipeline.
-- Canonical gate: not implemented yet.
+- Canonical gate: `make verify` is implemented; a current full local run is pending listener and
+  Docker availability.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
 - Real Integration Profile: not run.
@@ -33,10 +34,10 @@ command. A green but narrower test does not complete a broader item.
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, production recovering-to-ready startup, and orderly durable stop pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
-| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Pristine fail-closed bootstrap, salted local credentials, hash-only sessions, same-origin CSRF, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; mutation integration and macOS posture pending |
+| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Loopback-only exact-hash bootstrap now validates and snapshots the full workflow candidate, atomically creates matching local authority, disables dispatch and mutations until completion, and joins salted credentials, hash-only sessions, same-origin CSRF, bootstrap-key rejection, credential scrubbing, and Linux/WSL Bubblewrap isolation; full corruption recovery and macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Authenticated bounded `gh api` GraphQL transport, GitHub tracker normalization, checklist extraction, complete-page enforcement, revision recheck, authorization matrix, provider-independent contracts, and normalized PR snapshot schema pass; Projects queries and repository-hosting implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
-| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, and immutable snapshots pass; startup/API integration pending |
+| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, immutable snapshots, trusted workflow-path loading, and first-run startup validation pass; ordinary startup and reload integration pending |
 | S19 | Core and real-integration conformance reports | Not started | `make conformance` and redacted real-profile report |
 
 ## Technology-stack coverage
@@ -45,13 +46,13 @@ command. A green but narrower test does not complete a broader item.
 |---|---|---|---|
 | T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck, and production workspace imports resolve to emitted JavaScript |
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
-| T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | In progress | Authenticated responsive React/Vite console, TanStack Router/Query/Table operations and settings slice, production build, Chromium flow, and Fastify static delivery pass; durable history/live-log/API breadth and component-system completion pending |
-| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, EventSource requests, SPA fallback isolation, and restrictive response headers pass; remaining API resources pending |
+| T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | In progress | Authenticated responsive React/Vite console, exact-hash first-run view, TanStack Router/Query/Table operations and settings slice, production build, Chromium flow, and Fastify static delivery pass; current bootstrap browser run, durable history/live-log/API breadth, and component-system completion pending |
+| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed loopback bootstrap, login, read, and configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, EventSource requests, SPA fallback isolation, and restrictive response headers pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, generated-contract drift checks, real subprocess boundaries, and production-build Playwright flow pass; full boundary matrix pending |
-| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, confirmed tree exit, SIGINT/SIGTERM idempotence, and real SIGTERM production smoke pass locally; macOS, CI matrix, and documented WSL smoke pending |
+| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, confirmed tree exit, SIGINT/SIGTERM idempotence, real SIGTERM production smoke, and a documented Windows-host/WSL release check pass; macOS runtime boundary and current WSL release evidence pending |
 | T10 | Node distribution and non-root multi-stage container | In progress | Built Node entrypoint, safe runtime options, one-port API/UI, health/readiness, durable lifecycle, production-only deploy layout, digest-pinned multi-stage image definition, numeric non-root user, volumes, Tini, and healthcheck pass static checks; Docker build/run pending because Docker is unavailable locally |
 | T11 | Exact dependency/toolchain pinning and update policy | In progress | Exact manifests/lockfile/toolchain, digest- and commit-pinned delivery inputs, and separate pnpm/Actions/Docker Dependabot schedules pass; built-image dependency inventory proof pending |
 | T12 | Deferred technologies remain absent | Implemented | Repository policy rejects deferred application, server, queue, database, workflow, and transport dependencies |
@@ -70,7 +71,7 @@ command. A green but narrower test does not complete a broader item.
 | D08 | Tag promotion without rebuilding | Not started | Release workflow and artifact lookup test |
 | D09 | Dependabot for pnpm, Actions, and Docker | Implemented | Valid weekly npm, GitHub Actions, and Docker updater configuration with major toolchain updates kept visible |
 | D10 | Fast staged-file hooks and optional pre-push verification | Not started | Hook fixture tests |
-| D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache and 14-day failed Playwright artifact retention exist; publication, rollback, and operator documentation pending |
+| D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache, 14-day failed Playwright artifact retention, operator runbooks, WSL smoke procedure, and verified-digest rollback policy exist; publication and environment-specific rollback proof pending |
 | D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; dev/conformance pending |
 
 ## Core conformance matrix
@@ -177,3 +178,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `actionlint 1.7.12` | Both commit-pinned workflows passed | Workflow syntax and expression validation |
 | 2026-07-13 | working tree | `zizmor 1.26.1 --persona pedantic --offline` | No findings | Workflow security audit |
 | 2026-07-13 | working tree | `make verify-fast` | 281 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Container policy, deferred-dependency enforcement, and delivery configuration |
+| 2026-07-13 | working tree | `make verify-fast` | 289 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Full-workflow bootstrap candidate, narrow pristine exemption, exact loopback API/UI, and durable authority identity |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | First-run bootstrap and operational runbook slice |

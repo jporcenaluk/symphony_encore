@@ -15,6 +15,7 @@ afterEach(async () => {
 });
 
 async function fixture(input?: {
+  bootstrap?: boolean;
   capabilities?: readonly string[];
   authenticated?: boolean;
   csrfValid?: boolean;
@@ -79,6 +80,27 @@ async function fixture(input?: {
         operatorId: "operator-1",
       };
     },
+    ...(input?.bootstrap
+      ? {
+          bootstrap: {
+            async complete(request: {
+              authSubject: string;
+              bootstrapCredential: string;
+              confirmedCandidateHash: string;
+              password: string;
+              trackerLogin: string | null;
+            }) {
+              return request.bootstrapCredential === "one-time" &&
+                request.confirmedCandidateHash === "sha256:candidate"
+                ? ({ kind: "completed" } as const)
+                : ({ kind: "credential_mismatch" } as const);
+            },
+            async status() {
+              return { candidateHash: "sha256:candidate", kind: "required" as const };
+            },
+          },
+        }
+      : {}),
     async login(credentials) {
       if (
         credentials.authSubject !== "local:admin" ||
@@ -123,6 +145,39 @@ async function fixture(input?: {
 }
 
 describe("Control API", () => {
+  it("exposes loopback-only exact-candidate bootstrap without echoing credentials", async () => {
+    const { server } = await fixture({ bootstrap: true });
+    await server.ready();
+
+    const status = await server.inject({ url: "/api/v1/bootstrap" });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toEqual({
+      candidate_hash: "sha256:candidate",
+      status: "required",
+    });
+
+    const completed = await server.inject({
+      method: "POST",
+      payload: {
+        auth_subject: "local:admin",
+        bootstrap_credential: "one-time",
+        confirmed_candidate_hash: "sha256:candidate",
+        password: "local password",
+        tracker_login: null,
+      },
+      url: "/api/v1/bootstrap",
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toEqual({ status: "completed" });
+    expect(completed.body).not.toContain("one-time");
+    expect(completed.body).not.toContain("local password");
+
+    const remote = await server.inject({
+      remoteAddress: "203.0.113.7",
+      url: "/api/v1/bootstrap",
+    });
+    expect(remote.statusCode).toBe(404);
+  });
   it("keeps Fastify request logging on the shared Pino lifecycle", async () => {
     const { server } = await fixture();
     await server.ready();

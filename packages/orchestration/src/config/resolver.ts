@@ -195,8 +195,13 @@ function addError(errors: ConfigurationError[], code: string, key: string): void
   if (!errors.some((error) => error.code === code && error.key === key)) errors.push({ code, key });
 }
 
-function validateOperators(value: unknown, errors: ConfigurationError[]): void {
+function validateOperators(
+  value: unknown,
+  errors: ConfigurationError[],
+  allowMissing: boolean,
+): void {
   if (!Array.isArray(value) || value.length === 0) {
+    if (allowMissing && value === undefined) return;
     addError(errors, "config.required", "human.operators");
     return;
   }
@@ -312,7 +317,7 @@ export function resolveConfiguration(input: ResolveConfigurationInput): Configur
     if (value !== undefined) values[key] = value;
 
     const required =
-      definition.required ||
+      (definition.required && !(key === "human.operators" && input.context.pristineStore)) ||
       (definition.requiredForGithub && values["tracker.kind"] === "github") ||
       (key === "server.session_secret" && !input.context.authSuppliesSessions) ||
       (key === "bootstrap.admin_credential" && input.context.pristineStore === true);
@@ -364,7 +369,7 @@ export function resolveConfiguration(input: ResolveConfigurationInput): Configur
   if (typeof port === "number" && (port < 1 || port > 65_535)) {
     addError(errors, "config.port_invalid", "server.port");
   }
-  validateOperators(values["human.operators"], errors);
+  validateOperators(values["human.operators"], errors, input.context.pristineStore === true);
 
   const capabilities = input.context.adapterCapabilities;
   if (capabilities) {

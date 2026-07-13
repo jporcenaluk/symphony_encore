@@ -1,6 +1,10 @@
+import { readFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createRootLogger } from "@symphony/observability";
+import { loadWorkflowFile } from "@symphony/orchestration";
 
+import { buildBootstrapCandidate } from "./bootstrap-candidate.js";
 import { parseRuntimeOptions } from "./runtime-options.js";
 import { startProductionService } from "./service-runtime.js";
 
@@ -25,9 +29,29 @@ export function installShutdownHandlers(
 export async function runProductionMain() {
   const logger = createRootLogger({ level: process.env.LOG_LEVEL ?? "info" });
   try {
+    const options = parseRuntimeOptions(process.env, process.cwd());
+    const workflow =
+      options.bootstrapAuthSubject && options.bootstrapCredentialHash
+        ? await loadWorkflowFile({
+            cwd: process.cwd(),
+            readFile: (filename) => readFile(filename, "utf8"),
+            trustedPath: options.workflowPath,
+          })
+        : undefined;
+    const bootstrap = workflow
+      ? buildBootstrapCandidate({
+          createdAt: new Date().toISOString(),
+          environment: process.env,
+          home: homedir(),
+          options,
+          systemTemp: tmpdir(),
+          workflow,
+        })
+      : undefined;
     const service = await startProductionService({
+      ...(bootstrap ? { bootstrap } : {}),
       logger,
-      options: parseRuntimeOptions(process.env, process.cwd()),
+      options,
     });
     installShutdownHandlers(service.close, undefined, (error) => {
       logger.fatal({ error }, "service shutdown failed");

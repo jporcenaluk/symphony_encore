@@ -67,6 +67,7 @@ describe("production service lifecycle", () => {
         secureCookies: false,
         sessionTtlMs: 60_000,
         uiRoot: fixture.uiRoot,
+        workflowPath: path.join(fixture.root, "WORKFLOW.md"),
         workspaceRoot: fixture.workspaceRoot,
       },
       output: () => undefined,
@@ -96,30 +97,83 @@ describe("production service lifecycle", () => {
     await reopened.close();
   });
 
-  it("does not create authority or service state in a pristine store", async () => {
+  it("keeps a pristine store loopback-only until exact bootstrap completes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "symphony-pristine-"));
     const uiRoot = path.join(root, "ui");
     await mkdir(uiRoot);
     await writeFile(path.join(uiRoot, "index.html"), "<!doctype html>");
-    await expect(
-      startProductionService({
-        options: {
-          databasePath: path.join(root, "symphony.sqlite3"),
-          host: "127.0.0.1",
-          port: 8080,
-          secureCookies: false,
-          sessionTtlMs: 60_000,
-          uiRoot,
-          workspaceRoot: path.join(root, "workspaces"),
+    const databasePath = path.join(root, "symphony.sqlite3");
+    const output: string[] = [];
+    const service = await startProductionService({
+      bootstrap: {
+        authSubject: "local:admin",
+        candidateHash: "sha256:runtime-candidate",
+        configSnapshot: {
+          acknowledgmentState: { bootstrap: "acknowledged" },
+          adapterVersions: { local: "1" },
+          createdAt: "2026-07-13T10:00:00Z",
+          effectiveConfig: {
+            "human.operators": [
+              {
+                auth_subject: "local:admin",
+                capabilities: ["operator.read", "config.write", "config.ack"],
+                id: "bootstrap-admin",
+                tracker_login: null,
+              },
+            ],
+            "server.session_secret": "$SESSION_SECRET",
+          },
+          id: "bootstrap-snapshot",
+          operatorOverrideRevision: 0,
+          promptHash: "sha256:prompt",
+          restartState: {},
+          sourceMetadata: {},
+          workflowSourceHash: "sha256:workflow",
         },
-      }),
-    ).rejects.toThrow("runtime.bootstrap_required");
-    const opened = openDatabase(path.join(root, "symphony.sqlite3"));
-    expect(opened.sqlite.prepare("select count(*) as count from operators").get()).toEqual({
-      count: 0,
+        credentialHash: "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        operatorId: "bootstrap-admin",
+      },
+      listen: async () => "http://127.0.0.1:48081",
+      now: () => "2026-07-13T10:00:00Z",
+      options: {
+        databasePath,
+        host: "127.0.0.1",
+        port: 8080,
+        secureCookies: false,
+        sessionTtlMs: 60_000,
+        uiRoot,
+        workflowPath: path.join(root, "WORKFLOW.md"),
+        workspaceRoot: path.join(root, "workspaces"),
+      },
+      output: (line) => output.push(line),
+      serviceRunId: () => "bootstrap-run",
     });
-    expect(opened.sqlite.prepare("select count(*) as count from service_runs").get()).toEqual({
-      count: 0,
+    expect(output).toContain("Bootstrap candidate: sha256:runtime-candidate");
+    expect((await service.server.inject({ url: "/api/v1/bootstrap" })).statusCode).toBe(200);
+    expect((await service.server.inject({ url: "/ready" })).statusCode).toBe(503);
+
+    const completed = await service.server.inject({
+      method: "POST",
+      payload: {
+        auth_subject: "local:admin",
+        bootstrap_credential: "foo",
+        confirmed_candidate_hash: "sha256:runtime-candidate",
+        password: "a strong local password",
+        tracker_login: null,
+      },
+      url: "/api/v1/bootstrap",
+    });
+    expect(completed.statusCode).toBe(200);
+    expect((await service.server.inject({ url: "/api/v1/bootstrap" })).statusCode).toBe(404);
+    expect((await service.server.inject({ url: "/ready" })).statusCode).toBe(200);
+    await service.close();
+
+    const opened = openDatabase(databasePath);
+    expect(opened.sqlite.prepare("select count(*) as count from operators").get()).toEqual({
+      count: 1,
+    });
+    expect(opened.sqlite.prepare("select status from service_runs").get()).toEqual({
+      status: "stopped",
     });
     await opened.close();
   });

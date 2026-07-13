@@ -46,6 +46,33 @@ export const ReadyResponseSchema = Type.Object(
 );
 export type ReadyResponse = Static<typeof ReadyResponseSchema>;
 
+export const BootstrapStatusResponseSchema = Type.Object(
+  {
+    candidate_hash: NonEmptyString,
+    status: Type.Literal("required"),
+  },
+  { additionalProperties: false },
+);
+export type BootstrapStatusResponse = Static<typeof BootstrapStatusResponseSchema>;
+
+export const BootstrapRequestSchema = Type.Object(
+  {
+    auth_subject: Type.String({ maxLength: 512, minLength: 1 }),
+    bootstrap_credential: Type.String({ maxLength: 4096, minLength: 1 }),
+    confirmed_candidate_hash: Type.String({ maxLength: 256, minLength: 1 }),
+    password: Type.String({ maxLength: 4096, minLength: 12 }),
+    tracker_login: Type.Union([Type.String({ maxLength: 512, minLength: 1 }), Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+export type BootstrapRequest = Static<typeof BootstrapRequestSchema>;
+
+export const BootstrapResponseSchema = Type.Object(
+  { status: Type.Literal("completed") },
+  { additionalProperties: false },
+);
+export type BootstrapResponse = Static<typeof BootstrapResponseSchema>;
+
 export const LoginRequestSchema = Type.Object(
   {
     auth_subject: Type.String({ maxLength: 512, minLength: 1 }),
