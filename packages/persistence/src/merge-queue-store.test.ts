@@ -11,7 +11,10 @@ import {
   commitMergeQueueLanding,
   commitPostMergeRepairCycle,
   commitPostMergeSuccess,
+  commitPostMergeSystemJobRepairCycle,
   commitPostMergeSystemJobSuccess,
+  commitRepairParentDoneLane,
+  commitRepairParentReviewLane,
   commitRepositoryBranchUpdate,
   loadAuthorizedMergeLogins,
   loadPendingBaseUpdate,
@@ -310,6 +313,16 @@ describe("merge queue persistence", () => {
   it("completes a repair SystemJob and releases its parent issue blocker", async () => {
     const opened = await fixture();
     opened.sqlite.prepare("update issues set state = 'In Progress'").run();
+    opened.sqlite.prepare("delete from stage_transitions where work_ref_kind = 'issue'").run();
+    opened.sqlite
+      .prepare(
+        `insert into stage_transitions (
+          id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+          timestamp_source
+        ) values ('stage-parent-in-progress', 'issue', 'issue-1', 'Review', 'In Progress',
+          'merge_queue.post_merge_failed', '2026-07-13T10:10:00Z', 'receipt')`,
+      )
+      .run();
     opened.sqlite
       .prepare(
         `update claims set mode = 'AwaitingHuman', reason = 'repair_in_progress:repair-1',
@@ -397,9 +410,240 @@ describe("merge queue persistence", () => {
     expect(opened.sqlite.prepare("select resolved_at from parked_work").get()).toEqual({
       resolved_at: "2026-07-13T10:12:00Z",
     });
+
+    await createAuthorizedIntent(
+      opened.database,
+      repairCompletionIntent("repair-parent-review", "Review", "provider-revision-1"),
+    );
+    await commitRepairParentReviewLane(opened.database, {
+      now: "2026-07-13T10:13:00Z",
+      receipt: {
+        applied_at: "2026-07-13T10:13:00Z",
+        intent_id: "repair-parent-review",
+        provider_request_id: "REQ-PARENT-REVIEW",
+        response_payload_hash: "sha256:parent-review",
+        result: "updated",
+        result_revision: "provider-revision-2",
+      },
+      transitionId: "stage-parent-review",
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    await createAuthorizedIntent(
+      opened.database,
+      repairCompletionIntent("repair-parent-done", "Done", "provider-revision-2"),
+    );
+    await commitRepairParentDoneLane(opened.database, {
+      now: "2026-07-13T10:14:00Z",
+      receipt: {
+        applied_at: "2026-07-13T10:14:00Z",
+        intent_id: "repair-parent-done",
+        provider_request_id: "REQ-PARENT-DONE",
+        response_payload_hash: "sha256:parent-done",
+        result: "updated",
+        result_revision: "provider-revision-3",
+      },
+      transitionId: "stage-parent-done",
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    expect(opened.sqlite.prepare("select state, provider_revision from issues").get()).toEqual({
+      provider_revision: "provider-revision-3",
+      state: "Done",
+    });
+    expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+      count: 0,
+    });
+    await opened.close();
+  });
+
+  it("fails a broken repair merge, links a child repair, and keeps the root issue blocked", async () => {
+    const opened = await fixture();
+    seedMergingRepair(opened.sqlite);
+
+    await commitPostMergeSystemJobRepairCycle(opened.database, {
+      acceptanceCriteria: ["restore the repair deployment"],
+      configSnapshotId: "config-1",
+      goal: "Repair the failed repair merge",
+      now: "2026-07-13T10:12:00Z",
+      repairJobId: "repair-2",
+      repository: "owner/repo",
+      transitionId: "stage-repair-1-failed",
+      workRef: { id: "repair-1", kind: "system_job" },
+      workspacePath: "/work/_system/repair-repair-2",
+    });
+
+    expect(
+      opened.sqlite
+        .prepare("select status, final_result_id from system_jobs where id = 'repair-1'")
+        .get(),
+    ).toEqual({ final_result_id: "result-repair-1", status: "failed" });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select parent_work_ref_kind, parent_work_ref_id, status from system_jobs where id = 'repair-2'",
+        )
+        .get(),
+    ).toEqual({
+      parent_work_ref_id: "repair-1",
+      parent_work_ref_kind: "system_job",
+      status: "queued",
+    });
+    expect(
+      opened.sqlite
+        .prepare("select mode, reason, blocker_predicate from claims where work_ref_kind = 'issue'")
+        .get(),
+    ).toEqual({
+      blocker_predicate: "system_job:repair-2:not_terminal",
+      mode: "AwaitingHuman",
+      reason: "repair_in_progress:repair-2",
+    });
+
+    seedNestedRepairCompletion(opened.sqlite);
+    await commitPostMergeSystemJobSuccess(opened.database, {
+      now: "2026-07-13T10:14:00Z",
+      transitionId: "stage-repair-2-done",
+      workRef: { id: "repair-2", kind: "system_job" },
+    });
+    expect(
+      opened.sqlite
+        .prepare("select mode, reason, blocker_predicate from claims where work_ref_kind = 'issue'")
+        .get(),
+    ).toEqual({ blocker_predicate: null, mode: "Ready", reason: "repair_completed" });
     await opened.close();
   });
 });
+
+function seedMergingRepair(sqlite: import("better-sqlite3").Database): void {
+  sqlite.prepare("update issues set state = 'In Progress'").run();
+  sqlite.prepare("delete from stage_transitions where work_ref_kind = 'issue'").run();
+  sqlite
+    .prepare(
+      `insert into stage_transitions (
+        id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+        timestamp_source
+      ) values ('stage-parent-in-progress', 'issue', 'issue-1', 'Review', 'In Progress',
+        'merge_queue.post_merge_failed', '2026-07-13T10:10:00Z', 'receipt')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `update claims set mode = 'AwaitingHuman', reason = 'repair_in_progress:repair-1',
+        blocker_predicate = 'system_job:repair-1:not_terminal', origin_stage = 'In Progress'`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into parked_work (
+        work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+        parked_at, last_checked_at
+      ) values ('issue', 'issue-1', 'In Progress', 'repair_in_progress:repair-1',
+        'system_job:repair-1:not_terminal', 't0', 't0')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into system_jobs (
+        id, kind, parent_work_ref_kind, parent_work_ref_id, repository, workspace_path,
+        goal, acceptance_criteria_json, config_snapshot_id, status, created_at, started_at
+      ) values ('repair-1', 'repair', 'issue', 'issue-1', 'owner/repo',
+        '/work/_system/repair-repair-1', 'repair', '["restore"]', 'config-1',
+        'merge', 't0', 't1')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into attempts (
+        id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+        config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+        change_class, started_at, ended_at, status, terminal_result_id
+      ) values ('attempt-repair-1', 'system_job', 'repair-1', 'implementation', 1,
+        '/work/_system/repair-repair-1', 'config-1', 'standard', 'model', 'medium', '[]',
+        'standard', 't0', 't1', 'closed', 'result-repair-1')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      "insert into terminal_results values ('result-repair-1', 'attempt-repair-1', 'implementation', 'implementation_outcome', '{}', 't1')",
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into stage_transitions (
+        id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+        timestamp_source
+      ) values ('stage-repair-merge', 'system_job', 'repair-1', 'review', 'merge',
+        'merge_queue.started', '2026-07-13T10:11:00Z', 'observed_estimate')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into claims (
+        work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+        expires_at, origin_stage, reason
+      ) values ('system_job', 'repair-1', 'run-1', 'Ready', 't0', 't2', null,
+        'review', 'post_merge_verification_required')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into repository_merge_queue_entries (
+        work_ref_kind, work_ref_id, repository, state, head_sha, base_sha, merge_sha,
+        created_at, updated_at
+      ) values ('system_job', 'repair-1', 'owner/repo', 'post_merge', 'def5678',
+        'abc1234', 'fedcba9', 't2', 't2')`,
+    )
+    .run();
+}
+
+function seedNestedRepairCompletion(sqlite: import("better-sqlite3").Database): void {
+  sqlite
+    .prepare(
+      `insert into attempts (
+        id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+        config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+        change_class, started_at, ended_at, status, terminal_result_id
+      ) values ('attempt-repair-2', 'system_job', 'repair-2', 'implementation', 1,
+        '/work/_system/repair-repair-2', 'config-1', 'standard', 'model', 'medium', '[]',
+        'standard', 't2', 't3', 'closed', 'result-repair-2')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      "insert into terminal_results values ('result-repair-2', 'attempt-repair-2', 'implementation', 'implementation_outcome', '{}', 't3')",
+    )
+    .run();
+  sqlite
+    .prepare("update system_jobs set status = 'merge', started_at = 't2' where id = 'repair-2'")
+    .run();
+  sqlite
+    .prepare(
+      "update stage_transitions set exited_at = '2026-07-13T10:13:00Z', duration_ms = 60000 where work_ref_kind = 'system_job' and work_ref_id = 'repair-2'",
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into stage_transitions (
+        id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+        timestamp_source
+      ) values ('stage-repair-2-merge', 'system_job', 'repair-2', 'review', 'merge',
+        'merge_queue.started', '2026-07-13T10:13:00Z', 'observed_estimate')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `update claims set reason = 'post_merge_verification_required', origin_stage = 'review'
+        where work_ref_kind = 'system_job' and work_ref_id = 'repair-2'`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into repository_merge_queue_entries (
+        work_ref_kind, work_ref_id, repository, state, head_sha, base_sha, merge_sha,
+        created_at, updated_at
+      ) values ('system_job', 'repair-2', 'owner/repo', 'post_merge', 'abc2222',
+        'fedcba9', 'abc3333', 't3', 't3')`,
+    )
+    .run();
+}
 
 async function fixture() {
   const directory = await mkdtemp(path.join(tmpdir(), "symphony-merge-queue-"));
@@ -593,6 +837,48 @@ function trackerIntent(id: string) {
       status: "pending" as const,
       target: authorization.target,
       target_revision: authorization.target_revision,
+      updated_at: authorization.authorized_at,
+      work_ref: { issue_id: "issue-1" },
+    },
+  };
+}
+
+function repairCompletionIntent(id: string, lane: "Done" | "Review", revision: string) {
+  const authorization = {
+    action: "tracker.update_lane",
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy" as const,
+    attempt_role: "implementation" as const,
+    authorized_at: "2026-07-13T10:12:30Z",
+    config_snapshot_id: "config-1",
+    decision_rule_ids: ["merge_queue.repair_completed"],
+    expires_at: "2026-07-13T10:20:00Z",
+    id: `${id}-authorization`,
+    idempotency_key: id,
+    intent_id: id,
+    observed_state_ref: `tracker:issue-1:${revision}`,
+    operator_capability: null,
+    scope: "work" as const,
+    service_run_id: "run-1",
+    target: "issue-1",
+    target_revision: revision,
+    work_ref: { issue_id: "issue-1" },
+  };
+  return {
+    authorization,
+    intent: {
+      action: authorization.action,
+      attempt_id: null,
+      authorization_id: authorization.id,
+      created_at: authorization.authorized_at,
+      id,
+      idempotency_key: id,
+      request_payload_hash: `sha256:parent-${lane.toLocaleLowerCase("en-US")}`,
+      scope: "work" as const,
+      service_run_id: "run-1",
+      status: "pending" as const,
+      target: "issue-1",
+      target_revision: revision,
       updated_at: authorization.authorized_at,
       work_ref: { issue_id: "issue-1" },
     },

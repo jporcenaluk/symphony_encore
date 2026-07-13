@@ -6,6 +6,7 @@ import {
   type Plan,
   type PlanReviewResult,
   PlanReviewResultSchema,
+  type SystemJob,
 } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
@@ -23,7 +24,7 @@ export async function closePlanReviewAttempt(input: {
   consumption: AgentConsumptionResult;
   database: OpenedDatabase["database"];
   endedAt: string;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   maxPlanRevisions: number;
   newId(): string;
   plan: Plan;
@@ -65,7 +66,7 @@ export async function closePlanReviewAttempt(input: {
           inputTokens: settlement.inputTokens,
           outputTokens: settlement.outputTokens,
         },
-        workRef: { id: input.issue.id, kind: "issue" },
+        workRef: workReference(input.issue),
       });
       return consumption;
     }
@@ -89,7 +90,7 @@ export async function closePlanReviewAttempt(input: {
         inputTokens: settlement.inputTokens,
         outputTokens: settlement.outputTokens,
       },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: workReference(input.issue),
     });
     return consumption;
   } catch (error) {
@@ -164,7 +165,7 @@ function executionFailure(
       commands: [],
       decisions_fixed: [],
       files_changed: [],
-      goal: input.issue.title,
+      goal: "kind" in input.issue ? input.issue.goal : input.issue.title,
       open_items: input.plan.acceptance_criteria.map((criterion) => criterion.criterion_text),
       revision: input.repositoryRevision,
     },
@@ -175,6 +176,12 @@ function executionFailure(
         : ("failed" as const),
     summary: `Plan reviewer ended with ${consumption.errorCode}: ${consumption.providerReason}`,
   };
+}
+
+function workReference(work: Issue | Extract<SystemJob, { kind: "repair" }>) {
+  return "kind" in work
+    ? { id: work.id, kind: "system_job" as const }
+    : { id: work.id, kind: "issue" as const };
 }
 
 function requiredId(id: string, message: string): string {

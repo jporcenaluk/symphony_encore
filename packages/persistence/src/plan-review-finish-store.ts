@@ -3,6 +3,7 @@ import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 import { finishAttemptInTransaction } from "./finish-attempt.js";
+import { transitionStageInTransaction } from "./stage-transition.js";
 
 export interface FinishPlanReviewAttemptInput {
   attemptId: string;
@@ -65,6 +66,24 @@ export async function finishPlanReviewAttempt(
       throw new Error("plan_review.plan_revision_mismatch");
     }
     const nextClaim = await applyDecision(transaction, input);
+    if (input.workRef.kind === "system_job" && nextClaim.mode === "AwaitingHuman") {
+      await transitionStageInTransaction(transaction, {
+        attemptId: input.attemptId,
+        confirmedExternalRevision: null,
+        enteredAt: input.endedAt,
+        expectedFromStage: "running",
+        id: `${input.terminalResultId}:stage`,
+        reason: `plan_review.${nextClaim.reason}`,
+        timestampSource: "observed_estimate",
+        toStage: "human",
+        workRef: input.workRef,
+      });
+      const job = await sql`
+        update system_jobs set status = 'human'
+        where id = ${input.workRef.id} and status = 'running'
+      `.execute(transaction);
+      if (job.numAffectedRows !== 1n) throw new Error("plan_review.system_job_not_running");
+    }
     await finishAttemptInTransaction(transaction, {
       attemptId: input.attemptId,
       costUsd: input.costUsd,
@@ -212,7 +231,8 @@ async function parkWork(
       work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
       question_id, parked_at, last_checked_at, resolved_at
     ) values (
-      ${input.workRef.kind}, ${input.workRef.id}, 'In Progress', ${reason}, null,
+      ${input.workRef.kind}, ${input.workRef.id},
+      ${input.workRef.kind === "issue" ? "In Progress" : "running"}, ${reason}, null,
       ${questionId}, ${input.endedAt}, ${input.endedAt}, null
     )
     on conflict(work_ref_kind, work_ref_id) do update set

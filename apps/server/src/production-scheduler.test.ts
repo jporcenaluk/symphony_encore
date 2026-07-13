@@ -1104,6 +1104,85 @@ describe("production reconciliation scheduler", () => {
     });
     await opened.close();
   });
+
+  it("completes a repaired parent issue through Review and Done tracker lanes", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-repair-parent-completion-"));
+    directories.push(directory);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into service_runs (
+          id, service_version, host_id, started_at, status,
+          startup_config_snapshot_id, start_reason
+        ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
+      )
+      .run();
+    await observeIssue(opened.database, {
+      issue: { ...candidate, state: "In Progress" },
+      observedAt: "2026-07-13T10:00:00Z",
+      providerRevision: "provider-revision-1",
+      transitionId: "stage-parent-running",
+    });
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values ('issue', 'issue-1', 'run-1', 'Ready', '2026-07-13T10:01:00Z',
+          '2026-07-13T10:01:00Z', null, 'In Progress', 'repair_completed')`,
+      )
+      .run();
+    const tracker = {
+      createOrUpdateComment: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
+      fetchCommentsSince: vi.fn(),
+      fetchIssuesByStates: vi.fn(),
+      fetchStatesByIds: vi.fn(),
+      updateIssueLane: vi.fn(async (_id: string, lane: string) => ({
+        providerRequestId: `request-${lane}`,
+        responsePayloadHash: `sha256:${lane}`,
+        result: "updated",
+        resultRevision: lane === "Review" ? "provider-revision-2" : "provider-revision-3",
+      })),
+    };
+    const scheduler = createProductionScheduler({
+      database: opened.database,
+      environment: {},
+      prompt: "Implement {{ issue.title }}.",
+      serviceRunId: "run-1",
+      snapshot: { effectiveConfig, id: "config-1" } as never,
+      tracker,
+    });
+
+    await scheduler.start();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select state from issues").get()).toEqual({ state: "Review" }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select state from issues").get()).toEqual({ state: "Done" }),
+    );
+    await scheduler.close();
+
+    expect(tracker.updateIssueLane.mock.calls.map((call) => call[1])).toEqual(["Review", "Done"]);
+    expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+      count: 0,
+    });
+    expect(
+      opened.sqlite
+        .prepare("select from_stage, to_stage from stage_transitions order by entered_at")
+        .all(),
+    ).toEqual([
+      { from_stage: null, to_stage: "In Progress" },
+      { from_stage: "In Progress", to_stage: "Review" },
+      { from_stage: "Review", to_stage: "Done" },
+    ]);
+    await opened.close();
+  });
 });
 
 function createSpecialistAgent(): AgentAdapter {

@@ -10,6 +10,7 @@ import type {
   Issue,
   Plan,
   PlanReviewResult,
+  SystemJob,
 } from "@symphony/contracts";
 import {
   type ComputeProfile,
@@ -84,7 +85,7 @@ export async function planImplementationContinuation(input: {
   configSnapshotId: string;
   configuration: ImplementationContinuationConfiguration;
   database: OpenedDatabase["database"];
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   mode: ImplementationContinuationMode;
   newId(): string;
   now(): string;
@@ -123,7 +124,7 @@ export async function planImplementationContinuation(input: {
   const attemptId = input.newId();
   const reservationId = input.newId();
   requireIds([attemptId, reservationId]);
-  const workRef = { id: input.issue.id, kind: "issue" as const };
+  const workRef = workReference(input.issue);
   const attemptNumber = await nextAttemptNumber(input.database, workRef);
   const history = await listAttemptUsageHistory(input.database, {
     limit: input.configuration.historyWindowSamples,
@@ -156,8 +157,8 @@ export async function planImplementationContinuation(input: {
     attemptId,
     estimatedTokens,
     estimatedUsd,
-    issueId: input.issue.id,
     limits: input.configuration.budgetLimits,
+    ...(workRef.kind === "issue" ? { issueId: workRef.id } : { systemJobId: workRef.id }),
     updatedAt: now,
   });
   const prompt = renderPrompt(input);
@@ -176,13 +177,16 @@ export async function planImplementationContinuation(input: {
       role: "implementation",
       routingReasons: route.reasons,
       startedAt: now,
-      workspacePath: issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
+      workspacePath:
+        "kind" in input.issue
+          ? input.issue.workspace_path
+          : issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
     },
     claim: {
       acquiredAt: now,
       expiresAt: leaseExpiresAt,
       holder: input.serviceRunId,
-      originStage: "In Progress",
+      originStage: "kind" in input.issue ? input.issue.status : "In Progress",
       reason: "implementation_continuation",
     },
     reservation: {
@@ -205,16 +209,16 @@ export async function planImplementationContinuation(input: {
 }
 
 function assertSource(
-  issue: Issue,
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
   plan: Plan | null,
   source: ImplementationContinuationSource,
   mode: ImplementationContinuationMode,
 ): void {
   if (mode === "implementation_retry") {
-    if (issue.state !== "In Progress" || source.kind !== "retry") {
+    if (!isActive(issue) || source.kind !== "retry") {
       throw new Error("implementation_continuation.source_invalid");
     }
-    if (plan && (!("issue_id" in plan.work_ref) || plan.work_ref.issue_id !== issue.id)) {
+    if (plan && !planMatchesWork(plan, issue)) {
       throw new Error("implementation_continuation.source_invalid");
     }
     return;
@@ -223,7 +227,7 @@ function assertSource(
     throw new Error("implementation_continuation.source_invalid");
   }
   const reviewResult = source.result;
-  const workMatches = "issue_id" in plan.work_ref && plan.work_ref.issue_id === issue.id;
+  const workMatches = planMatchesWork(plan, issue);
   const reviewMatches = reviewResult.plan_revision === plan.revision;
   const modeMatches =
     mode === "approved_plan"
@@ -234,9 +238,30 @@ function assertSource(
         ? plan.status === "rejected" && reviewResult.decision === "needs_rework"
         : (plan.status === "validated" || plan.status === "approved") &&
           reviewResult.decision === "needs_rework";
-  if (issue.state !== "In Progress" || !workMatches || !reviewMatches || !modeMatches) {
+  if (!isActive(issue) || !workMatches || !reviewMatches || !modeMatches) {
     throw new Error("implementation_continuation.source_invalid");
   }
+}
+
+function isActive(work: Issue | Extract<SystemJob, { kind: "repair" }>): boolean {
+  return "kind" in work
+    ? work.status === "running" || work.status === "rework"
+    : work.state === "In Progress";
+}
+
+function planMatchesWork(
+  plan: Plan,
+  work: Issue | Extract<SystemJob, { kind: "repair" }>,
+): boolean {
+  return "kind" in work
+    ? "system_job_id" in plan.work_ref && plan.work_ref.system_job_id === work.id
+    : "issue_id" in plan.work_ref && plan.work_ref.issue_id === work.id;
+}
+
+function workReference(work: Issue | Extract<SystemJob, { kind: "repair" }>) {
+  return "kind" in work
+    ? { id: work.id, kind: "system_job" as const }
+    : { id: work.id, kind: "issue" as const };
 }
 
 function renderPrompt(input: {

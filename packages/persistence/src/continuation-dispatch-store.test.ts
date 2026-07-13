@@ -128,4 +128,78 @@ describe("continuation dispatch transaction", () => {
       { reserved: 0 },
     ]);
   });
+
+  it("moves a repair SystemJob from rework to running with its continuation claim", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, parent_work_ref_kind, parent_work_ref_id, repository, workspace_path,
+          goal, acceptance_criteria_json, config_snapshot_id, status, created_at
+        ) values ('repair-1', 'repair', 'issue', 'issue-1', 'owner/repo',
+          '/tmp/work/_system/repair-repair-1', 'repair', '["restore"]', 'config-1',
+          'rework', 't0')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into stage_transitions (
+          id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, entered_at,
+          timestamp_source
+        ) values ('repair-rework', 'system_job', 'repair-1', 'review', 'rework',
+          'review.needs_rework', '2026-07-13T10:01:00Z', 'observed_estimate')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values ('system_job', 'repair-1', 'run-1', 'Ready', 't0', 't1', null,
+          'rework', 'review_rework')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into budget_ledgers (
+          id, scope, scope_id, unit, base_limit, effective_limit, updated_at
+        ) values ('repair-attempt:tokens', 'attempt', 'repair-attempt', 'tokens', 1000, 1000, 't1'),
+          ('repair-1:tokens', 'system_job', 'repair-1', 'tokens', 1000, 1000, 't1')`,
+      )
+      .run();
+    await createContinuationDispatch(opened.database, {
+      dispatch: {
+        ...dispatch,
+        attempt: {
+          ...dispatch.attempt,
+          id: "repair-attempt",
+          role: "implementation",
+          workspacePath: "/tmp/work/_system/repair-repair-1",
+        },
+        claim: { ...dispatch.claim, originStage: "rework", reason: "implementation_continuation" },
+        reservation: {
+          id: "repair-reservation",
+          ledgers: [
+            { amount: 100, id: "repair-attempt:tokens", version: 1 },
+            { amount: 100, id: "repair-1:tokens", version: 1 },
+            { amount: 100, id: "fleet:tokens", version: 1 },
+          ],
+        },
+        workRef: { id: "repair-1", kind: "system_job" },
+      },
+      expectedReadyReason: "review_rework",
+    });
+
+    expect(
+      opened.sqlite.prepare("select status from system_jobs where id = 'repair-1'").get(),
+    ).toEqual({
+      status: "running",
+    });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select from_stage, to_stage from stage_transitions where id = 'repair-attempt:stage'",
+        )
+        .get(),
+    ).toEqual({ from_stage: "rework", to_stage: "running" });
+  });
 });

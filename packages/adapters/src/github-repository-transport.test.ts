@@ -120,6 +120,7 @@ describe("GitHub repository transport", () => {
   it("creates a linked repair pull request from the published repair SystemJob branch", async () => {
     const repairRef = { system_job_id: "repair-job-1" } as const;
     const branch = githubBranchForWorkRef(repairRef);
+    expect(branch).toMatch(/^symphony\/system-repair-[a-f0-9]{16}$/u);
     const rest = vi
       .fn()
       .mockResolvedValueOnce(

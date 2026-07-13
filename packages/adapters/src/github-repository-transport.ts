@@ -520,7 +520,7 @@ export function createGitHubRepositoryTransport(options: {
 }
 
 export function githubBranchForWorkRef(workRef: WorkRef): string {
-  const kind = "issue_id" in workRef ? "issue" : "system-job";
+  const kind = "issue_id" in workRef ? "issue" : "system-repair";
   const id = "issue_id" in workRef ? workRef.issue_id : workRef.system_job_id;
   const digest = createHash("sha256").update(`${kind}:${id}`).digest("hex").slice(0, 16);
   return `symphony/${kind}-${digest}`;

@@ -2,6 +2,7 @@ import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 import type { DispatchInput } from "./dispatch-store.js";
+import { transitionStageInTransaction } from "./stage-transition.js";
 
 export async function createContinuationDispatch(
   database: Kysely<DatabaseSchema>,
@@ -44,6 +45,26 @@ export async function createContinuationDispatch(
         ${dispatch.attempt.costUsd}
       )
     `.execute(transaction);
+    if (dispatch.workRef.kind === "system_job" && dispatch.claim.originStage !== "running") {
+      await transitionStageInTransaction(transaction, {
+        attemptId: dispatch.attempt.id,
+        confirmedExternalRevision: null,
+        enteredAt: dispatch.claim.acquiredAt,
+        expectedFromStage: dispatch.claim.originStage,
+        id: `${dispatch.attempt.id}:stage`,
+        reason: "continuation_dispatch.started",
+        timestampSource: "observed_estimate",
+        toStage: "running",
+        workRef: dispatch.workRef,
+      });
+      const job = await sql`
+        update system_jobs set status = 'running'
+        where id = ${dispatch.workRef.id} and status = ${dispatch.claim.originStage}
+      `.execute(transaction);
+      if (job.numAffectedRows !== 1n) {
+        throw new Error("continuation_dispatch.system_job_stage_mismatch");
+      }
+    }
     await sql`
       insert into budget_reservations (
         id, work_ref_kind, work_ref_id, attempt_id, system_job_id,

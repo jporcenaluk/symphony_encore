@@ -4,6 +4,7 @@ import {
   type AgentErrorCode,
   type Issue,
   type Plan,
+  type SystemJob,
 } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
@@ -16,6 +17,7 @@ import {
 import { type BoundAgentSession, launchAndBindAgentSession } from "./agent-session-binding.js";
 import { prepareIssueWorkspace } from "./issue-workspace-manager.js";
 import type { PlannedPlanReviewAttempt } from "./plan-review-attempt-planner.js";
+import { prepareSystemJobWorkspace } from "./system-job-workspace-manager.js";
 
 export interface ExecutePlannedPlanReviewAttemptInput {
   adapter: AgentAdapter;
@@ -25,7 +27,7 @@ export interface ExecutePlannedPlanReviewAttemptInput {
   beforeRunCommand: string | null;
   database: OpenedDatabase["database"];
   hookTimeoutMs: number;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   now(): string;
   plan: Plan;
@@ -49,18 +51,32 @@ export async function executePlannedPlanReviewAttempt(
     expectedReadyReason: "plan_review_required",
   });
   try {
-    const prepared = await prepareIssueWorkspace({
-      afterCreateCommand: input.afterCreateCommand,
-      allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
-      beforeRunCommand: input.beforeRunCommand,
-      database: input.database,
-      hookTimeoutMs: input.hookTimeoutMs,
-      issue: input.issue,
-      repositoryAdapter: input.repositoryAdapter,
-      safety: input.safety,
-      sourceEnvironment: input.sourceEnvironment,
-      workspaceRoot: input.workspaceRoot,
-    });
+    const prepared =
+      "kind" in input.issue
+        ? await prepareSystemJobWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            job: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          })
+        : await prepareIssueWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            issue: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          });
     if (prepared.population.workspacePath !== input.planned.dispatch.attempt.workspacePath) {
       throw new Error("plan_review.workspace_provenance_mismatch");
     }
@@ -74,7 +90,7 @@ export async function executePlannedPlanReviewAttempt(
         preflight: input.planned.preflight,
         profile: input.planned.route.profile,
         prompt: input.planned.prompt,
-        title: `plan-review:${input.issue.id}: ${input.issue.title}`,
+        title: `plan-review:${input.issue.id}: ${workTitle(input.issue)}`,
         workspacePath: prepared.population.workspacePath,
       },
       safety: input.safety,
@@ -116,7 +132,7 @@ async function closeLaunchFailure(
             commands: [],
             decisions_fixed: [],
             files_changed: [],
-            goal: input.issue.title,
+            goal: workTitle(input.issue),
             open_items: input.issue.acceptance_criteria,
             revision: "unknown",
           },
@@ -127,7 +143,7 @@ async function closeLaunchFailure(
         role: "plan_review",
       },
       usage: { inputTokens: 0, outputTokens: 0 },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: workReference(input.issue),
     });
   } catch (persistenceError) {
     const failure =
@@ -135,6 +151,16 @@ async function closeLaunchFailure(
     await input.safety.recordFailure(failure);
     throw failure;
   }
+}
+
+function workTitle(work: Issue | Extract<SystemJob, { kind: "repair" }>): string {
+  return "kind" in work ? work.goal : work.title;
+}
+
+function workReference(work: Issue | Extract<SystemJob, { kind: "repair" }>) {
+  return "kind" in work
+    ? { id: work.id, kind: "system_job" as const }
+    : { id: work.id, kind: "issue" as const };
 }
 
 function launchFailureClass(error: unknown): FailureClass {

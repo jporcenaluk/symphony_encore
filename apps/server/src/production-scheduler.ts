@@ -27,6 +27,7 @@ import {
   PlanReviewResultSchema,
   PlanSchema,
   ReviewResultSchema,
+  type SystemJob,
 } from "@symphony/contracts";
 import {
   type ComputeProfile,
@@ -103,6 +104,7 @@ import {
   executeBaseUpdate,
   executeMergeQueueLanding,
   executePostMergeVerification,
+  executeRepairParentCompletion,
   executeSystemJobPostMergeVerification,
 } from "./merge-queue.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
@@ -261,6 +263,8 @@ export function createProductionScheduler(input: {
       for (const claim of recoveryState.ready) {
         if (!safety.canDispatch()) break;
         const isReviewCoordination = claim.reason === "review_coordination_required";
+        const isRepairParentCompletion =
+          claim.reason === "repair_completed" || claim.reason === "repair_completion_done_required";
         const isSystemJobDispatch =
           claim.reason === "system_job_dispatch_required" && "system_job_id" in claim.work_ref;
         const isRepositoryPublication =
@@ -278,6 +282,7 @@ export function createProductionScheduler(input: {
         if (
           availableSlots < 1 &&
           !isReviewCoordination &&
+          !isRepairParentCompletion &&
           !isRepositoryPublication &&
           !isPullRequestHygiene &&
           !isMergeQueue &&
@@ -307,6 +312,7 @@ export function createProductionScheduler(input: {
           !isIntegrativeReview &&
           !isAdjudication &&
           !isReviewCoordination &&
+          !isRepairParentCompletion &&
           !isRepositoryPublication &&
           !isPullRequestHygiene &&
           !isMergeQueue &&
@@ -403,6 +409,214 @@ export function createProductionScheduler(input: {
             input.logger?.warn(
               { error, system_job_id: systemJobId },
               "repair SystemJob dispatch skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
+        if ((isPlanReview || isImplementationContinuation) && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const workRef = { id: systemJobId, kind: "system_job" as const };
+            let planned:
+              | Awaited<ReturnType<typeof planHighRiskPlanReviewAttempt>>
+              | Awaited<ReturnType<typeof planImplementationContinuation>>;
+            let started:
+              | Awaited<ReturnType<typeof startPlannedPlanReviewAttemptLifecycle>>
+              | Awaited<ReturnType<typeof startPlannedImplementationContinuationLifecycle>>;
+            if (isPlanReview) {
+              const plan = await loadLatestValidatedPlan(input.database, workRef);
+              if (!plan) throw new Error(`scheduler.ready_plan_missing:${systemJobId}`);
+              planned = await planHighRiskPlanReviewAttempt({
+                adapter: agent,
+                configSnapshotId: input.snapshot.id,
+                configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+                database: input.database,
+                issue: job,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                plan,
+                serviceRunId: input.serviceRunId,
+                terminalResultSchema: PlanReviewResultSchema,
+              });
+              started = await startPlannedPlanReviewAttemptLifecycle({
+                adapter: agent,
+                agentCommand: stringValue(values, "agent.command"),
+                afterCreateCommand: nullableString(values, "hooks.after_create"),
+                allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+                attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+                beforeRunCommand: nullableString(values, "hooks.before_run"),
+                database: input.database,
+                hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+                issue: job,
+                maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                plan,
+                planned,
+                repositoryAdapter,
+                safety,
+                serviceRunId: input.serviceRunId,
+                sourceEnvironment: input.environment,
+                usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+            } else {
+              const mode =
+                claim.reason === "implementation_after_plan_approval"
+                  ? ("approved_plan" as const)
+                  : claim.reason === "plan_revision_required"
+                    ? ("plan_revision" as const)
+                    : isReviewRework
+                      ? ("review_rework" as const)
+                      : ("implementation_retry" as const);
+              const plan: Plan | null =
+                mode === "review_rework" || mode === "implementation_retry"
+                  ? ((await loadLatestPlanByStatus(input.database, workRef, "approved")) ??
+                    (await loadLatestPlanByStatus(input.database, workRef, "validated")) ??
+                    (mode === "implementation_retry"
+                      ? await loadLatestPlanByStatus(input.database, workRef, "rejected")
+                      : null))
+                  : await loadLatestPlanByStatus(
+                      input.database,
+                      workRef,
+                      mode === "approved_plan" ? "approved" : "rejected",
+                    );
+              if (!plan && mode !== "implementation_retry") {
+                throw new Error(`scheduler.ready_implementation_handoff_missing:${systemJobId}`);
+              }
+              let changeClass: "standard" | "high_risk" = "high_risk";
+              let source: ImplementationContinuationSource;
+              if (mode === "review_rework") {
+                const reviewSource = await loadReviewReworkSource({
+                  collectEvidence: input.review?.collectEvidence,
+                  database: input.database,
+                  environment: input.environment,
+                  issue: job,
+                  timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+                  workspaceRoot: stringValue(values, "workspace.root"),
+                });
+                if (!reviewSource || !plan) {
+                  throw new Error(`scheduler.ready_implementation_handoff_missing:${systemJobId}`);
+                }
+                changeClass = reviewSource.changeClass;
+                source = {
+                  kind: "review",
+                  result: reviewResultForRework(job, plan.revision, reviewSource),
+                };
+              } else if (mode === "implementation_retry") {
+                const retry = await loadPendingImplementationRetry(input.database, workRef);
+                if (!retry) {
+                  throw new Error(`scheduler.ready_implementation_handoff_missing:${systemJobId}`);
+                }
+                changeClass = retry.changeClass;
+                source = {
+                  findings: retryFindings(retry.source),
+                  handoff: retry.handoff,
+                  kind: "retry",
+                  reason: retry.reason,
+                  routingFacts: retry.routingFacts,
+                  summary: retry.source.summary,
+                };
+              } else {
+                const review = await loadLatestPlanReviewResult(input.database, workRef);
+                if (!review) {
+                  throw new Error(`scheduler.ready_implementation_handoff_missing:${systemJobId}`);
+                }
+                source = { kind: "review", result: review.result };
+              }
+              const implementationPlanned = await planImplementationContinuation({
+                adapter: agent,
+                changeClass,
+                configSnapshotId: input.snapshot.id,
+                configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+                database: input.database,
+                issue: job,
+                mode,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                plan,
+                source,
+                serviceRunId: input.serviceRunId,
+                submitPlanSchema: PlanSchema,
+                terminalResultSchema: ImplementationOutcomeSchema,
+              });
+              started = await startPlannedImplementationContinuationLifecycle({
+                adapter: agent,
+                agentCommand: stringValue(values, "agent.command"),
+                afterCreateCommand: nullableString(values, "hooks.after_create"),
+                allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+                attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+                beforeRunCommand: nullableString(values, "hooks.before_run"),
+                database: input.database,
+                hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+                issue: job,
+                maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
+                maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
+                maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                onPlanSubmitted: createInitialPlanSubmissionHandler({
+                  attemptId: implementationPlanned.attemptId,
+                  database: input.database,
+                  issue: job,
+                  now: () => new Date().toISOString(),
+                  provisionalClassification: {
+                    changeClass,
+                    floor: changeClass,
+                    reasons: [`classification.system_job_${mode}`],
+                  },
+                  riskPathPatterns: stringList(values, "class.risk_paths"),
+                  safety,
+                  trivialMaxChangedLines: numberValue(values, "class.trivial_max_changed_lines"),
+                  trivialPathPatterns: stringList(values, "class.trivial_patterns"),
+                  workspacePath: implementationPlanned.dispatch.attempt.workspacePath,
+                }),
+                planned: implementationPlanned,
+                repositoryAdapter,
+                retryJitterSample: Math.random(),
+                safety,
+                serviceRunId: input.serviceRunId,
+                sourceEnvironment: input.environment,
+                usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+              planned = implementationPlanned;
+            }
+            availableSlots -= 1;
+            runningSystemJobAttempts.add(planned.attemptId);
+            running.set(planned.attemptId, {
+              attemptId: planned.attemptId,
+              attemptLane: "running",
+              expectedExpiresAt: planned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId: systemJobId,
+              lastEventAt: started.bound.started.timestamp,
+              processGroupId: started.bound.session.processGroupId,
+              processId: started.bound.session.processId,
+              workspacePath: planned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              started.completion,
+              () => {
+                running.delete(planned.attemptId);
+                runningSystemJobAttempts.delete(planned.attemptId);
+              },
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: planned.attemptId, error, system_job_id: systemJobId },
+                  "repair SystemJob continuation lifecycle failed",
+                ),
+            );
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob continuation skipped scheduler tick",
             );
             if (!safety.canDispatch()) throw error;
           }
@@ -687,6 +901,186 @@ export function createProductionScheduler(input: {
           }
           continue;
         }
+        if ((isSpecialistReview || isAdjudication) && "system_job_id" in claim.work_ref) {
+          const systemJobId = claim.work_ref.system_job_id;
+          try {
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
+            const pending = await loadPendingReviewCoordination(input.database, {
+              id: systemJobId,
+              kind: "system_job",
+            });
+            if (!pending) throw new Error(`scheduler.review_target_missing:${systemJobId}`);
+            const context = await (
+              input.review?.collectEvidence ?? collectIntegrativeReviewContext
+            )({
+              baseSha: pending.targetBaseSha,
+              changeClass: pending.changeClass,
+              commandRunner: createNodeWorkspaceCommandRunner(),
+              sourceEnvironment: input.environment,
+              targetSha: pending.targetSha,
+              timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+              verificationRecordId: pending.verificationRecordId,
+              workspace: pending.workspacePath,
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            let planned: Awaited<ReturnType<typeof planSpecialistReviewAttempt>>;
+            let started: Awaited<ReturnType<typeof startPlannedSpecialistReviewAttemptLifecycle>>;
+            if (isSpecialistReview) {
+              const specialistName = decodeSpecialistName(claim.reason);
+              const selection = selectRequiredSpecialists(
+                parseReviewSpecialists(values["review.specialists"]),
+                {
+                  acceptanceCriteriaPresent: job.acceptance_criteria.length > 0,
+                  changedLines: context.changedLines,
+                  changedPaths: context.changedFiles,
+                  facts: new Set(pending.riskFacts),
+                  proposedPaths: pending.proposedPaths,
+                },
+              ).find((candidate) => candidate.specialist.name === specialistName);
+              if (!selection) {
+                throw new Error(`scheduler.specialist_no_longer_required:${specialistName}`);
+              }
+              planned = await planSpecialistReviewAttempt({
+                adapter: agent,
+                configSnapshotId: input.snapshot.id,
+                configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+                context,
+                database: input.database,
+                issue: job,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                selection,
+                serviceRunId: input.serviceRunId,
+                terminalResultSchema: ReviewResultSchema,
+              });
+              started = await startPlannedSpecialistReviewAttemptLifecycle({
+                adapter: agent,
+                agentCommand: stringValue(values, "agent.command"),
+                afterCreateCommand: nullableString(values, "hooks.after_create"),
+                allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+                attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+                beforeRunCommand: nullableString(values, "hooks.before_run"),
+                database: input.database,
+                hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+                issue: job,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                planned,
+                repositoryAdapter,
+                safety,
+                serviceRunId: input.serviceRunId,
+                sourceEnvironment: input.environment,
+                specialistName,
+                usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+            } else {
+              const rejectedFindingIds = new Set(pending.rejectedFindingIds);
+              const summaries = pending.records.map((record) => ({
+                decision: record.decision,
+                findings: record.findings
+                  .filter((finding) => !rejectedFindingIds.has(finding.id))
+                  .map((finding) => ({
+                    behavior: finding.behavior,
+                    blocking: finding.blocking,
+                    disposition: finding.disposition,
+                    evidenceKey: JSON.stringify(finding.evidence),
+                    id: finding.id,
+                  })),
+                reviewer: record.reviewer,
+                targetSha: record.targetSha,
+              }));
+              const conflicts = findContraryReviewFindings(summaries).map((conflict) => ({
+                conflictId: conflict.conflictId,
+                findings: pending.records.flatMap((record) =>
+                  record.findings
+                    .filter(
+                      (finding) =>
+                        !rejectedFindingIds.has(finding.id) &&
+                        conflict.findingIds.includes(finding.id),
+                    )
+                    .map((finding) => ({
+                      behavior: finding.behavior,
+                      disposition: finding.disposition,
+                      evidence: finding.evidence,
+                      id: finding.id,
+                      reviewer: record.reviewer,
+                      severity: finding.severity,
+                    })),
+                ),
+              }));
+              planned = await planAdjudicationAttempt({
+                adapter: agent,
+                configSnapshotId: input.snapshot.id,
+                configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+                conflicts,
+                context,
+                database: input.database,
+                issue: job,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                serviceRunId: input.serviceRunId,
+                terminalResultSchema: AdjudicationResultSchema,
+              });
+              started = await startPlannedAdjudicationAttemptLifecycle({
+                adapter: agent,
+                agentCommand: stringValue(values, "agent.command"),
+                afterCreateCommand: nullableString(values, "hooks.after_create"),
+                allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+                attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+                beforeRunCommand: nullableString(values, "hooks.before_run"),
+                database: input.database,
+                hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+                issue: job,
+                newId: randomUUID,
+                now: () => new Date().toISOString(),
+                planned,
+                repositoryAdapter,
+                safety,
+                serviceRunId: input.serviceRunId,
+                sourceEnvironment: input.environment,
+                usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+            }
+            availableSlots -= 1;
+            runningSystemJobAttempts.add(planned.attemptId);
+            running.set(planned.attemptId, {
+              attemptId: planned.attemptId,
+              attemptLane: "review",
+              expectedExpiresAt: planned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId: systemJobId,
+              lastEventAt: started.bound.started.timestamp,
+              processGroupId: started.bound.session.processGroupId,
+              processId: started.bound.session.processId,
+              workspacePath: planned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              started.completion,
+              () => {
+                running.delete(planned.attemptId);
+                runningSystemJobAttempts.delete(planned.attemptId);
+              },
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: planned.attemptId, error, system_job_id: systemJobId },
+                  "repair SystemJob specialist or adjudication lifecycle failed",
+                ),
+            );
+          } catch (error) {
+            input.logger?.warn(
+              { error, system_job_id: systemJobId },
+              "repair SystemJob specialist or adjudication skipped scheduler tick",
+            );
+            if (!safety.canDispatch()) throw error;
+          }
+          continue;
+        }
         if (isMergeQueue && "system_job_id" in claim.work_ref) {
           const systemJobId = claim.work_ref.system_job_id;
           try {
@@ -727,6 +1121,10 @@ export function createProductionScheduler(input: {
           const systemJobId = claim.work_ref.system_job_id;
           try {
             if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const job = await loadSystemJob(input.database, systemJobId);
+            if (job?.kind !== "repair") {
+              throw new Error(`scheduler.ready_repair_job_missing:${systemJobId}`);
+            }
             const target = await loadPendingPostMerge(input.database, {
               id: systemJobId,
               kind: "system_job",
@@ -735,6 +1133,7 @@ export function createProductionScheduler(input: {
             await executeSystemJobPostMergeVerification({
               acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
               database: input.database,
+              job,
               newId: randomUUID,
               now: () => new Date().toISOString(),
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
@@ -744,6 +1143,7 @@ export function createProductionScheduler(input: {
               settleTimeoutMs: numberValue(values, "review.settle_timeout_ms"),
               target,
               workRef: { id: systemJobId, kind: "system_job" },
+              workspaceRoot: stringValue(values, "workspace.root"),
             });
           } catch (error) {
             input.logger?.warn(
@@ -759,6 +1159,24 @@ export function createProductionScheduler(input: {
         try {
           const stored = await loadIssue(input.database, issueId);
           if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
+          if (isRepairParentCompletion) {
+            await executeRepairParentCompletion({
+              configSnapshotId: input.snapshot.id,
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              issueId,
+              lane: claim.reason === "repair_completed" ? "Review" : "Done",
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              providerRevision: stored.providerRevision,
+              safety,
+              serviceRunId: input.serviceRunId,
+              tracker,
+            });
+            continue;
+          }
           if (isRepositoryPublication) {
             if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
             const target = await loadPendingRepositoryPublication(input.database, {
@@ -1644,13 +2062,13 @@ async function loadReviewReworkSource(input: {
   collectEvidence: typeof collectIntegrativeReviewContext | undefined;
   database: OpenedDatabase["database"];
   environment: Readonly<Record<string, string | undefined>>;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   timeoutMs: number;
   workspaceRoot: string;
 }): Promise<ReviewReworkSource | null> {
   const pending = await loadPendingReviewCoordination(input.database, {
     id: input.issue.id,
-    kind: "issue",
+    kind: "kind" in input.issue ? "system_job" : "issue",
   });
   if (!pending || pending.unresolvedBlockingFindingIds.length === 0) return null;
   const context = await (input.collectEvidence ?? collectIntegrativeReviewContext)({
@@ -1689,7 +2107,7 @@ async function loadReviewReworkSource(input: {
 }
 
 function reviewResultForRework(
-  issue: Issue,
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
   planRevision: number,
   source: ReviewReworkSource,
 ): ReworkReviewResult {
@@ -1704,7 +2122,7 @@ function reviewResultForRework(
       ],
       decisions_fixed: [],
       files_changed: [...source.changedFiles],
-      goal: issue.title,
+      goal: "kind" in issue ? issue.goal : issue.title,
       open_items: source.findings.map((finding) => finding.behavior),
       revision: source.targetSha,
     },

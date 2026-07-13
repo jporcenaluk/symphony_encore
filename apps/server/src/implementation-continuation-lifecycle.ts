@@ -6,6 +6,7 @@ import {
   executeImplementationContinuation,
 } from "./implementation-continuation-executor.js";
 import { closeInitialIssueAttempt } from "./initial-issue-attempt-closure.js";
+import { closeInitialSystemJobAttempt } from "./initial-system-job-attempt-closure.js";
 
 type LifecycleInput = ExecuteImplementationContinuationInput & {
   attemptTokenCap: number;
@@ -69,21 +70,32 @@ async function consumeAndClose(
       providerReason: boundedErrorMessage(error),
     };
   }
-  await closeInitialIssueAttempt({
+  const common = {
     attemptId: input.planned.attemptId,
     consumption,
     database: input.database,
     endedAt: input.now(),
-    issue: input.issue,
     maxFailureRetries: input.maxFailureRetries,
     maxRetryBackoffMs: input.maxRetryBackoffMs,
     maxReworkCycles: input.maxReworkCycles,
     newId: input.newId,
-    providerRevision: started.repositoryRevision,
     reservationId: input.planned.dispatch.reservation.id,
     retryJitterSample: input.retryJitterSample,
     safety: input.safety,
-  });
+  };
+  if ("kind" in input.issue) {
+    await closeInitialSystemJobAttempt({
+      ...common,
+      job: input.issue,
+      revision: started.repositoryRevision,
+    });
+  } else {
+    await closeInitialIssueAttempt({
+      ...common,
+      issue: input.issue,
+      providerRevision: started.repositoryRevision,
+    });
+  }
   return consumption;
 }
 

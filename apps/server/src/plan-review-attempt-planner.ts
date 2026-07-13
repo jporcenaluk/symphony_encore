@@ -4,7 +4,7 @@ import {
   issueWorkspacePath,
   resolveRequiredSkills,
 } from "@symphony/adapters";
-import type { AgentAdapterManifest, Issue, Plan } from "@symphony/contracts";
+import type { AgentAdapterManifest, Issue, Plan, SystemJob } from "@symphony/contracts";
 import {
   type ComputeProfile,
   type ComputeRiskFloorRule,
@@ -52,7 +52,7 @@ export async function planHighRiskPlanReviewAttempt(input: {
   configSnapshotId: string;
   configuration: PlanReviewAttemptConfiguration;
   database: OpenedDatabase["database"];
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   now(): string;
   plan: Plan;
@@ -85,7 +85,7 @@ export async function planHighRiskPlanReviewAttempt(input: {
   const attemptId = input.newId();
   const reservationId = input.newId();
   requireIds([attemptId, reservationId]);
-  const workRef = { id: input.issue.id, kind: "issue" as const };
+  const workRef = workReference(input.issue);
   const attemptNumber = await nextAttemptNumber(input.database, workRef);
   const history = await listAttemptUsageHistory(input.database, {
     limit: input.configuration.historyWindowSamples,
@@ -118,8 +118,8 @@ export async function planHighRiskPlanReviewAttempt(input: {
     attemptId,
     estimatedTokens,
     estimatedUsd,
-    issueId: input.issue.id,
     limits: input.configuration.budgetLimits,
+    ...(workRef.kind === "issue" ? { issueId: workRef.id } : { systemJobId: workRef.id }),
     updatedAt: now,
   });
   const prompt = renderPlanReviewPrompt(input.issue, input.plan);
@@ -137,13 +137,16 @@ export async function planHighRiskPlanReviewAttempt(input: {
       role: "plan_review",
       routingReasons: route.reasons,
       startedAt: now,
-      workspacePath: issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
+      workspacePath:
+        "kind" in input.issue
+          ? input.issue.workspace_path
+          : issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
     },
     claim: {
       acquiredAt: now,
       expiresAt: leaseExpiresAt,
       holder: input.serviceRunId,
-      originStage: "In Progress",
+      originStage: "kind" in input.issue ? "running" : "In Progress",
       reason: "plan_review",
     },
     reservation: {
@@ -164,19 +167,27 @@ export async function planHighRiskPlanReviewAttempt(input: {
   };
 }
 
-function assertReviewTarget(issue: Issue, plan: Plan): void {
+function assertReviewTarget(
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  plan: Plan,
+): void {
+  const workRef = workReference(issue);
   if (
-    issue.state !== "In Progress" ||
+    ("kind" in issue ? issue.status !== "running" : issue.state !== "In Progress") ||
     plan.status !== "validated" ||
     plan.validated_at === null ||
-    !("issue_id" in plan.work_ref) ||
-    plan.work_ref.issue_id !== issue.id
+    (workRef.kind === "issue"
+      ? !("issue_id" in plan.work_ref) || plan.work_ref.issue_id !== issue.id
+      : !("system_job_id" in plan.work_ref) || plan.work_ref.system_job_id !== issue.id)
   ) {
     throw new Error("plan_review.target_invalid");
   }
 }
 
-function renderPlanReviewPrompt(issue: Issue, plan: Plan): string {
+function renderPlanReviewPrompt(
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  plan: Plan,
+): string {
   return [
     "You are the independent Plan reviewer for a high-risk issue.",
     "Evaluate only the issue, acceptance criteria, validated Plan, and repository evidence.",
@@ -185,6 +196,12 @@ function renderPlanReviewPrompt(issue: Issue, plan: Plan): string {
     `Issue: ${JSON.stringify(issue)}`,
     `Validated Plan: ${JSON.stringify(plan)}`,
   ].join("\n");
+}
+
+function workReference(work: Issue | Extract<SystemJob, { kind: "repair" }>) {
+  return "kind" in work
+    ? { id: work.id, kind: "system_job" as const }
+    : { id: work.id, kind: "issue" as const };
 }
 
 function resolvedProfiles(manifest: AgentAdapterManifest) {

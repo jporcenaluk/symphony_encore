@@ -3,7 +3,7 @@ import type {
   AgentPlanSubmissionDecision,
   WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
-import type { Issue } from "@symphony/contracts";
+import type { Issue, SystemJob } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   createContinuationDispatch,
@@ -18,6 +18,7 @@ import {
   launchFailureClass,
 } from "./initial-issue-attempt-executor.js";
 import { prepareIssueWorkspace } from "./issue-workspace-manager.js";
+import { prepareSystemJobWorkspace } from "./system-job-workspace-manager.js";
 
 export interface ExecuteImplementationContinuationInput {
   adapter: AgentAdapter;
@@ -27,7 +28,7 @@ export interface ExecuteImplementationContinuationInput {
   beforeRunCommand: string | null;
   database: OpenedDatabase["database"];
   hookTimeoutMs: number;
-  issue: Issue;
+  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
   newId(): string;
   now(): string;
   onPlanSubmitted: (plan: unknown) => Promise<AgentPlanSubmissionDecision>;
@@ -52,18 +53,32 @@ export async function executeImplementationContinuation(
   });
   const planSubmission = gatePlanSubmissionUntilBound(input.onPlanSubmitted);
   try {
-    const prepared = await prepareIssueWorkspace({
-      afterCreateCommand: input.afterCreateCommand,
-      allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
-      beforeRunCommand: input.beforeRunCommand,
-      database: input.database,
-      hookTimeoutMs: input.hookTimeoutMs,
-      issue: input.issue,
-      repositoryAdapter: input.repositoryAdapter,
-      safety: input.safety,
-      sourceEnvironment: input.sourceEnvironment,
-      workspaceRoot: input.workspaceRoot,
-    });
+    const prepared =
+      "kind" in input.issue
+        ? await prepareSystemJobWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            job: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          })
+        : await prepareIssueWorkspace({
+            afterCreateCommand: input.afterCreateCommand,
+            allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+            beforeRunCommand: input.beforeRunCommand,
+            database: input.database,
+            hookTimeoutMs: input.hookTimeoutMs,
+            issue: input.issue,
+            repositoryAdapter: input.repositoryAdapter,
+            safety: input.safety,
+            sourceEnvironment: input.sourceEnvironment,
+            workspaceRoot: input.workspaceRoot,
+          });
     if (prepared.population.workspacePath !== input.planned.dispatch.attempt.workspacePath) {
       throw new Error("implementation_continuation.workspace_provenance_mismatch");
     }
@@ -78,7 +93,7 @@ export async function executeImplementationContinuation(
         preflight: input.planned.preflight,
         profile: input.planned.route.profile,
         prompt: input.planned.prompt,
-        title: `implementation:${input.issue.id}: ${input.issue.title}`,
+        title: `implementation:${input.issue.id}: ${workTitle(input.issue)}`,
         workspacePath: prepared.population.workspacePath,
       },
       safety: input.safety,
@@ -124,7 +139,7 @@ async function closeLaunchFailure(
             commands: [],
             decisions_fixed: [],
             files_changed: [],
-            goal: input.issue.title,
+            goal: workTitle(input.issue),
             open_items: input.issue.acceptance_criteria,
             revision: "unknown",
           },
@@ -135,7 +150,7 @@ async function closeLaunchFailure(
         role: "implementation",
       },
       usage: { inputTokens: 0, outputTokens: 0 },
-      workRef: { id: input.issue.id, kind: "issue" },
+      workRef: workReference(input.issue),
     });
   } catch (persistenceError) {
     const failure =
@@ -143,4 +158,14 @@ async function closeLaunchFailure(
     await input.safety.recordFailure(failure);
     throw failure;
   }
+}
+
+function workTitle(work: Issue | Extract<SystemJob, { kind: "repair" }>): string {
+  return "kind" in work ? work.goal : work.title;
+}
+
+function workReference(work: Issue | Extract<SystemJob, { kind: "repair" }>) {
+  return "kind" in work
+    ? { id: work.id, kind: "system_job" as const }
+    : { id: work.id, kind: "issue" as const };
 }

@@ -12,6 +12,8 @@ import type {
   PullRequestSnapshot,
   SideEffectIntent,
   SideEffectReceipt,
+  SystemJob,
+  WorkRef,
 } from "@symphony/contracts";
 import { evaluatePullRequestGate, type PullRequestGateSnapshot } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
@@ -21,7 +23,10 @@ import {
   commitMergeQueueLanding,
   commitPostMergeRepairCycle,
   commitPostMergeSuccess,
+  commitPostMergeSystemJobRepairCycle,
   commitPostMergeSystemJobSuccess,
+  commitRepairParentDoneLane,
+  commitRepairParentReviewLane,
   commitRepositoryBranchUpdate,
   createAuthorizedIntent,
   loadAuthorizedMergeLogins,
@@ -31,7 +36,6 @@ import {
   type PendingPostMerge,
   routeMergeQueuePrecondition,
   routeMergeQueueRetry,
-  routePostMergeFailure,
   routePostMergeRetry,
 } from "@symphony/persistence";
 
@@ -54,11 +58,10 @@ export async function executeMergeQueueLanding(input: {
   target: PendingMergeQueue;
   workRef: { id: string; kind: "issue" | "system_job" };
 }): Promise<MergeQueueResult> {
-  if (input.workRef.kind !== "issue") throw new Error("merge_queue.issue_required");
   if (!Number.isSafeInteger(input.pollIntervalMs) || input.pollIntervalMs <= 0) {
     throw new Error("merge_queue.poll_interval_invalid");
   }
-  const contractWorkRef = { issue_id: input.workRef.id } as const;
+  const contractWorkRef = toContractWorkRef(input.workRef);
   const snapshot = await input.repository.fetchPullRequestSnapshot(contractWorkRef);
   assertPullRequestIdentity(snapshot, input.target);
   const decision = evaluatePullRequestGate(toDomainSnapshot(snapshot), {
@@ -233,6 +236,7 @@ export async function executePostMergeVerification(input: {
 export async function executeSystemJobPostMergeVerification(input: {
   acceptedCheckConclusions: readonly string[];
   database: OpenedDatabase["database"];
+  job: Pick<SystemJob, "acceptance_criteria" | "goal" | "id">;
   newId(): string;
   now(): string;
   pollIntervalMs: number;
@@ -242,6 +246,7 @@ export async function executeSystemJobPostMergeVerification(input: {
   settleTimeoutMs: number;
   target: PendingPostMerge;
   workRef: { id: string; kind: "system_job" };
+  workspaceRoot: string;
 }): Promise<{ reason?: string; result: "completed" | "failed" | "waiting" }> {
   if (
     !Number.isSafeInteger(input.pollIntervalMs) ||
@@ -267,13 +272,7 @@ export async function executeSystemJobPostMergeVerification(input: {
   const observedAt = input.now();
   if (decision.decision === "wait") {
     if (Date.parse(observedAt) - Date.parse(input.target.startedAt) >= input.settleTimeoutMs) {
-      await durable(input.safety, () =>
-        routePostMergeFailure(input.database, {
-          now: observedAt,
-          reason: `post_merge.timeout:${decision.reason}`,
-          workRef: input.workRef,
-        }),
-      );
+      await createSystemJobRepairCycle(input, `post_merge.timeout:${decision.reason}`, observedAt);
       return { reason: decision.reason, result: "failed" };
     }
     await durable(input.safety, () =>
@@ -286,13 +285,7 @@ export async function executeSystemJobPostMergeVerification(input: {
     return { reason: decision.reason, result: "waiting" };
   }
   if (decision.decision === "fail") {
-    await durable(input.safety, () =>
-      routePostMergeFailure(input.database, {
-        now: observedAt,
-        reason: decision.reason,
-        workRef: input.workRef,
-      }),
-    );
+    await createSystemJobRepairCycle(input, decision.reason, observedAt);
     return { reason: decision.reason, result: "failed" };
   }
   await durable(input.safety, () =>
@@ -303,6 +296,86 @@ export async function executeSystemJobPostMergeVerification(input: {
     }),
   );
   return { result: "completed" };
+}
+
+async function createSystemJobRepairCycle(
+  input: {
+    database: OpenedDatabase["database"];
+    job: Pick<SystemJob, "acceptance_criteria" | "goal" | "id">;
+    newId(): string;
+    safety: PersistenceSafetyController;
+    target: PendingPostMerge;
+    workRef: { id: string; kind: "system_job" };
+    workspaceRoot: string;
+  },
+  reason: string,
+  observedAt: string,
+): Promise<void> {
+  const repairJobId = requiredId(input.newId());
+  await durable(input.safety, () =>
+    commitPostMergeSystemJobRepairCycle(input.database, {
+      acceptanceCriteria: [
+        `Restore passing post-merge checks for ${input.target.mergeSha}`,
+        ...input.job.acceptance_criteria,
+      ],
+      configSnapshotId: input.target.configSnapshotId,
+      goal: `Repair ${input.job.goal}: ${reason}`,
+      now: observedAt,
+      repairJobId,
+      repository: input.target.repository,
+      transitionId: requiredId(input.newId()),
+      workRef: input.workRef,
+      workspacePath: path.join(
+        input.workspaceRoot,
+        "_system",
+        `repair-${repairJobId.replace(/[^A-Za-z0-9._-]+/gu, "_")}`,
+      ),
+    }),
+  );
+}
+
+export async function executeRepairParentCompletion(input: {
+  configSnapshotId: string;
+  database: OpenedDatabase["database"];
+  expiresAt: string;
+  issueId: string;
+  lane: "Done" | "Review";
+  newId(): string;
+  now(): string;
+  providerRevision: string;
+  safety: PersistenceSafetyController;
+  serviceRunId: string;
+  tracker: TrackerAdapter;
+}): Promise<void> {
+  const authorizedAt = input.now();
+  const mutation = composeRepairParentCompletionMutation(input, authorizedAt);
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: mutation.authority.authorization,
+      intent: mutation.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, mutation.intent.id, input.now()),
+  );
+  const lane = await input.tracker.updateIssueLane(
+    input.issueId,
+    input.lane,
+    "merge_queue.repair_completed",
+    mutation.authority,
+  );
+  if (lane.resultRevision === null) throw new Error("merge_queue.tracker_revision_missing");
+  const appliedAt = input.now();
+  const commit =
+    input.lane === "Review" ? commitRepairParentReviewLane : commitRepairParentDoneLane;
+  await durable(input.safety, () =>
+    commit(input.database, {
+      now: appliedAt,
+      receipt: receipt(mutation.intent.id, lane, appliedAt),
+      transitionId: requiredId(input.newId()),
+      workRef: { id: input.issueId, kind: "issue" },
+    }),
+  );
 }
 
 async function createRepairCycle(
@@ -551,8 +624,9 @@ function composeMergeMutation(
   }
   const authorizationId = requiredId(input.newId());
   const intentId = requiredId(input.newId());
-  const workRef = { issue_id: input.workRef.id } as const;
-  const target = `${input.target.repository}:issue:${input.workRef.id}`;
+  const workRef = toContractWorkRef(input.workRef);
+  const workRefIdentity = contractWorkRefIdentity(workRef);
+  const target = `${input.target.repository}:${workRefIdentity}`;
   const observedStateRef = `repository:${input.target.repository}:head:${snapshot.head_sha}:base:${snapshot.observed_base_sha}`;
   const authorization: MutationAuthorization = {
     action: "repository.merge_pull_request",
@@ -595,7 +669,7 @@ function composeMergeMutation(
         serviceRunId: authorization.service_run_id,
         target: authorization.target,
         targetRevision: authorization.target_revision,
-        workRef: `issue:${input.workRef.id}`,
+        workRef: workRefIdentity,
       },
     },
     intent: {
@@ -697,6 +771,86 @@ function composeDoneMutation(
       status: "pending",
       target: input.workRef.id,
       target_revision: input.target.providerRevision,
+      updated_at: authorizedAt,
+      work_ref: workRef,
+    },
+  };
+}
+
+function composeRepairParentCompletionMutation(
+  input: {
+    configSnapshotId: string;
+    expiresAt: string;
+    issueId: string;
+    lane: "Done" | "Review";
+    newId(): string;
+    providerRevision: string;
+    serviceRunId: string;
+  },
+  authorizedAt: string,
+): {
+  authority: ProviderMutationAuthority & { authorization: MutationAuthorization };
+  intent: SideEffectIntent;
+} {
+  if (!Number.isFinite(Date.parse(authorizedAt)) || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error("merge_queue.authorization_time_invalid");
+  }
+  const authorizationId = requiredId(input.newId());
+  const intentId = requiredId(input.newId());
+  const workRef = { issue_id: input.issueId } as const;
+  const authorization: MutationAuthorization = {
+    action: "tracker.update_lane",
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy",
+    attempt_role: "implementation",
+    authorized_at: authorizedAt,
+    config_snapshot_id: input.configSnapshotId,
+    decision_rule_ids: ["merge_queue.repair_completed"],
+    expires_at: input.expiresAt,
+    id: authorizationId,
+    idempotency_key: intentId,
+    intent_id: intentId,
+    observed_state_ref: `tracker:${input.issueId}:${input.providerRevision}`,
+    operator_capability: null,
+    scope: "work",
+    service_run_id: input.serviceRunId,
+    target: input.issueId,
+    target_revision: input.providerRevision,
+    work_ref: workRef,
+  };
+  return {
+    authority: {
+      authorization,
+      expectation: {
+        action: authorization.action,
+        actorId: authorization.actor_id,
+        actorKind: authorization.actor_kind,
+        attemptRole: authorization.attempt_role,
+        configSnapshotId: authorization.config_snapshot_id,
+        idempotencyKey: authorization.idempotency_key,
+        intentId: authorization.intent_id,
+        observedStateRef: authorization.observed_state_ref,
+        operatorCapability: authorization.operator_capability,
+        scope: authorization.scope,
+        serviceRunId: authorization.service_run_id,
+        target: authorization.target,
+        targetRevision: authorization.target_revision,
+        workRef: `issue:${input.issueId}`,
+      },
+    },
+    intent: {
+      action: authorization.action,
+      attempt_id: null,
+      authorization_id: authorization.id,
+      created_at: authorizedAt,
+      id: intentId,
+      idempotency_key: intentId,
+      request_payload_hash: sha256(JSON.stringify({ lane: input.lane })),
+      scope: "work",
+      service_run_id: input.serviceRunId,
+      status: "pending",
+      target: input.issueId,
+      target_revision: input.providerRevision,
       updated_at: authorizedAt,
       work_ref: workRef,
     },
@@ -888,6 +1042,16 @@ function receipt(
     result: mutation.result,
     result_revision: mutation.resultRevision,
   };
+}
+
+function toContractWorkRef(workRef: { id: string; kind: "issue" | "system_job" }): WorkRef {
+  return workRef.kind === "issue" ? { issue_id: workRef.id } : { system_job_id: workRef.id };
+}
+
+function contractWorkRefIdentity(workRef: WorkRef): string {
+  return "issue_id" in workRef
+    ? `issue:${workRef.issue_id}`
+    : `system_job:${workRef.system_job_id}`;
 }
 
 function requiredId(id: string): string {
