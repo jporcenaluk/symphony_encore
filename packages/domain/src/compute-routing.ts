@@ -15,6 +15,15 @@ export interface ResolvedComputeProfile {
   reasoningEffort: string;
 }
 
+export interface ComputeRouteProfiles {
+  adjudication: ComputeProfile;
+  implementation: Readonly<Record<ChangeClass, ComputeProfile>>;
+  integrative_review: ComputeProfile;
+  plan_review: ComputeProfile;
+  specialist_review: ComputeProfile;
+  synthesis: ComputeProfile;
+}
+
 export interface ComputeRiskFloorRule {
   id: string;
   minimumProfile: ComputeProfile;
@@ -28,6 +37,7 @@ export interface ComputeRouteInput {
   facts: ReadonlySet<string>;
   heuristicMinimum: ComputeProfile | null;
   resolvedProfiles: Readonly<Record<ComputeProfile, ResolvedComputeProfile>>;
+  routeProfiles: ComputeRouteProfiles;
   riskFloorRules: readonly ComputeRiskFloorRule[];
   role: AttemptRole;
 }
@@ -48,27 +58,15 @@ const PROFILE_RANK: Readonly<Record<ComputeProfile, number>> = {
 function defaultRoute(
   role: AttemptRole,
   changeClass: ChangeClass,
+  profiles: ComputeRouteProfiles,
 ): { profile: ComputeProfile; reason: string } {
   if (role === "implementation") {
-    const profileByClass: Readonly<Record<ChangeClass, ComputeProfile>> = {
-      trivial: "economy",
-      standard: "standard",
-      high_risk: "deep",
-    };
     return {
-      profile: profileByClass[changeClass],
+      profile: profiles.implementation[changeClass],
       reason: `route.implementation.${changeClass}`,
     };
   }
-
-  const defaults: Readonly<Record<Exclude<AttemptRole, "implementation">, ComputeProfile>> = {
-    plan_review: "economy",
-    integrative_review: "standard",
-    specialist_review: "deep",
-    adjudication: "deep",
-    synthesis: "deep",
-  };
-  return { profile: defaults[role], reason: `route.${role}` };
+  return { profile: profiles[role], reason: `route.${role}` };
 }
 
 function strongerProfile(current: ComputeProfile, candidate: ComputeProfile): ComputeProfile {
@@ -76,7 +74,7 @@ function strongerProfile(current: ComputeProfile, candidate: ComputeProfile): Co
 }
 
 export function selectComputeRoute(input: ComputeRouteInput): ComputeRoute {
-  const base = defaultRoute(input.role, input.changeClass);
+  const base = defaultRoute(input.role, input.changeClass, input.routeProfiles);
   let profile = base.profile;
   const reasons = [base.reason];
 

@@ -12,6 +12,18 @@ const baseInput = {
     economy: { model: "economy-model", reasoningEffort: "low" },
     standard: { model: "standard-model", reasoningEffort: "medium" },
   },
+  routeProfiles: {
+    adjudication: "deep" as const,
+    implementation: {
+      high_risk: "deep" as const,
+      standard: "standard" as const,
+      trivial: "economy" as const,
+    },
+    integrative_review: "standard" as const,
+    plan_review: "economy" as const,
+    specialist_review: "deep" as const,
+    synthesis: "deep" as const,
+  },
   riskFloorRules: [
     {
       id: "risk.security_auth",
@@ -54,6 +66,27 @@ describe("compute routing", () => {
       reasoningEffort: "high",
       reasons: ["route.implementation.trivial", "risk.security_auth", "risk.public_api"],
     });
+  });
+
+  it("uses configured role and implementation-class profiles", () => {
+    expect(
+      selectComputeRoute({
+        ...baseInput,
+        routeProfiles: {
+          ...baseInput.routeProfiles,
+          implementation: { ...baseInput.routeProfiles.implementation, trivial: "standard" },
+          plan_review: "deep",
+        },
+      }),
+    ).toMatchObject({ profile: "standard", reasons: ["route.implementation.trivial"] });
+    expect(
+      selectComputeRoute({
+        ...baseInput,
+        changeClass: "high_risk",
+        role: "plan_review",
+        routeProfiles: { ...baseInput.routeProfiles, plan_review: "deep" },
+      }),
+    ).toMatchObject({ profile: "deep", reasons: ["route.plan_review"] });
   });
 
   it("lets a heuristic raise but never lower the deterministic route", () => {

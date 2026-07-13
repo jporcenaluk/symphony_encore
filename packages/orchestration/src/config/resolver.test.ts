@@ -236,4 +236,39 @@ describe("configuration resolution", () => {
       ]),
     );
   });
+
+  it("rejects malformed compute routes and unknown deterministic predicates", () => {
+    const badRoutes = resolveConfiguration({
+      context,
+      workflow: {
+        ...validWorkflow,
+        compute: { route_profiles: { implementation: { standard: "standard" } } },
+      },
+    });
+    expect(badRoutes.errors).toContainEqual({
+      code: "config.compute_route_profiles_invalid",
+      key: "compute.route_profiles",
+    });
+
+    const badPredicate = resolveConfiguration({
+      context,
+      workflow: {
+        ...validWorkflow,
+        compute: {
+          risk_floor_rules: [
+            {
+              id: "risk.guess",
+              minimum_profile: "deep",
+              roles: ["implementation"],
+              when: "agent_feels:nervous",
+            },
+          ],
+        },
+      },
+    });
+    expect(badPredicate.errors).toContainEqual({
+      code: "config.compute_risk_predicate_unknown:agent_feels:nervous",
+      key: "compute.risk_floor_rules",
+    });
+  });
 });

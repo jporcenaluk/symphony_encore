@@ -38,7 +38,7 @@ const builtInRiskRules = [
   "risk.public_api",
   "risk.cross_package_architecture",
   "risk.ambiguous_criteria",
-].map((id) => ({ id, minimum_profile: "deep", roles: ["implementation"] }));
+].map((id) => ({ id, minimum_profile: "deep", roles: ["implementation"], when: id }));
 
 const defaultSpecialists = [
   {

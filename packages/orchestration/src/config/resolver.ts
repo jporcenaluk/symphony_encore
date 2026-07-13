@@ -7,6 +7,7 @@ import {
   type ConfigurationDefinition,
   type ConfigurationKey,
 } from "./catalog.js";
+import { parseComputeRoutingPolicy } from "./compute-policy.js";
 
 export type ConfigurationSource =
   | "default"
@@ -429,6 +430,22 @@ export function resolveConfiguration(input: ResolveConfigurationInput): Configur
     })
   ) {
     addError(errors, "config.profile_estimate_invalid", "budget.estimate_tokens_by_profile");
+  }
+
+  try {
+    parseComputeRoutingPolicy({
+      riskFloorRules: values["compute.risk_floor_rules"],
+      routeProfiles: values["compute.route_profiles"],
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "config.compute_policy_invalid";
+    addError(
+      errors,
+      code,
+      code === "config.compute_route_profiles_invalid"
+        ? "compute.route_profiles"
+        : "compute.risk_floor_rules",
+    );
   }
 
   if (input.context.trackerSchema) {
