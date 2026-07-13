@@ -9,6 +9,7 @@ export * from "./configuration-snapshot.js";
 export * from "./configuration-store.js";
 export * from "./control-state-store.js";
 export * from "./database.js";
+export * from "./dispatch-planning-store.js";
 export * from "./dispatch-store.js";
 export * from "./event-store.js";
 export * from "./finish-attempt.js";
