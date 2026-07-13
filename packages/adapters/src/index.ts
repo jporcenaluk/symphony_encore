@@ -1,5 +1,6 @@
 export const componentName = "adapters" as const;
 
+export * from "./agent-preflight.js";
 export * from "./contracts.js";
 export * from "./gh-cli-api.js";
 export * from "./github-repository-hosting.js";
