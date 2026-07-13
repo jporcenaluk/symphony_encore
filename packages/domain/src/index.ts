@@ -8,4 +8,5 @@ export * from "./issue-lifecycle.js";
 export * from "./learning-policy.js";
 export * from "./mutation-authorization.js";
 export * from "./plan-policy.js";
+export * from "./pull-request-gate.js";
 export * from "./review-policy.js";

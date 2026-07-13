@@ -47,6 +47,7 @@ describe("production migrations", () => {
       { name: "active_synthesis_job_guard", version: 10 },
       { name: "workspace_checkout_provenance", version: 11 },
       { name: "workspace_checkout_base_ref", version: 12 },
+      { name: "pull_request_gate_state", version: 13 },
     ]);
   });
 
@@ -77,6 +78,7 @@ describe("production migrations", () => {
         "bootstrap_state",
         "parked_work",
         "plans",
+        "pull_request_gate_states",
         "repository_links",
         "retry_entries",
         "review_records",

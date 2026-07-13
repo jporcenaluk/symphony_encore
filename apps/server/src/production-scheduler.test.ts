@@ -7,6 +7,7 @@ import {
   type AgentPreflightRequest,
   type AgentSession,
   issueWorkspacePath,
+  type RepositoryHostingAdapter,
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
 import { type AgentAdapterManifest, type Issue, PlanSchema } from "@symphony/contracts";
@@ -66,6 +67,10 @@ const effectiveConfig = {
   "hooks.timeout_ms": 60_000,
   "persistence.lease_ttl_ms": 120_000,
   "polling.interval_ms": 30_000,
+  "review.accepted_check_conclusions": ["success", "neutral", "skipped"],
+  "review.quiet_period_ms": 0,
+  "review.required_checks": [],
+  "review.settle_timeout_ms": 1_800_000,
   "review.snapshot_timeout_ms": 30_000,
   "review.specialists": [
     {
@@ -321,26 +326,74 @@ describe("production reconciliation scheduler", () => {
         };
       },
     };
+    let trackerState = candidate.state;
+    let trackerRevision = 7;
     const tracker = {
       createOrUpdateComment: vi.fn(),
       fetchCandidates: vi.fn(async () => ({
         cursor: null,
         hasMore: false,
-        items: [candidate],
+        items: [{ ...candidate, state: trackerState }],
       })),
       fetchCommentsSince: vi.fn(),
       fetchIssuesByStates: vi.fn(),
       fetchStatesByIds: vi.fn(async () => ({
         cursor: null,
         hasMore: false,
-        items: [{ id: candidate.id, revision: "revision-7", state: "Todo" }],
+        items: [{ id: candidate.id, revision: `revision-${trackerRevision}`, state: trackerState }],
       })),
-      updateIssueLane: vi.fn(async () => ({
-        providerRequestId: "request-1",
-        responsePayloadHash: "sha256:receipt",
-        result: "updated",
-        resultRevision: "revision-8",
+      updateIssueLane: vi.fn(async (_id: string, lane: string) => {
+        trackerState = lane as Issue["state"];
+        trackerRevision += 1;
+        return {
+          providerRequestId: `request-${trackerRevision}`,
+          responsePayloadHash: `sha256:receipt-${trackerRevision}`,
+          result: "updated",
+          resultRevision: `revision-${trackerRevision}`,
+        };
+      }),
+    };
+    const repositoryHostingAdapter: RepositoryHostingAdapter = {
+      createRepairPullRequest: vi.fn(),
+      ensurePullRequest: vi.fn(async (_workRef, headSha) => ({
+        mutation: {
+          providerRequestId: "request-pr",
+          responsePayloadHash: "sha256:pr",
+          result: "created",
+          resultRevision: headSha,
+        },
+        number: 42,
+        url: "https://github.com/owner/repo/pull/42",
       })),
+      fetchPostMergeStatus: vi.fn(),
+      fetchPullRequestSnapshot: vi.fn(async () => ({
+        base_ref: "main",
+        checks: [],
+        head_sha: "abc1234",
+        is_draft: false,
+        mergeable: true,
+        observed_base_sha: "abc1234",
+        post_merge_checks: [],
+        pr_number: 42,
+        pr_state: "open" as const,
+        pr_url: "https://github.com/owner/repo/pull/42",
+        required_check_source: "union" as const,
+        review_decision: "none" as const,
+        reviews: [],
+        unresolved_threads: [],
+      })),
+      mergePullRequest: vi.fn(),
+      publishBranch: vi.fn(async () => ({
+        branch: "symphony/org-9",
+        headSha: "abc1234",
+        mutation: {
+          providerRequestId: "request-publish",
+          responsePayloadHash: "sha256:publish",
+          result: "published",
+          resultRevision: "abc1234",
+        },
+      })),
+      updateBranch: vi.fn(),
     };
     const logger = { error: vi.fn(), warn: vi.fn() };
     const scheduler = createProductionScheduler({
@@ -350,6 +403,7 @@ describe("production reconciliation scheduler", () => {
       logger,
       prompt: "Implement {{ issue.title }}.",
       repositoryAdapter,
+      repositoryHostingAdapter,
       review: {
         collectEvidence: vi.fn(async (request) => ({
           baseSha: request.baseSha,
@@ -385,6 +439,9 @@ describe("production reconciliation scheduler", () => {
     });
 
     await scheduler.start();
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalled());
+    expect(logger.error.mock.calls).toEqual([]);
+    await vi.waitFor(() => expect(agent.launch).toHaveBeenCalled(), { timeout: 3_000 });
     await vi.waitFor(() =>
       expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
         mode: "Ready",
@@ -392,16 +449,50 @@ describe("production reconciliation scheduler", () => {
       }),
     );
     await scheduler.trigger();
+    expect(logger.error.mock.calls).toEqual([]);
     await vi.waitFor(() =>
       expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
         mode: "Ready",
         reason: "pull_request_required",
       }),
     );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "pull_request_hygiene_required",
+      }),
+    );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(3));
+    await scheduler.trigger();
+    expect(logger.error.mock.calls).toEqual([]);
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_required",
+      }),
+    );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(4));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_coordination_required",
+      }),
+    );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(5));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "merge_queue_required",
+      }),
+    );
     await scheduler.close();
 
     expect(logger.warn).not.toHaveBeenCalled();
-    expect(agent.launch).toHaveBeenCalledOnce();
+    expect(agent.launch).toHaveBeenCalledTimes(2);
     expect(tracker.updateIssueLane).toHaveBeenCalledWith(
       candidate.id,
       "In Progress",
@@ -410,10 +501,13 @@ describe("production reconciliation scheduler", () => {
     );
     expect(
       opened.sqlite.prepare("select role, status from attempts order by attempt_number").all(),
-    ).toEqual([{ role: "implementation", status: "closed" }]);
+    ).toEqual([
+      { role: "implementation", status: "closed" },
+      { role: "integrative_review", status: "closed" },
+    ]);
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
-      reason: "pull_request_required",
+      reason: "merge_queue_required",
     });
     expect(
       opened.sqlite.prepare("select target_revision, result from verification_records").get(),
@@ -421,9 +515,14 @@ describe("production reconciliation scheduler", () => {
       result: "passed",
       target_revision: "abc1234",
     });
-    expect(opened.sqlite.prepare("select count(*) as count from review_records").get()).toEqual({
-      count: 0,
-    });
+    expect(
+      opened.sqlite.prepare("select reviewer_role, target_sha, decision from review_records").get(),
+    ).toEqual({ decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" });
+    expect(opened.sqlite.prepare("select pull_request_number from repository_links").get()).toEqual(
+      {
+        pull_request_number: 42,
+      },
+    );
     expect(opened.sqlite.prepare("select status from plans").get()).toEqual({
       status: "validated",
     });

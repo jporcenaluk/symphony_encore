@@ -33,6 +33,7 @@ export async function executeRepositoryPublication(input: {
   newId(): string;
   now(): string;
   providerRevision: string;
+  readWorkspaceRevision(): Promise<string>;
   repository: RepositoryHostingAdapter;
   safety: PersistenceSafetyController;
   serviceRunId: string;
@@ -42,6 +43,9 @@ export async function executeRepositoryPublication(input: {
   const repositoryName = `${input.issue.repo_owner}/${input.issue.repo_name}`;
   if (input.target.repository !== repositoryName) {
     throw new Error("publication.repository_mismatch");
+  }
+  if ((await input.readWorkspaceRevision()) !== input.target.targetSha) {
+    throw new Error("publication.workspace_revision_mismatch");
   }
   const workRef = { issue_id: input.issue.id } as const;
   const repositoryTarget = `${repositoryName}:issue:${input.issue.id}`;

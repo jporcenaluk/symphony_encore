@@ -9,6 +9,8 @@ import {
   createNodeGhCommandRunner,
   createNodeWorkspaceCommandRunner,
   discoverCodexAppServerManifest,
+  type RepositoryHostingAdapter,
+  readWorkspaceHeadRevision,
   type TrackerAdapter,
   terminateLinuxProcessGroup,
   type WorkspaceRepositoryAdapter,
@@ -51,6 +53,8 @@ import {
   loadPendingImplementationRetry,
   loadPendingIndependentVerification,
   loadPendingIntegrativeReview,
+  loadPendingPullRequestGate,
+  loadPendingRepositoryPublication,
   loadPendingReviewCoordination,
   type OpenedDatabase,
   observeIssue,
@@ -86,6 +90,8 @@ import {
 import { collectIntegrativeReviewContext } from "./integrative-review-evidence.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
+import { runPullRequestHygiene } from "./pull-request-hygiene.js";
+import { executeRepositoryPublication } from "./repository-publication.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -103,6 +109,7 @@ export function createProductionScheduler(input: {
   logger?: SchedulerLogger;
   prompt: string;
   repositoryAdapter?: WorkspaceRepositoryAdapter;
+  repositoryHostingAdapter?: RepositoryHostingAdapter;
   serviceRunId: string;
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
@@ -183,6 +190,7 @@ export function createProductionScheduler(input: {
   const agent = input.agent ?? createLazyProductionAgent(values, input.environment);
   const repositoryAdapter =
     input.repositoryAdapter ?? createLazyGitHubWorkspaceAdapter(values, input.environment);
+  const repositoryHostingAdapter = input.repositoryHostingAdapter;
   const service = new SchedulerService({
     intervalMs: numberValue(values, "polling.interval_ms"),
     onError(error) {
@@ -204,7 +212,18 @@ export function createProductionScheduler(input: {
       for (const claim of recoveryState.ready) {
         if (!safety.canDispatch()) break;
         const isReviewCoordination = claim.reason === "review_coordination_required";
-        if (availableSlots < 1 && !isReviewCoordination) continue;
+        const isRepositoryPublication =
+          claim.reason === "pull_request_required" && repositoryHostingAdapter !== undefined;
+        const isPullRequestHygiene =
+          claim.reason === "pull_request_hygiene_required" &&
+          repositoryHostingAdapter !== undefined;
+        if (
+          availableSlots < 1 &&
+          !isReviewCoordination &&
+          !isRepositoryPublication &&
+          !isPullRequestHygiene
+        )
+          continue;
         const isPlanReview = claim.reason === "plan_review_required";
         const isIndependentVerification = claim.reason === "independent_verification_required";
         const isIntegrativeReview = claim.reason === "review_required";
@@ -223,6 +242,8 @@ export function createProductionScheduler(input: {
             !isIntegrativeReview &&
             !isAdjudication &&
             !isReviewCoordination &&
+            !isRepositoryPublication &&
+            !isPullRequestHygiene &&
             !isSpecialistReview &&
             !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
@@ -233,6 +254,67 @@ export function createProductionScheduler(input: {
         try {
           const stored = await loadIssue(input.database, issueId);
           if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
+          if (isRepositoryPublication) {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const target = await loadPendingRepositoryPublication(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.publication_target_missing:${issueId}`);
+            await executeRepositoryPublication({
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              providerRevision: stored.providerRevision,
+              readWorkspaceRevision: () =>
+                input.verification?.readRevision
+                  ? input.verification.readRevision({
+                      sourceEnvironment: input.environment,
+                      timeoutMs: numberValue(values, "hooks.timeout_ms"),
+                      workspace: target.workspacePath,
+                      workspaceRoot: stringValue(values, "workspace.root"),
+                    })
+                  : readWorkspaceHeadRevision({
+                      commandRunner: createNodeWorkspaceCommandRunner(),
+                      environment: input.environment,
+                      timeoutMs: numberValue(values, "hooks.timeout_ms"),
+                      workspace: target.workspacePath,
+                      workspaceRoot: stringValue(values, "workspace.root"),
+                    }),
+              repository: repositoryHostingAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              target,
+              tracker,
+            });
+            continue;
+          }
+          if (isPullRequestHygiene) {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const target = await loadPendingPullRequestGate(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.pull_request_gate_missing:${issueId}`);
+            await runPullRequestHygiene({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              fetchPullRequestSnapshot: (workRef) =>
+                repositoryHostingAdapter.fetchPullRequestSnapshot(workRef),
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              quietPeriodMs: numberValue(values, "review.quiet_period_ms"),
+              requiredChecks: stringList(values, "review.required_checks"),
+              settleTimeoutMs: numberValue(values, "review.settle_timeout_ms"),
+              target,
+              workRef: { id: issueId, kind: "issue" },
+            });
+            continue;
+          }
           if (isReviewCoordination) {
             const pending = await loadPendingReviewCoordination(input.database, {
               id: issueId,

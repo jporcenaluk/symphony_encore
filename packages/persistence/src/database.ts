@@ -36,6 +36,7 @@ export interface DatabaseSchema {
   operators: Record<string, unknown>;
   parked_work: Record<string, unknown>;
   plans: Record<string, unknown>;
+  pull_request_gate_states: Record<string, unknown>;
   repository_links: Record<string, unknown>;
   retry_entries: Record<string, unknown>;
   review_records: Record<string, unknown>;
@@ -878,6 +879,25 @@ const workspaceCheckoutBaseRefMigration: RepositoryMigration = {
   version: 12,
 };
 
+const pullRequestGateStateMigration: RepositoryMigration = {
+  checksum: "sha256:d854fe282e1a0ca56db5d77e017b155875482a7b71a7e7993d59a41e3ad56cde",
+  name: "pull_request_gate_state",
+  async up(database) {
+    await sql`
+      create table pull_request_gate_states (
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        material_hash text not null,
+        material_since text not null,
+        settle_started_at text not null,
+        updated_at text not null,
+        primary key (work_ref_kind, work_ref_id)
+      ) strict
+    `.execute(database);
+  },
+  version: 13,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -891,6 +911,7 @@ export const CORE_MIGRATIONS = [
   activeSynthesisJobMigration,
   workspaceCheckoutMigration,
   workspaceCheckoutBaseRefMigration,
+  pullRequestGateStateMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

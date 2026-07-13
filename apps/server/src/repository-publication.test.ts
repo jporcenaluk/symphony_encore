@@ -108,6 +108,7 @@ describe("verified repository publication", () => {
         return () => new Date(Date.UTC(2026, 6, 13, 10, minute++)).toISOString();
       })(),
       providerRevision: stored.providerRevision,
+      readWorkspaceRevision: vi.fn(async () => "def5678"),
       repository,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
       serviceRunId: "run-1",
