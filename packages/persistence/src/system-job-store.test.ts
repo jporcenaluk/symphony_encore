@@ -36,6 +36,9 @@ function request(id: string) {
     goal: "Synthesize recent lessons into a bounded workflow proposal",
     id,
     repository: "example/repo",
+    serviceRunId: "run-1",
+    transitionId: `stage-${id}`,
+    trigger: "interval" as const,
     workspacePath: `/tmp/work/_system/synthesis-${id}`,
   };
 }
@@ -78,6 +81,18 @@ describe("synthesis SystemJob queue", () => {
     expect(opened.sqlite.prepare("select count(*) as count from system_jobs").get()).toEqual({
       count: 1,
     });
+    expect(
+      opened.sqlite
+        .prepare("select mode, reason, origin_stage from claims where work_ref_kind = 'system_job'")
+        .get(),
+    ).toEqual({ mode: "Ready", origin_stage: "queued", reason: "system_job_dispatch_required" });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select from_stage, to_stage, reason from stage_transitions where work_ref_kind = 'system_job'",
+        )
+        .get(),
+    ).toEqual({ from_stage: null, reason: "learning.synthesis_interval", to_stage: "queued" });
   });
 
   it("permits a new synthesis only after the prior job is terminal", async () => {

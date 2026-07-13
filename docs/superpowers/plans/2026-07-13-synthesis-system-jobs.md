@@ -27,16 +27,16 @@ agent/workspace/repository adapters, production scheduler.
 - Create: `packages/persistence/src/synthesis-store.ts`
 - Create: `packages/persistence/src/synthesis-store.test.ts`
 
-- [ ] Write a failing persistence test proving interval counts are measured after the latest
+- [x] Write a failing persistence test proving interval counts are measured after the latest
   terminal synthesis, only one active synthesis is queued, and the queue transaction also writes
   the `queued` StageTransition and `system_job_dispatch_required` Ready claim.
-- [ ] Add `loadSynthesisTriggerState` queries for completed issue count, active synthesis count,
+- [x] Add `loadSynthesisTriggerState` queries for completed issue count, active synthesis count,
   lessons since the last terminal synthesis, current rules, per-class/role usage aggregates, and
   decayed rule ids.
-- [ ] Change `queueSynthesisSystemJob` to atomically create the job, baseline stage, and Ready claim;
+- [x] Change `queueSynthesisSystemJob` to atomically create the job, baseline stage, and Ready claim;
   require service-run holder and transition identity inputs.
-- [ ] Run `pnpm exec vitest run packages/persistence/src/system-job-store.test.ts packages/persistence/src/synthesis-store.test.ts` and expect all tests to pass.
-- [ ] Commit with `feat(synthesis): queue durable synthesis inputs`.
+- [x] Run `pnpm exec vitest run packages/persistence/src/system-job-store.test.ts packages/persistence/src/synthesis-store.test.ts` and expect all tests to pass.
+- [x] Commit with `feat(synthesis): queue durable synthesis inputs`.
 
 ## Task 2: Deep synthesis attempt planning and execution
 

@@ -2,6 +2,7 @@ import type { SystemJob } from "@symphony/contracts";
 import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import { openBaselineStageInTransaction } from "./stage-transition.js";
 
 export interface QueueSynthesisSystemJobInput {
   acceptanceCriteria: readonly string[];
@@ -10,6 +11,9 @@ export interface QueueSynthesisSystemJobInput {
   goal: string;
   id: string;
   repository: string;
+  serviceRunId: string;
+  transitionId: string;
+  trigger: "interval" | "operator";
   workspacePath: string;
 }
 
@@ -83,6 +87,14 @@ export async function queueSynthesisSystemJob(
   database: Kysely<DatabaseSchema>,
   input: QueueSynthesisSystemJobInput,
 ): Promise<{ created: boolean; id: string }> {
+  if (
+    !input.id ||
+    !input.serviceRunId ||
+    !input.transitionId ||
+    !Number.isFinite(Date.parse(input.createdAt))
+  ) {
+    throw new Error("system_job.synthesis_queue_input_invalid");
+  }
   return database.transaction().execute(async (transaction) => {
     const inserted = await sql`
       insert into system_jobs (
@@ -100,7 +112,26 @@ export async function queueSynthesisSystemJob(
         where kind = 'synthesis' and status not in ('done', 'failed')
       )
     `.execute(transaction);
-    if (inserted.numAffectedRows === 1n) return { created: true, id: input.id };
+    if (inserted.numAffectedRows === 1n) {
+      await openBaselineStageInTransaction(transaction, {
+        enteredAt: input.createdAt,
+        id: input.transitionId,
+        reason: `learning.synthesis_${input.trigger}`,
+        timestampSource: "observed_estimate",
+        toStage: "queued",
+        workRef: { id: input.id, kind: "system_job" },
+      });
+      await sql`
+        insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values (
+          'system_job', ${input.id}, ${input.serviceRunId}, 'Ready', ${input.createdAt},
+          ${input.createdAt}, null, 'queued', 'system_job_dispatch_required'
+        )
+      `.execute(transaction);
+      return { created: true, id: input.id };
+    }
 
     const active = await sql<{ id: string }>`
       select id from system_jobs
