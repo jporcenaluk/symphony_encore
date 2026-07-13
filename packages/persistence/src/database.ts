@@ -830,6 +830,19 @@ const startupFailureMigration: RepositoryMigration = {
   version: 9,
 };
 
+const activeSynthesisJobMigration: RepositoryMigration = {
+  checksum: "sha256:24d596121d1d5179d1457e89076ed67812974969d995e8aa1854c6315ce9e74f",
+  name: "active_synthesis_job_guard",
+  async up(database) {
+    await sql`
+      create unique index system_jobs_one_active_synthesis
+      on system_jobs (kind)
+      where kind = 'synthesis' and status not in ('done', 'failed')
+    `.execute(database);
+  },
+  version: 10,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -840,6 +853,7 @@ export const CORE_MIGRATIONS = [
   appendOnlyEventRecordsMigration,
   operatorIdentityMigration,
   startupFailureMigration,
+  activeSynthesisJobMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

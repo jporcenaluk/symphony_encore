@@ -44,6 +44,7 @@ describe("production migrations", () => {
       { name: "append_only_event_records", version: 7 },
       { name: "operator_identity_and_sessions", version: 8 },
       { name: "startup_failure_records", version: 9 },
+      { name: "active_synthesis_job_guard", version: 10 },
     ]);
   });
 

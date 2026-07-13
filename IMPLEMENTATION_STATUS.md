@@ -20,9 +20,9 @@ command. A green but narrower test does not complete a broader item.
 
 | ID | Requirement area | Status | Required proof |
 |---|---|---|---|
-| S01 | Design principles and authority boundaries | Not started | Architecture tests and package-boundary gate |
+| S01 | Design principles and authority boundaries | In progress | Acyclic inward package graph, forbidden domain dependencies, durable mutation envelopes, and provider authority tests pass; the complete sole-writer orchestration path remains pending |
 | S02 | Components and provider-independent interfaces | In progress | Inward workspace graph plus tracker, repository-hosting, and agent adapter interfaces pass; provider implementations pending |
-| S03 | Complete durable domain model | In progress | Strict schemas and nine checksummed SQLite migrations cover every Section 3 record plus durable startup failures; repository mappers beyond normalized issues remain pending |
+| S03 | Complete durable domain model | In progress | Strict schemas and ten checksummed SQLite migrations cover every Section 3 record plus durable startup failures and the active-synthesis invariant; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
 | S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, full process-group termination, non-login hooks, durable verification, stable ownership, and startup quarantine pass; macOS/population/cleanup pending |
@@ -31,7 +31,7 @@ command. A green but narrower test does not complete a broader item.
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated reads plus a recovery-gated, CSRF-bound, capability/version/idempotency/audit protected configuration mutation pass; remaining mutation resources pending |
-| S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
+| S12 | Lessons, synthesis, and saturation | In progress | Deterministic interval/operator triggering, supervised deep routing, one-active-job SQLite enforcement, lesson citation, rule/prompt saturation, and completed-issue decay policies pass; lesson capture, attempt dispatch, review, and merge integration remain pending |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, production recovering-to-ready startup, operator-store corruption shutdown, and orderly durable stop pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Loopback-only exact-hash bootstrap validates and snapshots the full workflow candidate, atomically creates matching local authority, and disables dispatch and mutations until completion; operator-empty non-pristine stores now terminate recorded processes, accept only provider-observed receipts, record a durable startup failure, and exit without replacing authority; concrete provider reconciliation wiring and macOS posture remain pending |
@@ -191,3 +191,4 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `pnpm exec vitest run packages/adapters/src/linux-process-ownership.test.ts` (five consecutive runs) | All four process-ownership tests passed each run | `/proc` ENOENT/ESRCH process-exit race tolerance |
 | 2026-07-13 | working tree | `make verify-fast` | 307 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Publication/release policy plus process-exit race regression |
 | 2026-07-13 | working tree | `make verify-fast` | 311 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Operator-store corruption terminates owned processes, records observed receipts and durable failure, and exits fail closed |
+| 2026-07-13 | working tree | `make verify-fast` | 320 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Supervised synthesis triggering, lesson-backed saturation and decay, and one-active-SystemJob durability |
