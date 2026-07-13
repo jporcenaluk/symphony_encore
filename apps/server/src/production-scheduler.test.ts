@@ -75,6 +75,8 @@ const effectiveConfig = {
   "tracker.required_labels": [],
   "tracker.status_field": "Status",
   "workspace.root": "/tmp/workspaces",
+  "workspace.verify_command": "make verify-fast",
+  "workspace.verify_none_reason": null,
 };
 
 const manifest: AgentAdapterManifest = {
@@ -172,7 +174,7 @@ describe("production reconciliation scheduler", () => {
     const outcome = {
       actions_requested: [],
       confusions: [],
-      evidence: [],
+      evidence: [{ command: "make verify-fast", exit_code: 0, kind: "command", result: "passed" }],
       handoff: {
         acceptance_criteria: candidate.acceptance_criteria,
         commands: [],
@@ -182,8 +184,9 @@ describe("production reconciliation scheduler", () => {
         open_items: candidate.acceptance_criteria,
         revision: "abc1234",
       },
-      status: "needs_rework",
-      summary: "More work is needed.",
+      status: "completed",
+      summary: "Implementation is ready for independent verification.",
+      verification: { command: "make verify-fast", exit_code: 0, result: "passed" },
     };
     const agent: AgentAdapter = {
       launch: vi.fn(async (request: AgentLaunchRequest) => {
@@ -314,9 +317,29 @@ describe("production reconciliation scheduler", () => {
         id: "config-1",
       } as never,
       tracker,
+      verification: {
+        execute: vi.fn(async () => ({
+          commandHash: "sha256:command",
+          endedAt: "2026-07-13T10:00:07.000Z",
+          environmentPolicyHash: "sha256:environment",
+          exitCode: 0,
+          result: "passed" as const,
+          startedAt: "2026-07-13T10:00:06.000Z",
+          stderr: "",
+          stdout: "all passed",
+        })),
+        readRevision: vi.fn(async () => "abc1234"),
+      },
     });
 
     await scheduler.start();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "independent_verification_required",
+      }),
+    );
+    await scheduler.trigger();
     await scheduler.close();
 
     expect(agent.launch).toHaveBeenCalledOnce();
@@ -331,7 +354,13 @@ describe("production reconciliation scheduler", () => {
     });
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
-      reason: "implementation_rework",
+      reason: "review_required",
+    });
+    expect(
+      opened.sqlite.prepare("select target_revision, result from verification_records").get(),
+    ).toEqual({
+      result: "passed",
+      target_revision: "abc1234",
     });
     expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
       status: "settled",

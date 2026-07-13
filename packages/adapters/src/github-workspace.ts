@@ -224,6 +224,29 @@ export function createNodeWorkspaceCommandRunner(): WorkspaceCommandRunner {
   };
 }
 
+export async function readWorkspaceHeadRevision(options: {
+  commandRunner: WorkspaceCommandRunner;
+  environment: Readonly<Record<string, string | undefined>>;
+  timeoutMs: number;
+  workspace: string;
+  workspaceRoot: string;
+}): Promise<string> {
+  const workspace = await resolveAssignedWorkspace(options.workspaceRoot, options.workspace);
+  const result = await runRequired(options.commandRunner, {
+    arguments: ["-C", workspace, "rev-parse", "HEAD"],
+    command: "git",
+    cwd: options.workspaceRoot,
+    environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+    maxOutputBytes: 1_000_000,
+    timeoutMs: options.timeoutMs,
+  });
+  const revision = result.stdout.trim();
+  if (!/^[A-Fa-f0-9]{7,64}$/u.test(revision)) {
+    throw new Error("workspace.head_revision_invalid");
+  }
+  return revision;
+}
+
 async function runRequired(
   runner: WorkspaceCommandRunner,
   request: WorkspaceCommandRequest,

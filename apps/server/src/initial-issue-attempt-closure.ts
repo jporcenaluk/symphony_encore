@@ -85,13 +85,26 @@ function normalizeConsumption(
   | { kind: "terminal_result"; result: ImplementationOutcome }
   | { errorCode: AgentErrorCode; kind: "failure"; providerReason: string } {
   if (consumption.kind === "terminal_result") {
-    return isImplementationOutcome(consumption.result)
-      ? { kind: "terminal_result", result: consumption.result }
-      : {
-          errorCode: "result_invalid",
-          kind: "failure",
-          providerReason: "implementation result violated its role contract",
-        };
+    if (!isImplementationOutcome(consumption.result)) {
+      return {
+        errorCode: "result_invalid",
+        kind: "failure",
+        providerReason: "implementation result violated its role contract",
+      };
+    }
+    if (
+      consumption.result.status === "completed" &&
+      (!("verification" in consumption.result) ||
+        consumption.result.verification.result !== "passed" ||
+        consumption.result.verification.exit_code !== 0)
+    ) {
+      return {
+        errorCode: "result_invalid",
+        kind: "failure",
+        providerReason: "completed implementation requires passing agent verification",
+      };
+    }
+    return { kind: "terminal_result", result: consumption.result };
   }
   return consumption;
 }

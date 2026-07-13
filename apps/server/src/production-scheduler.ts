@@ -36,6 +36,7 @@ import {
   loadLatestPlanByStatus,
   loadLatestPlanReviewResult,
   loadLatestValidatedPlan,
+  loadPendingIndependentVerification,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
@@ -43,6 +44,11 @@ import {
 import { syncTrackerCandidates } from "./candidate-sync.js";
 import { startPlannedImplementationContinuationLifecycle } from "./implementation-continuation-lifecycle.js";
 import { planImplementationContinuation } from "./implementation-continuation-planner.js";
+import {
+  type RevisionReader,
+  runPendingIndependentVerification,
+  type VerificationExecutor,
+} from "./independent-verification-runner.js";
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
@@ -68,6 +74,7 @@ export function createProductionScheduler(input: {
   serviceRunId: string;
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
+  verification?: { execute?: VerificationExecutor; readRevision?: RevisionReader };
 }) {
   const values = input.snapshot.effectiveConfig;
   const tracker =
@@ -162,16 +169,45 @@ export function createProductionScheduler(input: {
       for (const claim of recoveryState.ready) {
         if (availableSlots < 1 || !safety.canDispatch()) break;
         const isPlanReview = claim.reason === "plan_review_required";
+        const isIndependentVerification = claim.reason === "independent_verification_required";
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
           claim.reason === "plan_revision_required";
-        if ((!isPlanReview && !isImplementationContinuation) || !("issue_id" in claim.work_ref)) {
+        if (
+          (!isPlanReview && !isIndependentVerification && !isImplementationContinuation) ||
+          !("issue_id" in claim.work_ref)
+        ) {
           continue;
         }
         const issueId = claim.work_ref.issue_id;
         try {
           const stored = await loadIssue(input.database, issueId);
           if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
+          if (isIndependentVerification) {
+            const target = await loadPendingIndependentVerification(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.verification_target_missing:${issueId}`);
+            await runPendingIndependentVerification({
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              command: stringValue(values, "workspace.verify_command"),
+              database: input.database,
+              ...(input.verification?.execute ? { execute: input.verification.execute } : {}),
+              newId: randomUUID,
+              ...(input.verification?.readRevision
+                ? { readRevision: input.verification.readRevision }
+                : {}),
+              safety,
+              sourceEnvironment: input.environment,
+              target,
+              timeoutMs: numberValue(values, "hooks.timeout_ms"),
+              verifyNoneReason: nullableString(values, "workspace.verify_none_reason"),
+              workRef: { id: issueId, kind: "issue" },
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            continue;
+          }
           let planned:
             | Awaited<ReturnType<typeof planHighRiskPlanReviewAttempt>>
             | Awaited<ReturnType<typeof planImplementationContinuation>>;

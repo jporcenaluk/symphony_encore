@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { Kysely } from "kysely";
+import {
+  type AgentVerification,
+  type ImplementationOutcome,
+  isImplementationOutcome,
+} from "@symphony/contracts";
+import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -64,18 +69,31 @@ export async function recordVerification(
   if (stdoutBytes + stderrBytes > MAXIMUM_EVIDENCE_BYTES) {
     throw new Error("verification.evidence_too_large");
   }
-  return database.transaction().execute(async (transaction) => {
-    const stdoutRef = await storeEvidence(
-      transaction,
-      input.execution.stdout,
-      input.execution.endedAt,
-    );
-    const stderrRef = await storeEvidence(
-      transaction,
-      input.execution.stderr,
-      input.execution.endedAt,
-    );
-    await sql`
+  return database
+    .transaction()
+    .execute((transaction) => recordVerificationInTransaction(transaction, input));
+}
+
+async function recordVerificationInTransaction(
+  transaction: Transaction<DatabaseSchema>,
+  input: RecordVerificationInput,
+): Promise<RecordedVerification> {
+  const stdoutBytes = Buffer.byteLength(input.execution.stdout, "utf8");
+  const stderrBytes = Buffer.byteLength(input.execution.stderr, "utf8");
+  if (stdoutBytes + stderrBytes > MAXIMUM_EVIDENCE_BYTES) {
+    throw new Error("verification.evidence_too_large");
+  }
+  const stdoutRef = await storeEvidence(
+    transaction,
+    input.execution.stdout,
+    input.execution.endedAt,
+  );
+  const stderrRef = await storeEvidence(
+    transaction,
+    input.execution.stderr,
+    input.execution.endedAt,
+  );
+  await sql`
       insert into verification_records (
         id, work_ref_kind, work_ref_id, attempt_id, config_snapshot_id,
         target_revision, command_hash, started_at, ended_at, exit_code,
@@ -87,9 +105,92 @@ export async function recordVerification(
         ${input.execution.result}, ${stdoutRef}, ${stderrRef},
         ${input.execution.environmentPolicyHash}
       )
+  `.execute(transaction);
+  return { id: input.id, result: input.execution.result, stderrRef, stdoutRef };
+}
+
+export async function recordVerificationAndRoute(
+  database: Kysely<DatabaseSchema>,
+  input: RecordVerificationInput & {
+    expectedReadyReason: string;
+    nextReadyReason: string;
+  },
+): Promise<RecordedVerification> {
+  return database.transaction().execute(async (transaction) => {
+    const recorded = await recordVerificationInTransaction(transaction, input);
+    const claim = await sql`
+      update claims
+      set reason = ${input.nextReadyReason}, updated_at = ${input.execution.endedAt}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = ${input.expectedReadyReason}
     `.execute(transaction);
-    return { id: input.id, result: input.execution.result, stderrRef, stdoutRef };
+    if (claim.numAffectedRows !== 1n) throw new Error("verification.claim_not_ready");
+    return recorded;
   });
+}
+
+interface PendingVerificationRow {
+  attempt_id: string;
+  config_snapshot_id: string;
+  payload_json: string;
+  workspace_path: string;
+}
+
+export interface PendingIndependentVerification {
+  attemptId: string;
+  configSnapshotId: string;
+  outcome: ImplementationOutcome & {
+    status: "completed";
+    verification: AgentVerification;
+  };
+  workspacePath: string;
+}
+
+export async function loadPendingIndependentVerification(
+  database: Kysely<DatabaseSchema>,
+  workRef: WorkRef,
+): Promise<PendingIndependentVerification | null> {
+  const query = await sql<PendingVerificationRow>`
+    select attempt.id as attempt_id, attempt.config_snapshot_id,
+           attempt.workspace_path, result.payload_json
+    from claims claim
+    join attempts attempt
+      on attempt.work_ref_kind = claim.work_ref_kind
+      and attempt.work_ref_id = claim.work_ref_id
+      and attempt.role = 'implementation'
+      and attempt.status = 'closed'
+    join terminal_results result
+      on result.id = attempt.terminal_result_id
+      and result.attempt_id = attempt.id
+      and result.role = 'implementation'
+      and result.result_kind = 'implementation_outcome'
+    where claim.work_ref_kind = ${workRef.kind}
+      and claim.work_ref_id = ${workRef.id}
+      and claim.mode = 'Ready'
+      and claim.reason = 'independent_verification_required'
+    order by attempt.attempt_number desc
+    limit 1
+  `.execute(database);
+  const row = query.rows[0];
+  if (!row) return null;
+  const outcome: unknown = JSON.parse(row.payload_json);
+  if (
+    !isImplementationOutcome(outcome) ||
+    outcome.status !== "completed" ||
+    !("verification" in outcome) ||
+    outcome.verification.result !== "passed" ||
+    outcome.verification.exit_code !== 0
+  ) {
+    throw new Error("verification.completed_outcome_invalid");
+  }
+  return {
+    attemptId: row.attempt_id,
+    configSnapshotId: row.config_snapshot_id,
+    outcome: outcome as PendingIndependentVerification["outcome"],
+    workspacePath: row.workspace_path,
+  };
 }
 
 export interface PassingVerificationQuery {

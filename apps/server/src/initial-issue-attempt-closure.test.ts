@@ -216,4 +216,41 @@ describe("initial issue attempt closure", () => {
       status: "budget_exhausted",
     });
   });
+
+  it("rejects completed outcomes without passing agent verification", async () => {
+    await closeInitialIssueAttempt({
+      attemptId: "attempt-1",
+      consumption: {
+        kind: "terminal_result",
+        result: {
+          actions_requested: [],
+          confusions: [],
+          evidence: [],
+          handoff,
+          status: "completed",
+          summary: "The agent-side check failed.",
+          verification: { command: "pnpm test", exit_code: 1, result: "failed" },
+        },
+      },
+      database: opened.database,
+      endedAt: "2026-07-13T10:01:00Z",
+      issue,
+      newId: () => "result-1",
+      providerRevision: "revision-8",
+      reservationId: "reservation-1",
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+    });
+
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "result_invalid",
+    });
+    const payload = opened.sqlite.prepare("select payload_json from terminal_results").get() as {
+      payload_json: string;
+    };
+    expect(JSON.parse(payload.payload_json)).toMatchObject({
+      role: "implementation",
+      status: "failed",
+    });
+  });
 });

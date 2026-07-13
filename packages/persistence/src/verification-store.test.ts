@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyMigrations, openDatabase } from "./database.js";
 import {
   findPassingVerification,
+  loadPendingIndependentVerification,
   loadVerificationEvidence,
   recordVerification,
+  recordVerificationAndRoute,
 } from "./verification-store.js";
 
 const directories: string[] = [];
@@ -127,6 +129,83 @@ describe("independent verification repository", () => {
     expect(opened.sqlite.prepare("select count(*) as count from evidence_blobs").get()).toEqual({
       count: 0,
     });
+    await opened.close();
+  });
+
+  it("loads a typed completed target and atomically routes the verification result", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-verification-store-"));
+    directories.push(directory);
+    const opened = await fixture(path.join(directory, "symphony.sqlite3"));
+    const outcome = {
+      actions_requested: [],
+      confusions: [],
+      evidence: [{ command: "make verify-fast", exit_code: 0, kind: "command", result: "passed" }],
+      handoff: {
+        acceptance_criteria: ["Verification passes"],
+        commands: [{ command: "make verify-fast", exit_code: 0 }],
+        decisions_fixed: [],
+        files_changed: ["src/feature.ts"],
+        goal: "Verify independently",
+        open_items: [],
+        revision: "abc1234",
+      },
+      status: "completed",
+      summary: "Implementation is ready for verification.",
+      verification: { command: "make verify-fast", exit_code: 0, result: "passed" },
+    };
+    opened.sqlite
+      .prepare(
+        `insert into terminal_results (id, attempt_id, role, result_kind, payload_json, created_at)
+         values ('result-1', 'attempt-1', 'implementation', 'implementation_outcome', ?, 't1')`,
+      )
+      .run(JSON.stringify(outcome));
+    opened.sqlite
+      .prepare(
+        `update attempts set status = 'closed', ended_at = 't1', terminal_result_id = 'result-1'
+         where id = 'attempt-1'`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values (
+          'issue', 'issue-1', 'run-1', 'Ready', 't0', 't1', null,
+          'In Progress', 'independent_verification_required'
+        )`,
+      )
+      .run();
+
+    await expect(
+      loadPendingIndependentVerification(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({
+      attemptId: "attempt-1",
+      configSnapshotId: "config-1",
+      outcome: { status: "completed" },
+      workspacePath: "/work/issue-1",
+    });
+    await recordVerificationAndRoute(opened.database, {
+      ...input,
+      expectedReadyReason: "independent_verification_required",
+      nextReadyReason: "review_required",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "review_required",
+    });
+
+    await expect(
+      recordVerificationAndRoute(opened.database, {
+        ...input,
+        expectedReadyReason: "independent_verification_required",
+        id: "verification-2",
+        nextReadyReason: "review_required",
+      }),
+    ).rejects.toThrow("verification.claim_not_ready");
+    expect(
+      opened.sqlite.prepare("select count(*) as count from verification_records").get(),
+    ).toEqual({ count: 1 });
     await opened.close();
   });
 });
