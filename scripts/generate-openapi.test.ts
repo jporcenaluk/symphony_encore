@@ -18,6 +18,7 @@ describe("generated OpenAPI contract", () => {
     const document = JSON.parse(await renderOpenApi()) as { paths: Record<string, unknown> };
     expect(Object.keys(document.paths)).toEqual([
       "/health",
+      "/api/v1/auth/login",
       "/ready",
       "/api/v1/events/stream",
       "/api/v1/events",

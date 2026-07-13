@@ -9,7 +9,11 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.close();
 });
 
-async function fixture(input?: { capabilities?: readonly string[]; authenticated?: boolean }) {
+async function fixture(input?: {
+  capabilities?: readonly string[];
+  authenticated?: boolean;
+  secureCookie?: boolean;
+}) {
   let serviceState: ActiveServiceState = "recovering";
   const state: ControlState = {
     dispatch_enabled: false,
@@ -53,6 +57,24 @@ async function fixture(input?: { capabilities?: readonly string[]; authenticated
         operatorId: "operator-1",
       };
     },
+    async login(credentials) {
+      if (
+        credentials.authSubject !== "local:admin" ||
+        credentials.password !== "correct password"
+      ) {
+        return null;
+      }
+      return {
+        csrfToken: "csrf-secret",
+        expiresAt: "2026-07-13T11:00:00Z",
+        principal: {
+          authSubject: "local:admin",
+          capabilities: ["operator.read"],
+          operatorId: "operator-1",
+        },
+        sessionToken: "session-secret",
+      };
+    },
     async readControlState() {
       return { ...state, service_run: { ...state.service_run, status: serviceState } };
     },
@@ -60,6 +82,7 @@ async function fixture(input?: { capabilities?: readonly string[]; authenticated
       return { id: "run-1", state: serviceState };
     },
     listEvents,
+    sessionCookieSecure: input?.secureCookie ?? false,
     streamEvents,
   });
   servers.push(server);
@@ -72,6 +95,52 @@ async function fixture(input?: { capabilities?: readonly string[]; authenticated
 }
 
 describe("Control API", () => {
+  it("creates an HttpOnly same-site session cookie without exposing its opaque token", async () => {
+    const { server } = await fixture();
+    await server.ready();
+
+    const response = await server.inject({
+      method: "POST",
+      payload: { auth_subject: "local:admin", password: "correct password" },
+      url: "/api/v1/auth/login",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["set-cookie"]).toContain(
+      "symphony_session=session-secret; Path=/; HttpOnly; SameSite=Lax",
+    );
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({
+      csrf_token: "csrf-secret",
+      expires_at: "2026-07-13T11:00:00Z",
+      operator: {
+        auth_subject: "local:admin",
+        capabilities: ["operator.read"],
+        operator_id: "operator-1",
+      },
+    });
+    expect(response.body).not.toContain("session-secret");
+  });
+
+  it("uses a generic login failure and marks TLS cookies Secure", async () => {
+    const { server } = await fixture({ secureCookie: true });
+    await server.ready();
+
+    const invalid = await server.inject({
+      method: "POST",
+      payload: { auth_subject: "local:admin", password: "wrong" },
+      url: "/api/v1/auth/login",
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json().error.code).toBe("invalid_credentials");
+
+    const valid = await server.inject({
+      method: "POST",
+      payload: { auth_subject: "local:admin", password: "correct password" },
+      url: "/api/v1/auth/login",
+    });
+    expect(valid.headers["set-cookie"]).toContain("; Secure");
+  });
+
   it("keeps liveness available while readiness reports recovery", async () => {
     const { server, setServiceState } = await fixture();
     await server.ready();

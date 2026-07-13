@@ -42,6 +42,7 @@ describe("production migrations", () => {
       { name: "durable_domain_records", version: 5 },
       { name: "verification_evidence_blobs", version: 6 },
       { name: "append_only_event_records", version: 7 },
+      { name: "operator_identity_and_sessions", version: 8 },
     ]);
   });
 
@@ -66,6 +67,10 @@ describe("production migrations", () => {
         "log_records",
         "mutation_authorizations",
         "operator_questions",
+        "operator_sessions",
+        "operators",
+        "local_operator_credentials",
+        "bootstrap_state",
         "parked_work",
         "plans",
         "repository_links",

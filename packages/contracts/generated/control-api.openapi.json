@@ -77,6 +77,199 @@
         }
       }
     },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Create an authenticated operator session",
+        "tags": [
+          "authentication"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "auth_subject",
+                  "password"
+                ],
+                "properties": {
+                  "auth_subject": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "password": {
+                    "maxLength": 4096,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "csrf_token",
+                    "expires_at",
+                    "operator"
+                  ],
+                  "properties": {
+                    "csrf_token": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "operator": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "auth_subject",
+                        "capabilities",
+                        "operator_id"
+                      ],
+                      "properties": {
+                        "auth_subject": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "capabilities": {
+                          "uniqueItems": true,
+                          "type": "array",
+                          "items": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "operator_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "operationId": "getReady",

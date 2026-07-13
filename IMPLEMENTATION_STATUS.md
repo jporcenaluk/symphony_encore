@@ -9,7 +9,7 @@ command. A green but narrower test does not complete a broader item.
 ## Current state
 
 - Branch target: `feat/symphony-encore-core`.
-- Current milestone: workspace isolation and process safety.
+- Current milestone: authenticated Control API and audited mutations.
 - Canonical gate: not implemented yet.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
@@ -33,7 +33,7 @@ command. A green but narrower test does not complete a broader item.
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, and readiness ordering pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
-| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
+| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Pristine fail-closed bootstrap, salted local credentials, hash-only sessions, same-origin CSRF, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; mutation integration and macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
 | S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, and immutable snapshots pass; startup/API integration pending |
@@ -48,7 +48,7 @@ command. A green but narrower test does not complete a broader item.
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | TypeBox routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
-| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Seven checksummed migrations cover durable entities, evidence, and append-only events; WAL, atomic transactions, configuration history, and restart round-trips pass |
+| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, and confirmed tree exit pass locally; macOS, CI matrix, and documented WSL smoke pending |
@@ -82,7 +82,7 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 - [ ] `C-WF-03` Bootstrap keys are read-only and cannot be overridden.
 - [ ] `C-WF-04` Bootstrap keys are rejected in repository configuration.
 - [ ] `C-WF-05` Exact-candidate acknowledgment and reload-boundary behavior.
-- [ ] `C-WF-06` Pristine bootstrap and non-pristine fail-closed recovery.
+- [x] `C-WF-06` Pristine bootstrap and non-pristine fail-closed recovery.
 - [ ] `C-WF-07` Skill and adapter preflight before charging an attempt.
 - [ ] `C-DUR-01` Atomic claim, attempt, reservation, and receipt-confirmed stage transition.
 - [ ] `C-DUR-02` Lease modes and complete restart reconstruction.
@@ -156,3 +156,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Linux ownership inspection, TERM/KILL group escalation, and confirmed tree exit |
 | 2026-07-13 | working tree | `make verify-fast` | 220 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Ordered startup termination, atomic interrupted closure, quarantine, and readiness |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Ordered startup termination, atomic interrupted closure, quarantine, and readiness |
+| 2026-07-13 | working tree | `make verify-fast` | 235 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Atomic pristine bootstrap, local password verification, hash-only sessions, login cookie, and same-origin CSRF |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Atomic pristine bootstrap, local password verification, hash-only sessions, login cookie, and same-origin CSRF |

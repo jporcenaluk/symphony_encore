@@ -24,6 +24,9 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
     async authenticate() {
       return null;
     },
+    async login() {
+      return null;
+    },
     async listEvents() {
       return { has_more: false, items: [], next_cursor: 0 };
     },
@@ -43,6 +46,7 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
     async readServiceStatus() {
       return { id: "schema-generation", state: "recovering" as const };
     },
+    sessionCookieSecure: false,
     async *streamEvents() {},
   });
   try {
@@ -57,6 +61,7 @@ const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
   getControlState: "ControlState",
   getHealth: "HealthResponse",
   getReady: "ReadyResponse",
+  login: "LoginResponse",
   listEvents: "EventRecordPage",
   streamEvents: "ControlEventStreamRequest",
 };
@@ -101,6 +106,9 @@ export async function renderControlApiClient(): Promise<string> {
       };
     },`;
       }
+      if (operation.operationId === "login") {
+        return `    login: (input) => request<LoginResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
+      }
       return `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`;
     })
     .join("\n");
@@ -113,6 +121,8 @@ import type {
   ErrorEnvelope,
   EventRecordPage,
   HealthResponse,
+  LoginRequest,
+  LoginResponse,
   ReadyResponse,
 } from "./control-api.js";
 
@@ -128,7 +138,7 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : operation.operationId === "streamEvents" ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
+${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : operation.operationId === "streamEvents" ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;" : operation.operationId === "login" ? "  login(input: LoginRequest): Promise<LoginResponse>;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
 }
 
 export interface ControlEventStreamRequest {
@@ -141,11 +151,15 @@ export function createControlApiClient(
   fetchImplementation: typeof fetch = globalThis.fetch,
 ): ControlApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\\/$/u, "");
-  const request = async <T>(operationPath: string, method: string): Promise<T> => {
+  const request = async <T>(operationPath: string, method: string, body?: unknown): Promise<T> => {
     const response = await fetchImplementation(\`\${normalizedBaseUrl}\${operationPath}\`, {
       credentials: "same-origin",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
       method,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const payload: unknown = await response.json();
     if (!response.ok) throw new ControlApiClientError(response.status, payload as ErrorEnvelope);

@@ -51,6 +51,10 @@ describe("persistent Control API composition", () => {
         };
       },
       database: opened.database,
+      async login() {
+        return null;
+      },
+      sessionCookieSecure: false,
     });
     servers.push(server);
     await server.ready();

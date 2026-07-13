@@ -16,11 +16,14 @@ import {
 export interface PersistentControlApiInput {
   authenticate: ControlApiDependencies["authenticate"];
   database: OpenedDatabase["database"];
+  login: ControlApiDependencies["login"];
+  sessionCookieSecure: boolean;
 }
 
 export async function createPersistentControlApi(input: PersistentControlApiInput) {
   return createControlApi({
     authenticate: input.authenticate,
+    login: input.login,
     async listEvents(page) {
       const result = await listEventRecords(input.database, page);
       return {
@@ -31,6 +34,7 @@ export async function createPersistentControlApi(input: PersistentControlApiInpu
     },
     readControlState: () => readControlState(input.database),
     readServiceStatus: () => readServiceStatus(input.database),
+    sessionCookieSecure: input.sessionCookieSecure,
     streamEvents: ({ afterCursor, signal }) =>
       streamEventRecords(input.database, {
         afterCursor,

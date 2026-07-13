@@ -38,6 +38,29 @@ describe("generated Control API client", () => {
     expect(error).toMatchObject({ envelope: payload, status: 401 });
   });
 
+  it("posts login credentials without exposing cross-origin cookie behavior", async () => {
+    const fetchImplementation = vi.fn(async () =>
+      Response.json({
+        csrf_token: "csrf",
+        expires_at: "2026-07-13T11:00:00Z",
+        operator: {
+          auth_subject: "local:admin",
+          capabilities: ["operator.read"],
+          operator_id: "operator-1",
+        },
+      }),
+    );
+    const client = createControlApiClient("http://127.0.0.1:3000", fetchImplementation);
+
+    await client.login({ auth_subject: "local:admin", password: "password" });
+    expect(fetchImplementation).toHaveBeenCalledWith("http://127.0.0.1:3000/api/v1/auth/login", {
+      body: JSON.stringify({ auth_subject: "local:admin", password: "password" }),
+      credentials: "same-origin",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      method: "POST",
+    });
+  });
+
   it("builds the generated durable event cursor query", async () => {
     const fetchImplementation = vi.fn(async () =>
       Response.json({ has_more: false, items: [], next_cursor: 42 }),

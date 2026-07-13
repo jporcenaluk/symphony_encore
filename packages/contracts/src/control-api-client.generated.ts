@@ -7,6 +7,8 @@ import type {
   ErrorEnvelope,
   EventRecordPage,
   HealthResponse,
+  LoginRequest,
+  LoginResponse,
   ReadyResponse,
 } from "./control-api.js";
 
@@ -23,6 +25,7 @@ export class ControlApiClientError extends Error {
 
 export interface ControlApiClient {
   getHealth(): Promise<HealthResponse>;
+  login(input: LoginRequest): Promise<LoginResponse>;
   getReady(): Promise<ReadyResponse>;
   streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;
   listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
@@ -39,11 +42,15 @@ export function createControlApiClient(
   fetchImplementation: typeof fetch = globalThis.fetch,
 ): ControlApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
-  const request = async <T>(operationPath: string, method: string): Promise<T> => {
+  const request = async <T>(operationPath: string, method: string, body?: unknown): Promise<T> => {
     const response = await fetchImplementation(`${normalizedBaseUrl}${operationPath}`, {
       credentials: "same-origin",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
       method,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const payload: unknown = await response.json();
     if (!response.ok) throw new ControlApiClientError(response.status, payload as ErrorEnvelope);
@@ -51,6 +58,7 @@ export function createControlApiClient(
   };
   return {
     getHealth: () => request<HealthResponse>("/health", "GET"),
+    login: (input) => request<LoginResponse>("/api/v1/auth/login", "POST", input),
     getReady: () => request<ReadyResponse>("/ready", "GET"),
     streamEvents: (input = {}) => {
       const suffix = input.afterCursor === undefined ? "" : `?after_cursor=${input.afterCursor}`;

@@ -12,6 +12,8 @@ import {
   EventStreamHeadersSchema,
   EventStreamQuerySchema,
   HealthResponseSchema,
+  LoginRequestSchema,
+  LoginResponseSchema,
   ReadyResponseSchema,
 } from "@symphony/contracts";
 import Fastify, { type FastifyRequest } from "fastify";
@@ -26,9 +28,16 @@ export interface OperatorPrincipal {
 
 export interface ControlApiDependencies {
   authenticate(request: FastifyRequest): Promise<OperatorPrincipal | null>;
+  login(input: { authSubject: string; password: string }): Promise<{
+    csrfToken: string;
+    expiresAt: string;
+    principal: OperatorPrincipal;
+    sessionToken: string;
+  } | null>;
   listEvents(input: { afterCursor: number; limit: number }): Promise<EventRecordPage>;
   readControlState(): Promise<ControlState>;
   readServiceStatus(): Promise<{ id: string; state: ActiveServiceState }>;
+  sessionCookieSecure: boolean;
   streamEvents(input: { afterCursor: number; signal: AbortSignal }): AsyncIterable<EventRecord>;
 }
 
@@ -89,6 +98,57 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
     async () => {
       const status = await dependencies.readServiceStatus();
       return { service_state: status.state, status: "healthy" as const };
+    },
+  );
+
+  server.post(
+    "/api/v1/auth/login",
+    {
+      schema: {
+        body: LoginRequestSchema,
+        operationId: "login",
+        response: {
+          200: LoginResponseSchema,
+          401: ErrorEnvelopeSchema,
+          422: ErrorEnvelopeSchema,
+        },
+        summary: "Create an authenticated operator session",
+        tags: ["authentication"],
+      },
+    },
+    async (request, reply) => {
+      const login = await dependencies.login({
+        authSubject: request.body.auth_subject,
+        password: request.body.password,
+      });
+      reply.header("cache-control", "no-store");
+      if (login === null) {
+        return reply.code(401).send({
+          error: {
+            code: "invalid_credentials",
+            current_version: null,
+            details: {},
+            message: "The supplied credentials are invalid",
+          },
+        });
+      }
+      reply.header(
+        "set-cookie",
+        serializeSessionCookie(
+          login.sessionToken,
+          login.expiresAt,
+          dependencies.sessionCookieSecure,
+        ),
+      );
+      return reply.code(200).send({
+        csrf_token: login.csrfToken,
+        expires_at: login.expiresAt,
+        operator: {
+          auth_subject: login.principal.authSubject,
+          capabilities: [...login.principal.capabilities],
+          operator_id: login.principal.operatorId,
+        },
+      });
     },
   );
 
@@ -282,6 +342,19 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
   );
 
   return server;
+}
+
+function serializeSessionCookie(token: string, expiresAt: string, secure: boolean): string {
+  const expires = new Date(expiresAt);
+  if (Number.isNaN(expires.getTime())) throw new Error("auth.invalid_session_expiry");
+  return [
+    `symphony_session=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Expires=${expires.toUTCString()}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
 }
 
 export type ControlApi = Awaited<ReturnType<typeof createControlApi>>;

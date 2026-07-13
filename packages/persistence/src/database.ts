@@ -15,6 +15,7 @@ export interface DatabaseSchema {
   budget_ledgers: Record<string, unknown>;
   budget_reservation_ledgers: Record<string, unknown>;
   budget_reservations: Record<string, unknown>;
+  bootstrap_state: Record<string, unknown>;
   claims: Record<string, unknown>;
   config_snapshots: Record<string, unknown>;
   configuration_acknowledgments: Record<string, unknown>;
@@ -25,11 +26,14 @@ export interface DatabaseSchema {
   issues: Record<string, unknown>;
   lessons: Record<string, unknown>;
   live_sessions: Record<string, unknown>;
+  local_operator_credentials: Record<string, unknown>;
   log_records: Record<string, unknown>;
   mutation_authorizations: Record<string, unknown>;
   operator_actions: Record<string, unknown>;
   operator_idempotency_keys: Record<string, unknown>;
   operator_questions: Record<string, unknown>;
+  operator_sessions: Record<string, unknown>;
+  operators: Record<string, unknown>;
   parked_work: Record<string, unknown>;
   plans: Record<string, unknown>;
   repository_links: Record<string, unknown>;
@@ -751,6 +755,64 @@ const appendOnlyEventRecordsMigration: RepositoryMigration = {
   version: 7,
 };
 
+const operatorIdentityMigration: RepositoryMigration = {
+  checksum: "sha256:b4b274d793d207ac75b72bcf46a88541e0b36b77ea6231e80e449e4c0f4aa1f5",
+  name: "operator_identity_and_sessions",
+  async up(database) {
+    await sql`
+      create table operators (
+        id text primary key,
+        auth_subject text not null unique,
+        capabilities_json text not null check (json_valid(capabilities_json)),
+        tracker_login text unique,
+        status text not null check (status in ('active', 'revoked')),
+        version integer not null check (version > 0),
+        created_at text not null,
+        updated_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table local_operator_credentials (
+        operator_id text primary key references operators(id) on delete restrict,
+        algorithm text not null check (algorithm = 'scrypt'),
+        salt blob not null,
+        verifier blob not null,
+        parameters_json text not null check (json_valid(parameters_json)),
+        created_at text not null,
+        rotated_at text
+      ) strict
+    `.execute(database);
+    await sql`
+      create table operator_sessions (
+        token_hash text primary key,
+        operator_id text not null references operators(id) on delete restrict,
+        auth_subject text not null,
+        csrf_token_hash text not null,
+        operator_version integer not null check (operator_version > 0),
+        issued_at text not null,
+        expires_at text not null,
+        last_seen_at text not null,
+        revoked_at text,
+        check (expires_at > issued_at)
+      ) strict
+    `.execute(database);
+    await sql`
+      create index operator_sessions_operator on operator_sessions (operator_id, expires_at)
+    `.execute(database);
+    await sql`
+      create table bootstrap_state (
+        singleton integer primary key check (singleton = 1),
+        candidate_hash text not null unique,
+        operator_id text not null unique references operators(id),
+        config_snapshot_id text not null unique references config_snapshots(id),
+        operator_action_id text not null unique references operator_actions(id),
+        consumed_at text not null
+      ) strict
+    `.execute(database);
+  },
+  version: 8,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -759,6 +821,7 @@ export const CORE_MIGRATIONS = [
   durableDomainRecordsMigration,
   verificationEvidenceMigration,
   appendOnlyEventRecordsMigration,
+  operatorIdentityMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

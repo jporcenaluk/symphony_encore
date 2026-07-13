@@ -46,6 +46,32 @@ export const ReadyResponseSchema = Type.Object(
 );
 export type ReadyResponse = Static<typeof ReadyResponseSchema>;
 
+export const LoginRequestSchema = Type.Object(
+  {
+    auth_subject: Type.String({ maxLength: 512, minLength: 1 }),
+    password: Type.String({ maxLength: 4096, minLength: 1 }),
+  },
+  { additionalProperties: false },
+);
+export type LoginRequest = Static<typeof LoginRequestSchema>;
+
+export const LoginResponseSchema = Type.Object(
+  {
+    csrf_token: NonEmptyString,
+    expires_at: NonEmptyString,
+    operator: Type.Object(
+      {
+        auth_subject: NonEmptyString,
+        capabilities: Type.Array(NonEmptyString, { uniqueItems: true }),
+        operator_id: NonEmptyString,
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+export type LoginResponse = Static<typeof LoginResponseSchema>;
+
 export const ControlStateSchema = Type.Object(
   {
     dispatch_enabled: Type.Boolean(),
