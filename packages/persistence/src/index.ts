@@ -1,6 +1,7 @@
 export const componentName = "persistence" as const;
 
 export * from "./bootstrap-store.js";
+export * from "./budget-ledger-store.js";
 export * from "./claim-store.js";
 export * from "./complete-bootstrap.js";
 export * from "./configuration-acknowledgment.js";
