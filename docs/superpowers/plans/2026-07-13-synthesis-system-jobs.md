@@ -47,16 +47,16 @@ agent/workspace/repository adapters, production scheduler.
 - Create: `apps/server/src/initial-synthesis-attempt-lifecycle.ts`
 - Create: `apps/server/src/initial-synthesis-attempt-lifecycle.test.ts`
 
-- [ ] Write a failing planner test proving the role is `synthesis`, profile is `deep`, the attempt
+- [x] Write a failing planner test proving the role is `synthesis`, profile is `deep`, the attempt
   uses SystemJob/fleet budgets, and the prompt contains only durable lessons/rules/metrics plus hard
   saturation caps and decayed-rule candidates.
-- [ ] Implement preflight-first planning with `SynthesisResultSchema`, the pinned configuration
+- [x] Implement preflight-first planning with `SynthesisResultSchema`, the pinned configuration
   snapshot, SystemJob workspace, and `queued → running` dispatch transition.
-- [ ] Write a failing lifecycle test proving dispatch is committed before workspace population and
+- [x] Write a failing lifecycle test proving dispatch is committed before workspace population and
   agent launch, and that session usage is charged through the shared consumer.
-- [ ] Implement lifecycle launch with the existing SystemJob workspace manager and process binding.
-- [ ] Run both synthesis attempt test files and expect all tests to pass.
-- [ ] Commit with `feat(synthesis): execute deep synthesis attempts`.
+- [x] Implement lifecycle launch with the existing SystemJob workspace manager and process binding.
+- [x] Run both synthesis attempt test files and expect all tests to pass.
+- [x] Commit with `feat(synthesis): execute deep synthesis attempts`.
 
 ## Task 3: Atomic typed synthesis result closure
 
@@ -67,17 +67,17 @@ agent/workspace/repository adapters, production scheduler.
 - Create: `apps/server/src/synthesis-attempt-closure.ts`
 - Create: `apps/server/src/synthesis-attempt-closure.test.ts`
 
-- [ ] Write failing tests for `no_change`, `needs_input`, invalid lesson citations, saturation
+- [x] Write failing tests for `no_change`, `needs_input`, invalid lesson citations, saturation
   violations, and `propose_changes` targeting a repository revision different from workspace HEAD.
-- [ ] Validate every cited lesson and `RuleChange` with `validateRuleChanges`; reject evidence-free
+- [x] Validate every cited lesson and `RuleChange` with `validateRuleChanges`; reject evidence-free
   or over-cap proposals before advancing work.
-- [ ] Atomically close `no_change` as `done`; park `needs_input` as `human` with an
+- [x] Atomically close `no_change` as `done`; park `needs_input` as `human` with an
   OperatorQuestion/ParkedWork record; route a valid proposal to `review` with
   `synthesis_verification_required`.
-- [ ] Normalize stream/protocol/process failures through bounded retry or human routing using the
+- [x] Normalize stream/protocol/process failures through bounded retry or human routing using the
   same budget settlement invariants as repair attempts.
-- [ ] Run both closure test files and expect all tests to pass.
-- [ ] Commit with `feat(synthesis): close typed synthesis outcomes`.
+- [x] Run both closure test files and expect all tests to pass.
+- [x] Commit with `feat(synthesis): close typed synthesis outcomes`.
 
 ## Task 4: Proposal verification and repository publication
 

@@ -79,17 +79,18 @@ export interface FailureRetryState {
 
 export async function loadFailureRetryState(
   database: Kysely<DatabaseSchema>,
-  workRef: { id: string; kind: "issue" | "system_job" },
+  workRef: { id: string; kind: "issue" | "system_job"; role?: string },
 ): Promise<FailureRetryState> {
+  const role = workRef.role ?? "implementation";
   const query = await sql<FailureRetryStateRow>`
     select
       (select count(*) from attempts
        where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}
-         and role = 'implementation' and status = 'closed'
+         and role = ${role} and status = 'closed'
          and failure_class = 'agent_process') as agent_process_failures,
       (select count(*) from attempts
        where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}
-         and role = 'implementation' and status = 'closed'
+         and role = ${role} and status = 'closed'
          and failure_class = 'infrastructure') as infrastructure_failures,
       (select count(*) from retry_entries
        where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}) as retry_entries,

@@ -22,6 +22,11 @@ export interface SynthesisTriggerState {
   rules: Rule[];
 }
 
+export interface SynthesisValidationState {
+  knownLessonIds: string[];
+  rules: Rule[];
+}
+
 interface LessonRow {
   created_at: string;
   evidence_json: string;
@@ -122,6 +127,19 @@ export async function loadSynthesisTriggerState(
       rules: rules.rows.map(toRule),
     };
   });
+}
+
+export async function loadSynthesisValidationState(
+  database: Kysely<DatabaseSchema>,
+): Promise<SynthesisValidationState> {
+  const [lessons, rules] = await Promise.all([
+    sql<{ id: string }>`select id from lessons order by id`.execute(database),
+    sql<RuleRow>`select * from rules order by id`.execute(database),
+  ]);
+  return {
+    knownLessonIds: lessons.rows.map((lesson) => lesson.id),
+    rules: rules.rows.map(toRule),
+  };
 }
 
 function isRuleDecayed(

@@ -31,6 +31,7 @@ export * from "./service-run-store.js";
 export * from "./side-effect-store.js";
 export * from "./stage-transition.js";
 export * from "./startup-failure-store.js";
+export * from "./synthesis-finish-store.js";
 export * from "./synthesis-store.js";
 export * from "./system-job-store.js";
 export * from "./usage-sample-store.js";
