@@ -188,7 +188,7 @@ function validateInput(input: InitialIssueDispatchInput): void {
       (ledger) =>
         !ledger.id ||
         !Number.isFinite(ledger.amount) ||
-        ledger.amount <= 0 ||
+        ledger.amount < 0 ||
         !Number.isSafeInteger(ledger.version) ||
         ledger.version < 1,
     )
