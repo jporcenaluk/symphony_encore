@@ -7,6 +7,7 @@ export * from "./complete-bootstrap.js";
 export * from "./configuration-acknowledgment.js";
 export * from "./configuration-snapshot.js";
 export * from "./configuration-store.js";
+export * from "./continuation-dispatch-store.js";
 export * from "./control-state-store.js";
 export * from "./database.js";
 export * from "./dispatch-planning-store.js";
