@@ -27,6 +27,14 @@ beforeEach(async () => {
       "prompt-hash",
       "{}",
     );
+  opened.sqlite
+    .prepare(
+      `insert into service_runs (
+        id, service_version, host_id, started_at, ended_at, status, start_reason,
+        end_reason, startup_config_snapshot_id
+      ) values (?, ?, ?, ?, null, ?, ?, null, ?)`,
+    )
+    .run("service-1", "0.0.0", "host-1", "2026-07-13T10:00:00Z", "ready", "startup", "config-1");
   const insertLedger = opened.sqlite.prepare(`
     insert into budget_ledgers (
       id, scope, scope_id, unit, base_limit, effective_limit, updated_at
@@ -76,6 +84,59 @@ const dispatch = {
   workRef: { kind: "issue" as const, id: "issue-1" },
 };
 
+const issueMutation = {
+  authorization: {
+    action: "update_issue_lane",
+    actor_id: "scheduler",
+    actor_kind: "orchestrator_policy" as const,
+    attempt_role: "implementation" as const,
+    authorized_at: "2026-07-13T10:00:00Z",
+    config_snapshot_id: "config-1",
+    decision_rule_ids: ["dispatch.eligible"],
+    expires_at: "2026-07-13T10:02:00Z",
+    id: "authorization-1",
+    idempotency_key: "dispatch:issue-1:attempt-1",
+    intent_id: "intent-1",
+    observed_state_ref: "tracker-revision-1",
+    operator_capability: null,
+    scope: "work" as const,
+    service_run_id: "service-1",
+    target: "issue-1",
+    target_revision: "tracker-revision-1",
+    work_ref: { issue_id: "issue-1" },
+  },
+  event: {
+    attemptId: "attempt-1",
+    changeClass: "standard" as const,
+    computeProfile: "standard" as const,
+    costUsd: null,
+    eventName: "dispatch.pending",
+    id: "event-1",
+    payload: { target_lane: "In Progress" },
+    reasonCode: "dispatch.eligible",
+    result: "pending",
+    serviceRunId: "service-1",
+    timestamp: "2026-07-13T10:00:00Z",
+    workRef: { issue_id: "issue-1" },
+  },
+  intent: {
+    action: "update_issue_lane",
+    attempt_id: "attempt-1",
+    authorization_id: "authorization-1",
+    created_at: "2026-07-13T10:00:00Z",
+    id: "intent-1",
+    idempotency_key: "dispatch:issue-1:attempt-1",
+    request_payload_hash: "sha256:lane-in-progress",
+    scope: "work" as const,
+    service_run_id: "service-1",
+    status: "pending" as const,
+    target: "issue-1",
+    target_revision: "tracker-revision-1",
+    updated_at: "2026-07-13T10:00:00Z",
+    work_ref: { issue_id: "issue-1" },
+  },
+};
+
 describe("dispatch transaction", () => {
   it("commits the claim, attempt, and every budget reservation together", async () => {
     await createDispatch(opened.database, dispatch);
@@ -96,6 +157,51 @@ describe("dispatch transaction", () => {
       { id: "fleet-ledger", reserved: 200 },
       { id: "issue-ledger", reserved: 200 },
     ]);
+  });
+
+  it("atomically commits the issue lane intent, authorization, and dispatch event", async () => {
+    await createDispatch(opened.database, { ...dispatch, issueMutation });
+
+    expect(opened.sqlite.prepare("select count(*) as count from attempts").get()).toEqual({
+      count: 1,
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from mutation_authorizations").get(),
+    ).toEqual({
+      count: 1,
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from side_effect_intents").get(),
+    ).toEqual({
+      count: 1,
+    });
+    expect(opened.sqlite.prepare("select count(*) as count from event_records").get()).toEqual({
+      count: 1,
+    });
+  });
+
+  it("rolls back dispatch when the issue mutation authority does not exactly match", async () => {
+    await expect(
+      createDispatch(opened.database, {
+        ...dispatch,
+        issueMutation: {
+          ...issueMutation,
+          authorization: { ...issueMutation.authorization, target: "wrong-issue" },
+        },
+      }),
+    ).rejects.toThrow("side_effect.authorization_mismatch");
+
+    expect(opened.sqlite.prepare("select count(*) as count from attempts").get()).toEqual({
+      count: 0,
+    });
+    expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+      count: 0,
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from side_effect_intents").get(),
+    ).toEqual({
+      count: 0,
+    });
   });
 
   it("rolls back every write when a work reference is already claimed", async () => {

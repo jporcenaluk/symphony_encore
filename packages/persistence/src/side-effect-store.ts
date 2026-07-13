@@ -52,23 +52,31 @@ export async function createAuthorizedIntent(
   database: Kysely<DatabaseSchema>,
   input: { authorization: MutationAuthorization; intent: SideEffectIntent },
 ): Promise<{ replayed: boolean }> {
+  return database
+    .transaction()
+    .execute((transaction) => createAuthorizedIntentInTransaction(transaction, input));
+}
+
+export async function createAuthorizedIntentInTransaction(
+  transaction: Transaction<DatabaseSchema>,
+  input: { authorization: MutationAuthorization; intent: SideEffectIntent },
+): Promise<{ replayed: boolean }> {
   assertExactEnvelope(input.authorization, input.intent);
-  return database.transaction().execute(async (transaction) => {
-    const existing = await sql<ExistingIntentRow>`
+  const existing = await sql<ExistingIntentRow>`
       select id, request_payload_hash
       from side_effect_intents
       where idempotency_key = ${input.intent.idempotency_key}
     `.execute(transaction);
-    const original = existing.rows[0];
-    if (original !== undefined) {
-      if (original.request_payload_hash !== input.intent.request_payload_hash) {
-        throw new Error("side_effect.idempotency_conflict");
-      }
-      return { replayed: true };
+  const original = existing.rows[0];
+  if (original !== undefined) {
+    if (original.request_payload_hash !== input.intent.request_payload_hash) {
+      throw new Error("side_effect.idempotency_conflict");
     }
+    return { replayed: true };
+  }
 
-    const authorizationWorkRef = workRefColumns(input.authorization.work_ref);
-    await sql`
+  const authorizationWorkRef = workRefColumns(input.authorization.work_ref);
+  await sql`
       insert into mutation_authorizations (
         id, intent_id, idempotency_key, scope, work_ref_kind, work_ref_id,
         service_run_id, actor_kind, actor_id, attempt_role, operator_capability,
@@ -88,8 +96,8 @@ export async function createAuthorizedIntent(
       )
     `.execute(transaction);
 
-    const intentWorkRef = workRefColumns(input.intent.work_ref);
-    await sql`
+  const intentWorkRef = workRefColumns(input.intent.work_ref);
+  await sql`
       insert into side_effect_intents (
         id, idempotency_key, scope, work_ref_kind, work_ref_id, service_run_id,
         attempt_id, action, target, target_revision, request_payload_hash,
@@ -103,8 +111,7 @@ export async function createAuthorizedIntent(
         ${input.intent.updated_at}
       )
     `.execute(transaction);
-    return { replayed: false };
-  });
+  return { replayed: false };
 }
 
 export async function markIntentApplying(

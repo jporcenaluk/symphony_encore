@@ -1,6 +1,9 @@
+import type { MutationAuthorization, SideEffectIntent } from "@symphony/contracts";
 import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import { type AppendEventRecordInput, appendEventRecordInTransaction } from "./event-store.js";
+import { createAuthorizedIntentInTransaction } from "./side-effect-store.js";
 
 export interface DispatchInput {
   attempt: {
@@ -30,6 +33,11 @@ export interface DispatchInput {
     holder: string;
     originStage: string;
     reason: string;
+  };
+  issueMutation?: {
+    authorization: MutationAuthorization;
+    event: AppendEventRecordInput;
+    intent: SideEffectIntent;
   };
   reservation: {
     id: string;
@@ -97,6 +105,17 @@ export async function createDispatch(
         insert into budget_reservation_ledgers (reservation_id, ledger_id, reserved_amount)
         values (${input.reservation.id}, ${ledger.id}, ${ledger.amount})
       `.execute(transaction);
+    }
+
+    if (input.issueMutation) {
+      if (input.workRef.kind !== "issue") {
+        throw new Error("dispatch.issue_mutation_requires_issue_work_ref");
+      }
+      await createAuthorizedIntentInTransaction(transaction, {
+        authorization: input.issueMutation.authorization,
+        intent: input.issueMutation.intent,
+      });
+      await appendEventRecordInTransaction(transaction, input.issueMutation.event);
     }
   });
 }

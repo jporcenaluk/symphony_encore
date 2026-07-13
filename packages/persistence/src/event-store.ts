@@ -39,6 +39,13 @@ export async function appendEventRecord(
   database: Kysely<DatabaseSchema>,
   input: AppendEventRecordInput,
 ): Promise<EventRecord> {
+  return appendEventRecordInTransaction(database, input);
+}
+
+export async function appendEventRecordInTransaction(
+  database: Kysely<DatabaseSchema>,
+  input: AppendEventRecordInput,
+): Promise<EventRecord> {
   if ((input.attemptId === null) !== (input.computeProfile === null)) {
     throw new Error("events.invalid_attempt_scope");
   }
