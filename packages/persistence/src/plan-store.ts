@@ -120,6 +120,27 @@ export async function loadLatestValidatedPlan(
   `.execute(database);
   const row = result.rows[0];
   if (!row) return null;
+  return planFromStoredRow(row);
+}
+
+export async function loadLatestPlanByStatus(
+  database: Kysely<DatabaseSchema>,
+  workRef: { id: string; kind: "issue" | "system_job" },
+  status: Plan["status"],
+): Promise<Plan | null> {
+  const result = await sql<StoredPlanRow>`
+    select * from plans
+    where work_ref_kind = ${workRef.kind}
+      and work_ref_id = ${workRef.id}
+      and status = ${status}
+    order by revision desc
+    limit 1
+  `.execute(database);
+  const row = result.rows[0];
+  return row ? planFromStoredRow(row) : null;
+}
+
+function planFromStoredRow(row: StoredPlanRow): Plan {
   const plan = {
     acceptance_criteria: JSON.parse(row.acceptance_criteria_json),
     approach: row.approach,

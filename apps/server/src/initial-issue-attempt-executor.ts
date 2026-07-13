@@ -92,7 +92,7 @@ export async function executePlannedInitialIssueAttempt(
   });
 }
 
-function gatePlanSubmissionUntilBound(
+export function gatePlanSubmissionUntilBound(
   handler: (plan: unknown) => Promise<AgentPlanSubmissionDecision>,
 ) {
   let bindingError: Error | undefined;
@@ -169,7 +169,7 @@ async function closeLaunchFailure(
   }
 }
 
-function launchFailureClass(error: unknown): FailureClass {
+export function launchFailureClass(error: unknown): FailureClass {
   const candidate =
     typeof error === "object" && error !== null && "code" in error
       ? (error as { code?: unknown }).code

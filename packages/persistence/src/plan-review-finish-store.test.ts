@@ -6,7 +6,7 @@ import type { PlanReviewResult } from "@symphony/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { finishPlanReviewAttempt } from "./plan-review-finish-store.js";
+import { finishPlanReviewAttempt, loadLatestPlanReviewResult } from "./plan-review-finish-store.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -50,6 +50,12 @@ describe("Plan-review attempt finish", () => {
     });
     expect(opened.sqlite.prepare("select result_kind from terminal_results").get()).toEqual({
       result_kind: "plan_review_result",
+    });
+    await expect(
+      loadLatestPlanReviewResult(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({
+      attemptId: "review-attempt",
+      result: { decision: "approve", plan_revision: 1 },
     });
     expect(opened.sqlite.prepare("select consumed, reserved from budget_ledgers").all()).toEqual([
       { consumed: 40, reserved: 0 },

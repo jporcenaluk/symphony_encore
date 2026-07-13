@@ -9,7 +9,7 @@ import {
   issueWorkspacePath,
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
-import type { AgentAdapterManifest, Issue } from "@symphony/contracts";
+import { type AgentAdapterManifest, type Issue, PlanSchema } from "@symphony/contracts";
 import { applyMigrations, observeIssue, openDatabase } from "@symphony/persistence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,6 +27,7 @@ const effectiveConfig = {
   "agent.command": "codex app-server",
   "agent.max_concurrent": 1,
   "agent.max_plan_revisions": 2,
+  "agent.max_turns": 8,
   "agent.max_retry_backoff_ms": 30_000,
   "agent.required_skills": [],
   "agent.stall_timeout_ms": 300_000,
@@ -417,6 +418,8 @@ describe("production reconciliation scheduler", () => {
       .run();
     const agent: AgentAdapter = {
       launch: vi.fn(async (request: AgentLaunchRequest) => {
+        const planReview = request.preflight.role === "plan_review";
+        const sessionId = planReview ? "review-session" : "implementation-session";
         const session: AgentSession = {
           cancel: vi.fn(async () => undefined),
           events: {
@@ -425,38 +428,70 @@ describe("production reconciliation scheduler", () => {
                 attempt_id: request.attemptId,
                 event: "session_started" as const,
                 model: "gpt-test",
-                reasoning_effort: "low",
-                session_id: "review-session",
-                thread_id: "review-thread",
+                reasoning_effort: planReview ? "low" : "high",
+                session_id: sessionId,
+                thread_id: planReview ? "review-thread" : "implementation-thread",
                 timestamp: "2026-07-13T10:00:01Z",
-                turn_id: "review-turn",
+                turn_id: planReview ? "review-turn" : "implementation-turn",
               };
+              if (!planReview) {
+                yield {
+                  action_id: "action-1",
+                  attempt_id: request.attemptId,
+                  cwd: request.workspacePath,
+                  event: "action_started" as const,
+                  exit_code: null,
+                  kind: "file_change",
+                  output_ref: null,
+                  result_status: null,
+                  session_id: sessionId,
+                  summary: "Implement approved Plan",
+                  timestamp: "2026-07-13T10:00:02Z",
+                };
+              }
               yield {
                 attempt_id: request.attemptId,
                 event: "terminal_result_reported" as const,
-                result: {
-                  decision: "approve",
-                  evidence: [{ kind: "file", path: "PLAN.md" }],
-                  findings: [],
-                  handoff: {
-                    acceptance_criteria: reviewIssue.acceptance_criteria,
-                    commands: [],
-                    decisions_fixed: [],
-                    files_changed: [],
-                    goal: reviewIssue.title,
-                    open_items: [],
-                    revision: "abc1234",
-                  },
-                  plan_revision: 1,
-                },
-                session_id: "review-session",
+                result: planReview
+                  ? {
+                      decision: "approve",
+                      evidence: [{ kind: "file", path: "PLAN.md" }],
+                      findings: [],
+                      handoff: {
+                        acceptance_criteria: reviewIssue.acceptance_criteria,
+                        commands: [],
+                        decisions_fixed: [],
+                        files_changed: [],
+                        goal: reviewIssue.title,
+                        open_items: [],
+                        revision: "abc1234",
+                      },
+                      plan_revision: 1,
+                    }
+                  : {
+                      actions_requested: [],
+                      confusions: [],
+                      evidence: [],
+                      handoff: {
+                        acceptance_criteria: reviewIssue.acceptance_criteria,
+                        commands: [],
+                        decisions_fixed: [],
+                        files_changed: [],
+                        goal: reviewIssue.title,
+                        open_items: reviewIssue.acceptance_criteria,
+                        revision: "abc1234",
+                      },
+                      status: "needs_rework",
+                      summary: "Continue implementation.",
+                    },
+                session_id: sessionId,
                 timestamp: "2026-07-13T10:00:02Z",
               };
               yield {
                 attempt_id: request.attemptId,
                 event: "turn_completed" as const,
                 provider_reason: "completed",
-                session_id: "review-session",
+                session_id: sessionId,
                 timestamp: "2026-07-13T10:00:03Z",
               };
             },
@@ -474,7 +509,7 @@ describe("production reconciliation scheduler", () => {
         protocolSchemaHash: manifest.protocol.schema_hash,
         resolvedSkills: request.requiredSkills,
         role: request.role,
-        submitPlanSchema: null,
+        submitPlanSchema: request.submitPlanSchema ?? null,
         terminalResultSchema: request.terminalResultSchema,
       })),
     };
@@ -515,11 +550,21 @@ describe("production reconciliation scheduler", () => {
     });
 
     await scheduler.start();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "implementation_after_plan_approval",
+      }),
+    );
+    await scheduler.trigger();
     await scheduler.close();
 
-    expect(tracker.fetchCandidates).toHaveBeenCalledOnce();
+    expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2);
     expect(agent.preflight).toHaveBeenCalledWith(expect.objectContaining({ role: "plan_review" }));
-    expect(agent.launch).toHaveBeenCalledOnce();
+    expect(agent.preflight).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "implementation", submitPlanSchema: PlanSchema }),
+    );
+    expect(agent.launch).toHaveBeenCalledTimes(2);
     expect(opened.sqlite.prepare("select status, approved_by_attempt_id from plans").get()).toEqual(
       {
         approved_by_attempt_id: expect.any(String),
@@ -528,7 +573,7 @@ describe("production reconciliation scheduler", () => {
     );
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
-      reason: "implementation_after_plan_approval",
+      reason: "implementation_rework",
     });
     await opened.close();
   });

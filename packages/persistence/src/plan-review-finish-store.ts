@@ -1,4 +1,4 @@
-import type { PlanReviewResult } from "@symphony/contracts";
+import { isPlanReviewResult, type PlanReviewResult } from "@symphony/contracts";
 import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -21,6 +21,37 @@ export interface FinishPlanReviewAttemptInput {
 
 interface ReviewedPlanRow {
   revision: number;
+}
+
+interface StoredPlanReviewResultRow {
+  attempt_id: string;
+  payload_json: string;
+}
+
+export async function loadLatestPlanReviewResult(
+  database: Kysely<DatabaseSchema>,
+  workRef: { id: string; kind: "issue" | "system_job" },
+): Promise<{ attemptId: string; result: PlanReviewResult } | null> {
+  const query = await sql<StoredPlanReviewResultRow>`
+    select result.attempt_id, result.payload_json
+    from terminal_results result
+    join attempts attempt on attempt.id = result.attempt_id
+    where attempt.work_ref_kind = ${workRef.kind}
+      and attempt.work_ref_id = ${workRef.id}
+      and attempt.role = 'plan_review'
+      and attempt.status = 'closed'
+      and result.role = 'plan_review'
+      and result.result_kind = 'plan_review_result'
+    order by attempt.attempt_number desc
+    limit 1
+  `.execute(database);
+  const row = query.rows[0];
+  if (!row) return null;
+  const result: unknown = JSON.parse(row.payload_json);
+  if (!isPlanReviewResult(result)) {
+    throw new Error("plan_review.persisted_result_invalid");
+  }
+  return { attemptId: row.attempt_id, result };
 }
 
 export async function finishPlanReviewAttempt(

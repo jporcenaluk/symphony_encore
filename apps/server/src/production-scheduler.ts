@@ -33,12 +33,16 @@ import {
   isWorkClaimed,
   loadClaimRecoveryState,
   loadIssue,
+  loadLatestPlanByStatus,
+  loadLatestPlanReviewResult,
   loadLatestValidatedPlan,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
 
 import { syncTrackerCandidates } from "./candidate-sync.js";
+import { startPlannedImplementationContinuationLifecycle } from "./implementation-continuation-lifecycle.js";
+import { planImplementationContinuation } from "./implementation-continuation-planner.js";
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
@@ -157,50 +161,133 @@ export function createProductionScheduler(input: {
       const recoveryState = await loadClaimRecoveryState(input.database, new Date().toISOString());
       for (const claim of recoveryState.ready) {
         if (availableSlots < 1 || !safety.canDispatch()) break;
-        if (claim.reason !== "plan_review_required" || !("issue_id" in claim.work_ref)) continue;
+        const isPlanReview = claim.reason === "plan_review_required";
+        const isImplementationContinuation =
+          claim.reason === "implementation_after_plan_approval" ||
+          claim.reason === "plan_revision_required";
+        if ((!isPlanReview && !isImplementationContinuation) || !("issue_id" in claim.work_ref)) {
+          continue;
+        }
         const issueId = claim.work_ref.issue_id;
         try {
           const stored = await loadIssue(input.database, issueId);
           if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
-          const plan = await loadLatestValidatedPlan(input.database, {
-            id: issueId,
-            kind: "issue",
-          });
-          if (!plan) throw new Error(`scheduler.ready_plan_missing:${issueId}`);
-          const planned = await planHighRiskPlanReviewAttempt({
-            adapter: agent,
-            configSnapshotId: input.snapshot.id,
-            configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
-            database: input.database,
-            issue: stored.issue,
-            newId: randomUUID,
-            now: () => new Date().toISOString(),
-            plan,
-            serviceRunId: input.serviceRunId,
-            terminalResultSchema: PlanReviewResultSchema,
-          });
-          const started = await startPlannedPlanReviewAttemptLifecycle({
-            adapter: agent,
-            agentCommand: stringValue(values, "agent.command"),
-            afterCreateCommand: nullableString(values, "hooks.after_create"),
-            allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
-            attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
-            beforeRunCommand: nullableString(values, "hooks.before_run"),
-            database: input.database,
-            hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
-            issue: stored.issue,
-            maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
-            newId: randomUUID,
-            now: () => new Date().toISOString(),
-            plan,
-            planned,
-            repositoryAdapter,
-            safety,
-            serviceRunId: input.serviceRunId,
-            sourceEnvironment: input.environment,
-            usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
-            workspaceRoot: stringValue(values, "workspace.root"),
-          });
+          let planned:
+            | Awaited<ReturnType<typeof planHighRiskPlanReviewAttempt>>
+            | Awaited<ReturnType<typeof planImplementationContinuation>>;
+          let started:
+            | Awaited<ReturnType<typeof startPlannedPlanReviewAttemptLifecycle>>
+            | Awaited<ReturnType<typeof startPlannedImplementationContinuationLifecycle>>;
+          if (isPlanReview) {
+            const plan = await loadLatestValidatedPlan(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!plan) throw new Error(`scheduler.ready_plan_missing:${issueId}`);
+            planned = await planHighRiskPlanReviewAttempt({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              database: input.database,
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              plan,
+              serviceRunId: input.serviceRunId,
+              terminalResultSchema: PlanReviewResultSchema,
+            });
+            started = await startPlannedPlanReviewAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: stored.issue,
+              maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              plan,
+              planned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+          } else {
+            const mode =
+              claim.reason === "implementation_after_plan_approval"
+                ? ("approved_plan" as const)
+                : ("plan_revision" as const);
+            const plan = await loadLatestPlanByStatus(
+              input.database,
+              { id: issueId, kind: "issue" },
+              mode === "approved_plan" ? "approved" : "rejected",
+            );
+            const review = await loadLatestPlanReviewResult(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!plan || !review) {
+              throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
+            }
+            const implementationPlanned = await planImplementationContinuation({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              database: input.database,
+              issue: stored.issue,
+              mode,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              plan,
+              reviewResult: review.result,
+              serviceRunId: input.serviceRunId,
+              submitPlanSchema: PlanSchema,
+              terminalResultSchema: ImplementationOutcomeSchema,
+            });
+            started = await startPlannedImplementationContinuationLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              onPlanSubmitted: createInitialPlanSubmissionHandler({
+                attemptId: implementationPlanned.attemptId,
+                database: input.database,
+                issue: stored.issue,
+                now: () => new Date().toISOString(),
+                provisionalClassification: {
+                  changeClass: "high_risk",
+                  floor: "high_risk",
+                  reasons: ["classification.reviewed_high_risk_plan"],
+                },
+                riskPathPatterns: stringList(values, "class.risk_paths"),
+                safety,
+                trivialMaxChangedLines: numberValue(values, "class.trivial_max_changed_lines"),
+                trivialPathPatterns: stringList(values, "class.trivial_patterns"),
+                workspacePath: implementationPlanned.dispatch.attempt.workspacePath,
+              }),
+              planned: implementationPlanned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            planned = implementationPlanned;
+          }
           availableSlots -= 1;
           running.set(planned.attemptId, {
             attemptId: planned.attemptId,
@@ -220,13 +307,13 @@ export function createProductionScheduler(input: {
             (error) =>
               input.logger?.error(
                 { attempt_id: planned.attemptId, error },
-                "Plan-review attempt lifecycle failed",
+                "Ready continuation attempt lifecycle failed",
               ),
           );
         } catch (error) {
           input.logger?.warn(
             { error, issue_id: issueId },
-            "Ready Plan-review dispatch skipped scheduler tick",
+            "Ready continuation dispatch skipped scheduler tick",
           );
           if (!safety.canDispatch()) throw error;
         }
@@ -405,6 +492,7 @@ function initialAttemptConfiguration(
   const estimates = profileMap(values, "budget.estimate_tokens_by_profile");
   const home = environment.HOME;
   return {
+    attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
     budgetLimits: {
       attemptTokens: numberValue(values, "budget.per_attempt_tokens"),
       attemptUsd: positiveNumberValue(values, "budget.per_attempt_usd"),
@@ -418,6 +506,7 @@ function initialAttemptConfiguration(
     historyMinSamples: numberValue(values, "budget.history_min_samples"),
     historyWindowSamples: numberValue(values, "budget.history_window_samples"),
     leaseTtlMs: numberValue(values, "persistence.lease_ttl_ms"),
+    maxTurns: numberValue(values, "agent.max_turns"),
     prompt,
     requiredSkills: stringList(values, "agent.required_skills"),
     riskFloorRules: routing.riskFloorRules,

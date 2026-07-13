@@ -68,6 +68,10 @@ export const PlanReviewResultSchema = Type.Union([
 ]);
 export type PlanReviewResult = Static<typeof PlanReviewResultSchema>;
 
+export function isPlanReviewResult(value: unknown): value is PlanReviewResult {
+  return Value.Check(PlanReviewResultSchema, value);
+}
+
 const ReviewFindingProperties = {
   behavior: NonEmptyString,
   disposition: NonEmptyString,
