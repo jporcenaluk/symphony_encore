@@ -3,6 +3,8 @@
  * Do not edit by hand; run `pnpm openapi:generate`.
  */
 import type {
+  ConfigurationOverrideMutation,
+  ConfigurationOverrideMutationResponse,
   ControlState,
   ErrorEnvelope,
   EventRecordPage,
@@ -26,6 +28,11 @@ export class ControlApiClientError extends Error {
 export interface ControlApiClient {
   getHealth(): Promise<HealthResponse>;
   login(input: LoginRequest): Promise<LoginResponse>;
+  mutateConfigurationOverride(
+    key: string,
+    input: ConfigurationOverrideMutation,
+    csrfToken: string,
+  ): Promise<ConfigurationOverrideMutationResponse>;
   getReady(): Promise<ReadyResponse>;
   streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;
   listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
@@ -42,12 +49,18 @@ export function createControlApiClient(
   fetchImplementation: typeof fetch = globalThis.fetch,
 ): ControlApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
-  const request = async <T>(operationPath: string, method: string, body?: unknown): Promise<T> => {
+  const request = async <T>(
+    operationPath: string,
+    method: string,
+    body?: unknown,
+    csrfToken?: string,
+  ): Promise<T> => {
     const response = await fetchImplementation(`${normalizedBaseUrl}${operationPath}`, {
       credentials: "same-origin",
       headers: {
         accept: "application/json",
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(csrfToken === undefined ? {} : { "x-csrf-token": csrfToken }),
       },
       method,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -59,6 +72,13 @@ export function createControlApiClient(
   return {
     getHealth: () => request<HealthResponse>("/health", "GET"),
     login: (input) => request<LoginResponse>("/api/v1/auth/login", "POST", input),
+    mutateConfigurationOverride: (key, input, csrfToken) =>
+      request<ConfigurationOverrideMutationResponse>(
+        `/api/v1/config/overrides/${encodeURIComponent(key)}`,
+        "PUT",
+        input,
+        csrfToken,
+      ),
     getReady: () => request<ReadyResponse>("/ready", "GET"),
     streamEvents: (input = {}) => {
       const suffix = input.afterCursor === undefined ? "" : `?after_cursor=${input.afterCursor}`;

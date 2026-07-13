@@ -19,6 +19,7 @@ describe("generated OpenAPI contract", () => {
     expect(Object.keys(document.paths)).toEqual([
       "/health",
       "/api/v1/auth/login",
+      "/api/v1/config/overrides/{key}",
       "/ready",
       "/api/v1/events/stream",
       "/api/v1/events",

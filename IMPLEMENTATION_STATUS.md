@@ -29,7 +29,7 @@ command. A green but narrower test does not complete a broader item.
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
-| S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated capability-gated Control API read foundation passes; mutations and remaining resources pending |
+| S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated reads plus a recovery-gated, CSRF-bound, capability/version/idempotency/audit protected configuration mutation pass; remaining mutation resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, and readiness ordering pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
@@ -46,7 +46,7 @@ command. A green but narrower test does not complete a broader item.
 | T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck |
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
-| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | TypeBox routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
+| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
@@ -158,3 +158,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Ordered startup termination, atomic interrupted closure, quarantine, and readiness |
 | 2026-07-13 | working tree | `make verify-fast` | 235 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Atomic pristine bootstrap, local password verification, hash-only sessions, login cookie, and same-origin CSRF |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Atomic pristine bootstrap, local password verification, hash-only sessions, login cookie, and same-origin CSRF |
+| 2026-07-13 | working tree | `make verify-fast` | 239 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Recovery-gated configuration mutation with capability, CSRF, version, idempotency, validation, and audit |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Recovery-gated configuration mutation with capability, CSRF, version, idempotency, validation, and audit |

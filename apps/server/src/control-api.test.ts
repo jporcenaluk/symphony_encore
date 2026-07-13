@@ -1,4 +1,9 @@
-import type { ActiveServiceState, ControlState, EventRecord } from "@symphony/contracts";
+import type {
+  ActiveServiceState,
+  ConfigurationOverrideMutationResponse,
+  ControlState,
+  EventRecord,
+} from "@symphony/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type ControlApi, createControlApi } from "./control-api.js";
@@ -12,6 +17,7 @@ afterEach(async () => {
 async function fixture(input?: {
   capabilities?: readonly string[];
   authenticated?: boolean;
+  csrfValid?: boolean;
   secureCookie?: boolean;
 }) {
   let serviceState: ActiveServiceState = "recovering";
@@ -27,6 +33,12 @@ async function fixture(input?: {
     version: "state-1",
   };
   const listEvents = vi.fn(async () => ({ has_more: false, items: [], next_cursor: 7 }));
+  const mutateConfigurationOverride = vi.fn(
+    async (_request: unknown): Promise<ConfigurationOverrideMutationResponse> => ({
+      result: "accepted",
+      version: 1,
+    }),
+  );
   const streamEvents = vi.fn((request: { afterCursor: number; signal: AbortSignal }) =>
     (async function* (): AsyncGenerator<EventRecord> {
       yield {
@@ -53,7 +65,17 @@ async function fixture(input?: {
       }
       return {
         authSubject: "subject-1",
-        capabilities: input?.capabilities ?? ["operator.read"],
+        capabilities: input?.capabilities ?? ["operator.read", "config.write"],
+        operatorId: "operator-1",
+      };
+    },
+    async authenticateMutation(request) {
+      if (input?.csrfValid === false || request.headers["x-csrf-token"] !== "csrf-valid") {
+        return null;
+      }
+      return {
+        authSubject: "subject-1",
+        capabilities: input?.capabilities ?? ["operator.read", "config.write"],
         operatorId: "operator-1",
       };
     },
@@ -76,18 +98,24 @@ async function fixture(input?: {
       };
     },
     async readControlState() {
-      return { ...state, service_run: { ...state.service_run, status: serviceState } };
+      return {
+        ...state,
+        mutations_enabled: serviceState === "ready",
+        service_run: { ...state.service_run, status: serviceState },
+      };
     },
     async readServiceStatus() {
       return { id: "run-1", state: serviceState };
     },
     listEvents,
+    mutateConfigurationOverride,
     sessionCookieSecure: input?.secureCookie ?? false,
     streamEvents,
   });
   servers.push(server);
   return {
     listEvents,
+    mutateConfigurationOverride,
     server,
     setServiceState: (value: ActiveServiceState) => (serviceState = value),
     streamEvents,
@@ -139,6 +167,94 @@ describe("Control API", () => {
       url: "/api/v1/auth/login",
     });
     expect(valid.headers["set-cookie"]).toContain("; Secure");
+  });
+
+  it("applies a CSRF-bound capability-gated configuration override mutation", async () => {
+    const { mutateConfigurationOverride, server, setServiceState } = await fixture();
+    setServiceState("ready");
+    await server.ready();
+
+    const response = await server.inject({
+      headers: { authorization: "Session valid", "x-csrf-token": "csrf-valid" },
+      method: "PUT",
+      payload: {
+        expected_version: 0,
+        idempotency_key: "override-1",
+        operation: "set",
+        reason: "slow polling",
+        value: 10_000,
+      },
+      url: "/api/v1/config/overrides/polling.interval_ms",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ result: "accepted", version: 1 });
+    expect(mutateConfigurationOverride).toHaveBeenCalledWith({
+      expectedVersion: 0,
+      idempotencyKey: "override-1",
+      key: "polling.interval_ms",
+      operation: "set",
+      operator: {
+        authSubject: "subject-1",
+        capabilities: ["operator.read", "config.write"],
+        operatorId: "operator-1",
+      },
+      reason: "slow polling",
+      value: 10_000,
+    });
+  });
+
+  it("rejects missing CSRF before mutation and maps version conflicts to 409", async () => {
+    const invalidCsrf = await fixture({ csrfValid: false });
+    invalidCsrf.setServiceState("ready");
+    await invalidCsrf.server.ready();
+    const request = {
+      headers: { authorization: "Session valid", "x-csrf-token": "wrong" },
+      method: "PUT" as const,
+      payload: {
+        expected_version: 0,
+        idempotency_key: "override-1",
+        operation: "clear",
+        reason: "restore default",
+      },
+      url: "/api/v1/config/overrides/polling.interval_ms",
+    };
+    const forbidden = await invalidCsrf.server.inject(request);
+    expect(forbidden.statusCode).toBe(403);
+    expect(forbidden.json().error.code).toBe("csrf_failed");
+    expect(invalidCsrf.mutateConfigurationOverride).not.toHaveBeenCalled();
+
+    const conflict = await fixture();
+    conflict.setServiceState("ready");
+    conflict.mutateConfigurationOverride.mockResolvedValueOnce({
+      result: "version_conflict",
+      version: 7,
+    });
+    const response = await conflict.server.inject({
+      ...request,
+      headers: { authorization: "Session valid", "x-csrf-token": "csrf-valid" },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ result: "version_conflict", version: 7 });
+  });
+
+  it("keeps configuration mutations disabled until recovery reaches ready", async () => {
+    const { mutateConfigurationOverride, server } = await fixture();
+    await server.ready();
+    const response = await server.inject({
+      headers: { authorization: "Session valid", "x-csrf-token": "csrf-valid" },
+      method: "PUT",
+      payload: {
+        expected_version: 0,
+        idempotency_key: "override-1",
+        operation: "clear",
+        reason: "restore default",
+      },
+      url: "/api/v1/config/overrides/polling.interval_ms",
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("mutations_disabled");
+    expect(mutateConfigurationOverride).not.toHaveBeenCalled();
   });
 
   it("keeps liveness available while readiness reports recovery", async () => {

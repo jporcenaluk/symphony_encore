@@ -5,6 +5,7 @@ import {
   appendEventRecord,
   applyMigrations,
   beginServiceRun,
+  completeServiceRecovery,
   type OpenedDatabase,
   openDatabase,
 } from "@symphony/persistence";
@@ -46,7 +47,14 @@ describe("persistent Control API composition", () => {
       async authenticate() {
         return {
           authSubject: "subject-1",
-          capabilities: ["operator.read"],
+          capabilities: ["operator.read", "config.write"],
+          operatorId: "operator-1",
+        };
+      },
+      async authenticateMutation() {
+        return {
+          authSubject: "subject-1",
+          capabilities: ["operator.read", "config.write"],
           operatorId: "operator-1",
         };
       },
@@ -54,7 +62,10 @@ describe("persistent Control API composition", () => {
       async login() {
         return null;
       },
+      newActionId: () => "action-override-1",
+      now: () => "2026-07-13T10:01:00Z",
       sessionCookieSecure: false,
+      validateConfigurationOverride: () => null,
     });
     servers.push(server);
     await server.ready();
@@ -90,6 +101,31 @@ describe("persistent Control API composition", () => {
       has_more: false,
       items: [{ cursor: 1, id: "event-1" }],
       next_cursor: 1,
+    });
+
+    await completeServiceRecovery(opened.database, {
+      completedAt: "2026-07-13T10:02:00Z",
+      ownershipReconciled: true,
+      serviceRunId: "run-1",
+    });
+    const mutation = await server.inject({
+      method: "PUT",
+      payload: {
+        expected_version: 0,
+        idempotency_key: "override-request-1",
+        operation: "set",
+        reason: "test durable mutation",
+        value: 5_000,
+      },
+      url: "/api/v1/config/overrides/polling.interval_ms",
+    });
+    expect(mutation.statusCode).toBe(200);
+    expect(mutation.json()).toEqual({ result: "accepted", version: 1 });
+    expect(
+      opened.sqlite.prepare("select key, value_json, version from configuration_overrides").get(),
+    ).toEqual({ key: "polling.interval_ms", value_json: "5000", version: 1 });
+    expect(opened.sqlite.prepare("select result from operator_actions").get()).toEqual({
+      result: "accepted",
     });
   });
 });

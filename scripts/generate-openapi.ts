@@ -24,8 +24,14 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
     async authenticate() {
       return null;
     },
+    async authenticateMutation() {
+      return null;
+    },
     async login() {
       return null;
+    },
+    async mutateConfigurationOverride() {
+      return { result: "accepted" as const, version: 1 };
     },
     async listEvents() {
       return { has_more: false, items: [], next_cursor: 0 };
@@ -62,6 +68,7 @@ const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
   getHealth: "HealthResponse",
   getReady: "ReadyResponse",
   login: "LoginResponse",
+  mutateConfigurationOverride: "ConfigurationOverrideMutationResponse",
   listEvents: "EventRecordPage",
   streamEvents: "ControlEventStreamRequest",
 };
@@ -109,6 +116,15 @@ export async function renderControlApiClient(): Promise<string> {
       if (operation.operationId === "login") {
         return `    login: (input) => request<LoginResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
       }
+      if (operation.operationId === "mutateConfigurationOverride") {
+        return `    mutateConfigurationOverride: (key, input, csrfToken) =>
+      request<ConfigurationOverrideMutationResponse>(
+        \`/api/v1/config/overrides/\${encodeURIComponent(key)}\`,
+        ${JSON.stringify(operation.method)},
+        input,
+        csrfToken,
+      ),`;
+      }
       return `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`;
     })
     .join("\n");
@@ -117,6 +133,8 @@ export async function renderControlApiClient(): Promise<string> {
  * Do not edit by hand; run \`pnpm openapi:generate\`.
  */
 import type {
+  ConfigurationOverrideMutation,
+  ConfigurationOverrideMutationResponse,
   ControlState,
   ErrorEnvelope,
   EventRecordPage,
@@ -138,7 +156,23 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : operation.operationId === "streamEvents" ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;" : operation.operationId === "login" ? "  login(input: LoginRequest): Promise<LoginResponse>;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
+${operations
+  .map((operation) =>
+    operation.operationId === "listEvents"
+      ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;"
+      : operation.operationId === "streamEvents"
+        ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;"
+        : operation.operationId === "login"
+          ? "  login(input: LoginRequest): Promise<LoginResponse>;"
+          : operation.operationId === "mutateConfigurationOverride"
+            ? `  mutateConfigurationOverride(
+    key: string,
+    input: ConfigurationOverrideMutation,
+    csrfToken: string,
+  ): Promise<ConfigurationOverrideMutationResponse>;`
+            : `  ${operation.operationId}(): Promise<${operation.returnType}>;`,
+  )
+  .join("\n")}
 }
 
 export interface ControlEventStreamRequest {
@@ -151,12 +185,18 @@ export function createControlApiClient(
   fetchImplementation: typeof fetch = globalThis.fetch,
 ): ControlApiClient {
   const normalizedBaseUrl = baseUrl.replace(/\\/$/u, "");
-  const request = async <T>(operationPath: string, method: string, body?: unknown): Promise<T> => {
+  const request = async <T>(
+    operationPath: string,
+    method: string,
+    body?: unknown,
+    csrfToken?: string,
+  ): Promise<T> => {
     const response = await fetchImplementation(\`\${normalizedBaseUrl}\${operationPath}\`, {
       credentials: "same-origin",
       headers: {
         accept: "application/json",
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(csrfToken === undefined ? {} : { "x-csrf-token": csrfToken }),
       },
       method,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),

@@ -1,7 +1,11 @@
 import swagger from "@fastify/swagger";
 import { type TypeBoxTypeProvider, TypeBoxValidatorCompiler } from "@fastify/type-provider-typebox";
+import { Type } from "@sinclair/typebox";
 import {
   type ActiveServiceState,
+  ConfigurationOverrideMutationResponseSchema,
+  ConfigurationOverrideMutationSchema,
+  ConfigurationOverrideParamsSchema,
   type ControlState,
   ControlStateSchema,
   ErrorEnvelopeSchema,
@@ -28,6 +32,7 @@ export interface OperatorPrincipal {
 
 export interface ControlApiDependencies {
   authenticate(request: FastifyRequest): Promise<OperatorPrincipal | null>;
+  authenticateMutation(request: FastifyRequest): Promise<OperatorPrincipal | null>;
   login(input: { authSubject: string; password: string }): Promise<{
     csrfToken: string;
     expiresAt: string;
@@ -35,6 +40,18 @@ export interface ControlApiDependencies {
     sessionToken: string;
   } | null>;
   listEvents(input: { afterCursor: number; limit: number }): Promise<EventRecordPage>;
+  mutateConfigurationOverride(input: {
+    expectedVersion: number;
+    idempotencyKey: string;
+    key: string;
+    operation: "set" | "clear";
+    operator: OperatorPrincipal;
+    reason: string;
+    value?: unknown;
+  }): Promise<{
+    result: "accepted" | "idempotency_conflict" | "version_conflict" | "validation_failed";
+    version: number;
+  }>;
   readControlState(): Promise<ControlState>;
   readServiceStatus(): Promise<{ id: string; state: ActiveServiceState }>;
   sessionCookieSecure: boolean;
@@ -149,6 +166,91 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
           operator_id: login.principal.operatorId,
         },
       });
+    },
+  );
+
+  server.put(
+    "/api/v1/config/overrides/:key",
+    {
+      schema: {
+        body: ConfigurationOverrideMutationSchema,
+        operationId: "mutateConfigurationOverride",
+        params: ConfigurationOverrideParamsSchema,
+        response: {
+          200: ConfigurationOverrideMutationResponseSchema,
+          401: ErrorEnvelopeSchema,
+          403: ErrorEnvelopeSchema,
+          409: ConfigurationOverrideMutationResponseSchema,
+          422: Type.Union([ConfigurationOverrideMutationResponseSchema, ErrorEnvelopeSchema]),
+          503: ErrorEnvelopeSchema,
+        },
+        security: [{ sessionCookie: [] }],
+        summary: "Set or clear a durable configuration override",
+        tags: ["control"],
+      },
+    },
+    async (request, reply) => {
+      const authenticated = await dependencies.authenticate(request);
+      if (authenticated === null) {
+        return reply.code(401).send({
+          error: {
+            code: "authentication_required",
+            current_version: null,
+            details: {},
+            message: "Authentication is required",
+          },
+        });
+      }
+      if (!authenticated.capabilities.includes("config.write")) {
+        return reply.code(403).send({
+          error: {
+            code: "capability_required",
+            current_version: null,
+            details: { capability: "config.write" },
+            message: "The config.write capability is required",
+          },
+        });
+      }
+      const mutationOperator = await dependencies.authenticateMutation(request);
+      if (
+        mutationOperator === null ||
+        mutationOperator.operatorId !== authenticated.operatorId ||
+        mutationOperator.authSubject !== authenticated.authSubject
+      ) {
+        return reply.code(403).send({
+          error: {
+            code: "csrf_failed",
+            current_version: null,
+            details: {},
+            message: "Same-origin CSRF verification failed",
+          },
+        });
+      }
+
+      const controlState = await dependencies.readControlState();
+      if (!controlState.mutations_enabled) {
+        return reply.code(503).send({
+          error: {
+            code: "mutations_disabled",
+            current_version: controlState.version,
+            details: { service_state: controlState.service_run.status },
+            message: "Control mutations are disabled until recovery completes",
+          },
+        });
+      }
+
+      const result = await dependencies.mutateConfigurationOverride({
+        expectedVersion: request.body.expected_version,
+        idempotencyKey: request.body.idempotency_key,
+        key: request.params.key,
+        operation: request.body.operation,
+        operator: mutationOperator,
+        reason: request.body.reason,
+        ...(request.body.operation === "set" ? { value: request.body.value } : {}),
+      });
+      const status =
+        result.result === "accepted" ? 200 : result.result === "validation_failed" ? 422 : 409;
+      return reply.code(status).send(result);
     },
   );
 

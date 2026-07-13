@@ -76,6 +76,35 @@ describe("generated Control API client", () => {
     );
   });
 
+  it("encodes configuration keys and binds the CSRF token to mutation requests", async () => {
+    const fetchImplementation = vi.fn(async () =>
+      Response.json({ result: "accepted", version: 1 }),
+    );
+    const client = createControlApiClient("http://127.0.0.1:3000", fetchImplementation);
+    const input = {
+      expected_version: 0,
+      idempotency_key: "override-1",
+      operation: "set" as const,
+      reason: "test",
+      value: 5_000,
+    };
+
+    await client.mutateConfigurationOverride("polling.interval_ms", input, "csrf-token");
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "http://127.0.0.1:3000/api/v1/config/overrides/polling.interval_ms",
+      {
+        body: JSON.stringify(input),
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-csrf-token": "csrf-token",
+        },
+        method: "PUT",
+      },
+    );
+  });
+
   it("builds a credentialed EventSource request from the streaming operation", () => {
     const client = createControlApiClient("http://127.0.0.1:3000/", vi.fn());
 

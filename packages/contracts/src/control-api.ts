@@ -72,6 +72,56 @@ export const LoginResponseSchema = Type.Object(
 );
 export type LoginResponse = Static<typeof LoginResponseSchema>;
 
+export const ConfigurationOverrideParamsSchema = Type.Object(
+  {
+    key: Type.String({
+      maxLength: 256,
+      minLength: 3,
+      pattern: "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$",
+    }),
+  },
+  { additionalProperties: false },
+);
+export type ConfigurationOverrideParams = Static<typeof ConfigurationOverrideParamsSchema>;
+
+const ConfigurationMutationEnvelope = {
+  expected_version: Type.Integer({ minimum: 0 }),
+  idempotency_key: Type.String({ maxLength: 256, minLength: 1 }),
+  reason: Type.String({ maxLength: 2000, minLength: 1 }),
+};
+
+export const ConfigurationOverrideMutationSchema = Type.Union([
+  Type.Object(
+    {
+      ...ConfigurationMutationEnvelope,
+      operation: Type.Literal("set"),
+      value: Type.Unknown(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { ...ConfigurationMutationEnvelope, operation: Type.Literal("clear") },
+    { additionalProperties: false },
+  ),
+]);
+export type ConfigurationOverrideMutation = Static<typeof ConfigurationOverrideMutationSchema>;
+
+export const ConfigurationOverrideMutationResponseSchema = Type.Object(
+  {
+    result: Type.Union([
+      Type.Literal("accepted"),
+      Type.Literal("idempotency_conflict"),
+      Type.Literal("version_conflict"),
+      Type.Literal("validation_failed"),
+    ]),
+    version: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+export type ConfigurationOverrideMutationResponse = Static<
+  typeof ConfigurationOverrideMutationResponseSchema
+>;
+
 export const ControlStateSchema = Type.Object(
   {
     dispatch_enabled: Type.Boolean(),
