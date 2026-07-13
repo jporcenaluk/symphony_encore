@@ -117,6 +117,160 @@ describe("GitHub repository transport", () => {
     });
   });
 
+  it("updates an exact pull request head against the observed base revision", async () => {
+    const branch = githubBranchForWorkRef(workRef);
+    const graphql = vi.fn().mockResolvedValue({
+      data: basicPullRequest(branch, "def5678", "abc1234"),
+      requestId: "REQ-BASIC",
+    });
+    const rest = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(
+          {
+            message: "Updating pull request branch.",
+            url: "https://github.com/owner/repo/pull/42",
+          },
+          "REQ-UPDATE",
+        ),
+      )
+      .mockResolvedValueOnce(
+        response(
+          { object: { sha: "fedcba9", type: "commit" }, ref: `refs/heads/${branch}` },
+          "REQ-REF",
+        ),
+      );
+    const transport = createGitHubRepositoryTransport({
+      api: { graphql: graphql as GhCliApiClient["graphql"], rest },
+      commandRunner: { run: vi.fn() },
+      environment: {},
+      repository: "owner/repo",
+      timeoutMs: 5_000,
+    });
+
+    await expect(
+      transport.updateBranch(workRef, "def5678", "abc1234", "intent-update"),
+    ).resolves.toMatchObject({
+      branch,
+      headSha: "fedcba9",
+      mutation: {
+        providerRequestId: "REQ-UPDATE",
+        result: "updated",
+        resultRevision: "fedcba9",
+      },
+    });
+    expect(rest).toHaveBeenNthCalledWith(1, {
+      body: { expected_head_sha: "def5678" },
+      method: "PUT",
+      path: "repos/owner/repo/pulls/42/update-branch",
+    });
+  });
+
+  it("merges only the exact pull request head with an allowlisted landing method", async () => {
+    const branch = githubBranchForWorkRef(workRef);
+    const graphql = vi.fn().mockResolvedValue({
+      data: basicPullRequest(branch, "def5678", "abc1234"),
+      requestId: "REQ-BASIC",
+    });
+    const rest = vi
+      .fn()
+      .mockResolvedValue(
+        response(
+          { merged: true, message: "Pull Request successfully merged", sha: "fedcba9" },
+          "REQ-MERGE",
+        ),
+      );
+    const transport = createGitHubRepositoryTransport({
+      api: { graphql: graphql as GhCliApiClient["graphql"], rest },
+      commandRunner: { run: vi.fn() },
+      environment: {},
+      repository: "owner/repo",
+      timeoutMs: 5_000,
+    });
+
+    await expect(
+      transport.mergePullRequest(workRef, "def5678", "squash", "intent-merge"),
+    ).resolves.toMatchObject({
+      mergeSha: "fedcba9",
+      mutation: {
+        providerRequestId: "REQ-MERGE",
+        result: "merged",
+        resultRevision: "fedcba9",
+      },
+    });
+    expect(rest).toHaveBeenCalledWith({
+      body: { merge_method: "squash", sha: "def5678" },
+      method: "PUT",
+      path: "repos/owner/repo/pulls/42/merge",
+    });
+    await expect(
+      transport.mergePullRequest(workRef, "def5678", "octopus", "intent-invalid"),
+    ).rejects.toThrow("github.landing_policy_invalid");
+  });
+
+  it("normalizes complete post-merge checks for the exact merge revision", async () => {
+    const graphql = vi.fn().mockResolvedValue({
+      data: {
+        repository: {
+          object: {
+            associatedPullRequests: {
+              nodes: [
+                {
+                  baseRefName: "main",
+                  isDraft: false,
+                  number: 42,
+                  state: "MERGED",
+                  url: "https://github.com/owner/repo/pull/42",
+                },
+              ],
+              pageInfo: { hasNextPage: false },
+            },
+            oid: "fedcba9",
+            statusCheckRollup: {
+              contexts: {
+                nodes: [
+                  {
+                    __typename: "CheckRun",
+                    checkSuite: { commit: { oid: "fedcba9" } },
+                    conclusion: "SUCCESS",
+                    detailsUrl: "https://github.com/owner/repo/actions/runs/2",
+                    name: "deploy / staging",
+                    status: "COMPLETED",
+                  },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+            },
+          },
+        },
+      },
+      requestId: "REQ-POST-MERGE",
+    });
+    const transport = createGitHubRepositoryTransport({
+      api: { graphql: graphql as GhCliApiClient["graphql"], rest: vi.fn() },
+      commandRunner: { run: vi.fn() },
+      environment: {},
+      repository: "owner/repo",
+      timeoutMs: 5_000,
+    });
+
+    await expect(transport.fetchPostMergeStatus("owner/repo", "fedcba9")).resolves.toMatchObject({
+      base_ref: "main",
+      head_sha: "fedcba9",
+      observed_base_sha: "fedcba9",
+      post_merge_checks: [
+        {
+          conclusion: "success",
+          name: "deploy / staging",
+          status: "completed",
+          target_sha: "fedcba9",
+        },
+      ],
+      pr_number: 42,
+      pr_state: "merged",
+    });
+  });
+
   it("normalizes one complete GraphQL PR snapshot and fails closed on nested pagination", async () => {
     const branch = githubBranchForWorkRef(workRef);
     const basic = {
@@ -279,4 +433,29 @@ function api(rest: unknown): GhCliApiClient {
 
 function response<T>(data: T, requestId: string): GhRestResponse<T> {
   return { data, nextPageUrl: null, requestId };
+}
+
+function basicPullRequest(branch: string, headSha: string, baseSha: string) {
+  return {
+    repository: {
+      pullRequests: {
+        nodes: [
+          {
+            baseRef: { target: { oid: baseSha } },
+            baseRefName: "main",
+            headRefName: branch,
+            headRefOid: headSha,
+            id: "PR_node_42",
+            isDraft: false,
+            mergeable: "MERGEABLE",
+            number: 42,
+            reviewDecision: "APPROVED",
+            state: "OPEN",
+            url: "https://github.com/owner/repo/pull/42",
+          },
+        ],
+        pageInfo: { hasNextPage: false },
+      },
+    },
+  };
 }

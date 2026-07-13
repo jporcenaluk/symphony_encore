@@ -32,6 +32,17 @@ interface PullRequestResponse {
   number: number;
 }
 
+interface MergePullRequestResponse {
+  merged: boolean;
+  message: string;
+  sha: string;
+}
+
+interface UpdatePullRequestBranchResponse {
+  message: string;
+  url: string;
+}
+
 interface PullRequestBasicNode {
   baseRef: { target: { oid: string } } | null;
   baseRefName: string;
@@ -60,7 +71,7 @@ interface CheckRunNode {
   checkSuite: { commit: { oid: string } } | null;
   conclusion: string | null;
   detailsUrl: string | null;
-  isRequired: boolean;
+  isRequired?: boolean;
   name: string;
   status: string;
 }
@@ -69,7 +80,7 @@ interface StatusContextNode {
   __typename: "StatusContext";
   commit: { oid: string };
   context: string;
-  isRequired: boolean;
+  isRequired?: boolean;
   state: string;
   targetUrl: string | null;
 }
@@ -113,6 +124,30 @@ interface PullRequestEvidenceResponse {
       } | null>;
       pageInfo: { hasNextPage: boolean };
     };
+  } | null;
+}
+
+interface PostMergeStatusResponse {
+  repository: {
+    object: {
+      associatedPullRequests: {
+        nodes: Array<{
+          baseRefName: string;
+          isDraft: boolean;
+          number: number;
+          state: string;
+          url: string;
+        } | null>;
+        pageInfo: { hasNextPage: boolean };
+      };
+      oid: string;
+      statusCheckRollup: {
+        contexts: {
+          nodes: Array<CheckRunNode | StatusContextNode | null>;
+          pageInfo: { hasNextPage: boolean };
+        };
+      } | null;
+    } | null;
   } | null;
 }
 
@@ -172,6 +207,38 @@ const PULL_REQUEST_EVIDENCE_QUERY = `
             comments(first: 1) {
               pageInfo { hasNextPage }
               nodes { author { login } url commit { oid } }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const POST_MERGE_STATUS_QUERY = `
+  query SymphonyPostMergeStatus($owner: String!, $name: String!, $sha: String!) {
+    repository(owner: $owner, name: $name) {
+      object(expression: $sha) {
+        ... on Commit {
+          oid
+          associatedPullRequests(first: 2, states: [MERGED]) {
+            pageInfo { hasNextPage }
+            nodes { number url state isDraft baseRefName }
+          }
+          statusCheckRollup {
+            contexts(first: 100) {
+              pageInfo { hasNextPage }
+              nodes {
+                __typename
+                ... on CheckRun {
+                  name status conclusion detailsUrl
+                  checkSuite { commit { oid } }
+                }
+                ... on StatusContext {
+                  context state targetUrl
+                  commit { oid }
+                }
+              }
             }
           }
         }
@@ -270,9 +337,14 @@ export function createGitHubRepositoryTransport(options: {
     },
 
     async fetchPostMergeStatus(repository: string, mergeSha: string) {
-      void repository;
-      void mergeSha;
-      throw new Error("github.fetch_post_merge_status_not_implemented");
+      if (repository !== options.repository) throw new Error("github.repository_mismatch");
+      if (!isSha(mergeSha)) throw new Error("github.merge_sha_invalid");
+      const response = await options.api.graphql<PostMergeStatusResponse>(POST_MERGE_STATUS_QUERY, {
+        name,
+        owner,
+        sha: mergeSha,
+      });
+      return normalizePostMergeStatus(response.data, mergeSha);
     },
 
     async fetchPullRequestSnapshot(workRef: WorkRef) {
@@ -299,11 +371,31 @@ export function createGitHubRepositoryTransport(options: {
       landingPolicy: string,
       idempotencyKey: string,
     ) {
-      void workRef;
-      void expectedHeadSha;
-      void landingPolicy;
-      void idempotencyKey;
-      throw new Error("github.merge_pull_request_not_implemented");
+      if (!isLandingPolicy(landingPolicy)) throw new Error("github.landing_policy_invalid");
+      const pullRequest = await loadPullRequestBasic(
+        options.api,
+        owner,
+        name,
+        githubBranchForWorkRef(workRef),
+      );
+      if (pullRequest.headRefOid !== expectedHeadSha) throw new Error("github.stale_head");
+      const response = await options.api.rest<MergePullRequestResponse>({
+        body: { merge_method: landingPolicy, sha: expectedHeadSha },
+        method: "PUT",
+        path: `repos/${owner}/${name}/pulls/${pullRequest.number}/merge`,
+      });
+      if (!response.data.merged || !isSha(response.data.sha)) {
+        throw new Error("github.merge_response_invalid");
+      }
+      return {
+        mergeSha: response.data.sha,
+        mutation: mutation(response.requestId, "merged", response.data.sha, {
+          idempotencyKey,
+          landingPolicy,
+          message: response.data.message,
+          number: pullRequest.number,
+        }),
+      };
     },
 
     async publishBranch(workRef, workspace, _expectedBaseSha, idempotencyKey) {
@@ -357,11 +449,31 @@ export function createGitHubRepositoryTransport(options: {
       expectedBaseSha: string,
       idempotencyKey: string,
     ) {
-      void workRef;
-      void expectedHeadSha;
-      void expectedBaseSha;
-      void idempotencyKey;
-      throw new Error("github.update_branch_not_implemented");
+      const branch = githubBranchForWorkRef(workRef);
+      const pullRequest = await loadPullRequestBasic(options.api, owner, name, branch);
+      if (pullRequest.headRefOid !== expectedHeadSha) throw new Error("github.stale_head");
+      if (pullRequest.baseRef?.target.oid !== expectedBaseSha) throw new Error("github.stale_base");
+      const response = await options.api.rest<UpdatePullRequestBranchResponse>({
+        body: { expected_head_sha: expectedHeadSha },
+        method: "PUT",
+        path: `repos/${owner}/${name}/pulls/${pullRequest.number}/update-branch`,
+      });
+      if (!response.data.message || !response.data.url) {
+        throw new Error("github.update_branch_response_invalid");
+      }
+      const confirmed = await fetchBranchReference(options.api, owner, name, branch);
+      const headSha = confirmed.data.object.sha;
+      if (headSha === expectedHeadSha) throw new Error("github.update_branch_incomplete");
+      return {
+        branch,
+        headSha,
+        mutation: mutation(response.requestId, "updated", headSha, {
+          baseSha: expectedBaseSha,
+          idempotencyKey,
+          message: response.data.message,
+          number: pullRequest.number,
+        }),
+      };
     },
   };
 }
@@ -433,7 +545,7 @@ function normalizePullRequestSnapshot(
     if (!context) throw new Error("github.pull_request_check_incomplete");
     const normalized = normalizeCheck(context, pullRequest.url);
     const configuredRequired = configured.has(normalized.name);
-    protectionRequired ||= context.isRequired;
+    protectionRequired ||= context.isRequired === true;
     const required_source = context.isRequired
       ? configuredRequired
         ? ("union" as const)
@@ -494,6 +606,59 @@ function normalizePullRequestSnapshot(
     review_decision: normalizeReviewDecision(pullRequest.reviewDecision),
     reviews,
     unresolved_threads,
+  };
+}
+
+function normalizePostMergeStatus(
+  response: PostMergeStatusResponse,
+  mergeSha: string,
+): PullRequestSnapshot {
+  const commit = response.repository?.object;
+  const connection = commit?.associatedPullRequests;
+  const contexts = commit?.statusCheckRollup?.contexts;
+  if (
+    !commit ||
+    commit.oid !== mergeSha ||
+    !connection ||
+    connection.pageInfo.hasNextPage ||
+    connection.nodes.length !== 1 ||
+    contexts?.pageInfo.hasNextPage
+  ) {
+    throw new Error(
+      connection?.pageInfo.hasNextPage || contexts?.pageInfo.hasNextPage
+        ? "github.post_merge_pagination_incomplete"
+        : "github.post_merge_identity_invalid",
+    );
+  }
+  const pullRequest = connection.nodes[0];
+  if (
+    pullRequest?.state !== "MERGED" ||
+    !pullRequest.baseRefName ||
+    !Number.isSafeInteger(pullRequest.number) ||
+    pullRequest.number < 1 ||
+    !pullRequest.url
+  ) {
+    throw new Error("github.post_merge_response_invalid");
+  }
+  const post_merge_checks = (contexts?.nodes ?? []).map((context) => {
+    if (!context) throw new Error("github.pull_request_check_incomplete");
+    return normalizeCheck(context, pullRequest.url);
+  });
+  return {
+    base_ref: pullRequest.baseRefName,
+    checks: [],
+    head_sha: mergeSha,
+    is_draft: pullRequest.isDraft,
+    mergeable: true,
+    observed_base_sha: mergeSha,
+    post_merge_checks,
+    pr_number: pullRequest.number,
+    pr_state: "merged",
+    pr_url: pullRequest.url,
+    required_check_source: "configured",
+    review_decision: "none",
+    reviews: [],
+    unresolved_threads: [],
   };
 }
 
@@ -657,6 +822,10 @@ function parseRepository(repository: string): { name: string; owner: string } {
 
 function isSha(value: string): boolean {
   return /^[A-Fa-f0-9]{7,64}$/u.test(value);
+}
+
+function isLandingPolicy(value: string): value is "merge" | "rebase" | "squash" {
+  return value === "merge" || value === "rebase" || value === "squash";
 }
 
 function allowlistedEnvironment(
