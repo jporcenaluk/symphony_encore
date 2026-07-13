@@ -1,0 +1,21 @@
+{
+  "name": "@symphony/persistence",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@symphony/contracts": "workspace:*",
+    "@symphony/domain": "workspace:*",
+    "better-sqlite3": "12.11.1",
+    "kysely": "0.29.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13"
+  }
+}

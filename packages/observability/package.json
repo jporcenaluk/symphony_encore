@@ -1,0 +1,16 @@
+{
+  "name": "@symphony/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@symphony/domain": "workspace:*",
+    "pino": "10.3.1"
+  }
+}

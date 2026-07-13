@@ -1,0 +1,20 @@
+packages:
+  - apps/server
+  - apps/web
+  - packages/adapters
+  - packages/contracts
+  - packages/domain
+  - packages/observability
+  - packages/orchestration
+  - packages/persistence
+  - packages/test-support
+
+engineStrict: true
+nodeVersion: 24.17.0
+savePrefix: ""
+sharedWorkspaceLockfile: true
+strictPeerDependencies: true
+
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
