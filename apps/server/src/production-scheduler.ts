@@ -8,8 +8,13 @@ import {
   terminateLinuxProcessGroup,
 } from "@symphony/adapters";
 import { PersistenceSafetyController, SchedulerService } from "@symphony/orchestration";
-import type { ConfigurationSnapshot, OpenedDatabase } from "@symphony/persistence";
+import {
+  type ConfigurationSnapshot,
+  type OpenedDatabase,
+  observeIssue,
+} from "@symphony/persistence";
 
+import { syncTrackerCandidates } from "./candidate-sync.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -106,7 +111,29 @@ export function createProductionScheduler(input: {
         "scheduler reconciliation tick failed",
       );
     },
-    tick: reconcile,
+    async tick() {
+      await reconcile();
+      if (!safety.canDispatch()) return;
+      try {
+        await syncTrackerCandidates({
+          observeIssue: (issue, providerRevision) =>
+            observeIssue(input.database, {
+              issue,
+              observedAt: new Date().toISOString(),
+              providerRevision,
+              transitionId: randomUUID(),
+            }),
+          safety,
+          tracker,
+        });
+      } catch (error) {
+        if (!safety.canDispatch()) throw error;
+        input.logger?.warn(
+          { error, service_run_id: input.serviceRunId },
+          "candidate fetch skipped scheduler tick",
+        );
+      }
+    },
   });
 }
 

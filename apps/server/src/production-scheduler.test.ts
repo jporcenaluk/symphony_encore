@@ -36,14 +36,14 @@ const effectiveConfig = {
 };
 
 describe("production reconciliation scheduler", () => {
-  it("starts with an immediate no-work tick without contacting the provider", async () => {
+  it("starts with an immediate candidate-sync tick and no running-state refresh", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "symphony-production-scheduler-"));
     directories.push(directory);
     const opened = openDatabase(path.join(directory, "state.sqlite3"));
     await applyMigrations(opened.database);
     const tracker = {
       createOrUpdateComment: vi.fn(),
-      fetchCandidates: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
       fetchCommentsSince: vi.fn(),
       fetchIssuesByStates: vi.fn(),
       fetchStatesByIds: vi.fn(),
@@ -59,6 +59,7 @@ describe("production reconciliation scheduler", () => {
 
     await scheduler.start();
     await scheduler.close();
+    expect(tracker.fetchCandidates).toHaveBeenCalledOnce();
     expect(tracker.fetchIssuesByStates).not.toHaveBeenCalled();
     expect(tracker.fetchStatesByIds).not.toHaveBeenCalled();
     await opened.close();

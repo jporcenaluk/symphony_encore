@@ -1,6 +1,7 @@
 export const componentName = "server" as const;
 
 export * from "./bootstrap-candidate.js";
+export * from "./candidate-sync.js";
 export * from "./control-api.js";
 export * from "./event-stream.js";
 export * from "./http-runtime.js";
