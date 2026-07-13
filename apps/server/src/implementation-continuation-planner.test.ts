@@ -97,13 +97,17 @@ const reviewResult: PlanReviewResult = {
 describe("implementation continuation planning", () => {
   it.each([
     {
+      changeClass: "high_risk" as const,
       expectedReadyReason: "implementation_after_plan_approval",
+      expectedProfile: "deep",
       mode: "approved_plan" as const,
       sourcePlan: plan,
       sourceResult: reviewResult,
     },
     {
+      changeClass: "high_risk" as const,
       expectedReadyReason: "plan_revision_required",
+      expectedProfile: "deep",
       mode: "plan_revision" as const,
       sourcePlan: { ...plan, approved_by_attempt_id: null, status: "rejected" as const },
       sourceResult: {
@@ -115,6 +119,26 @@ describe("implementation continuation planning", () => {
             blocking: true as const,
             evidence: [{ kind: "file" as const, path: "PLAN.md" }],
             id: "finding-1",
+            severity: "high" as const,
+          },
+        ],
+      },
+    },
+    {
+      changeClass: "standard" as const,
+      expectedReadyReason: "review_rework",
+      expectedProfile: "standard",
+      mode: "review_rework" as const,
+      sourcePlan: { ...plan, approved_by_attempt_id: null, status: "validated" as const },
+      sourceResult: {
+        ...reviewResult,
+        decision: "needs_rework" as const,
+        findings: [
+          {
+            behavior: "Retry cleanup can discard a committed result",
+            blocking: true as const,
+            evidence: [{ kind: "file" as const, path: "src/worker.ts" }],
+            id: "finding-review-1",
             severity: "high" as const,
           },
         ],
@@ -158,6 +182,7 @@ describe("implementation continuation planning", () => {
 
     const planned = await planImplementationContinuation({
       adapter,
+      changeClass: source.changeClass,
       configSnapshotId: "config-1",
       configuration: {
         attemptTokenCap: 400_000,
@@ -209,7 +234,7 @@ describe("implementation continuation planning", () => {
     expect(planned).toMatchObject({
       attemptNumber: 2,
       expectedReadyReason: source.expectedReadyReason,
-      route: { profile: "deep", reasoningEffort: "high" },
+      route: { profile: source.expectedProfile },
     });
     expect(planned.prompt).toContain("Remaining turn budget: 8");
     expect(planned.prompt).toContain("Remaining token budget: 400000");
@@ -219,12 +244,16 @@ describe("implementation continuation planning", () => {
     expect(planned.prompt).not.toContain("builder narrative");
     if (source.mode === "approved_plan") {
       expect(planned.prompt).toContain(plan.approach);
-    } else {
+    } else if (source.mode === "plan_revision") {
       expect(planned.prompt).toContain("Rollback evidence is missing");
       expect(planned.prompt).not.toContain(plan.approach);
+    } else {
+      expect(planned.prompt).toContain("Retry cleanup can discard a committed result");
+      expect(planned.prompt).toContain("Resolve every blocking review finding");
+      expect(planned.prompt).toContain(plan.approach);
     }
     expect(planned.dispatch).toMatchObject({
-      attempt: { changeClass: "high_risk", role: "implementation" },
+      attempt: { changeClass: source.changeClass, role: "implementation" },
       claim: { originStage: "In Progress", reason: "implementation_continuation" },
     });
     await opened.close();

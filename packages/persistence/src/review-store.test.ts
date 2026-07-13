@@ -140,6 +140,12 @@ describe("integrative review repository", () => {
       mode: "Ready",
       reason: "review_rework",
     });
+    await expect(
+      loadPendingReviewCoordination(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({
+      rejectedFindingIds: [],
+      unresolvedBlockingFindingIds: ["finding-1"],
+    });
     await opened.close();
   });
 

@@ -55,6 +55,7 @@ export interface PendingReviewCoordination {
   riskFacts: readonly string[];
   targetBaseSha: string;
   targetSha: string;
+  unresolvedBlockingFindingIds: readonly string[];
   verificationRecordId: string;
   workspacePath: string;
 }
@@ -85,6 +86,10 @@ interface CoordinationRecordRow {
 
 interface AdjudicationResultRow {
   payload_json: string;
+}
+
+interface ReviewSetFindingsRow {
+  unresolved_blocking_finding_ids_json: string;
 }
 
 export async function loadPendingReviewCoordination(
@@ -127,6 +132,7 @@ export async function loadPendingReviewCoordination(
           claim.reason = 'review_coordination_required'
           or claim.reason like 'specialist_review_required:%'
           or claim.reason = 'adjudication_required'
+          or claim.reason = 'review_rework'
         ))
         or (claim.mode = 'Running' and claim.reason = 'adjudication')
       )
@@ -152,6 +158,12 @@ export async function loadPendingReviewCoordination(
     order by attempt.attempt_number
   `.execute(database);
   const rejectedFindingIds = await loadRejectedFindingIds(database, workRef, target.target_sha);
+  const unresolvedBlockingFindingIds = await loadUnresolvedBlockingFindingIds(
+    database,
+    workRef,
+    target.target_sha,
+    target.patch_identity,
+  );
   return {
     changeClass: target.change_class,
     patchIdentity: target.patch_identity,
@@ -160,10 +172,36 @@ export async function loadPendingReviewCoordination(
     records: records.rows.map((row) => coordinationRecord(row, workRef)),
     targetBaseSha: target.target_base_sha,
     targetSha: target.target_sha,
+    unresolvedBlockingFindingIds,
     riskFacts,
     verificationRecordId: target.verification_record_id,
     workspacePath: target.workspace_path,
   };
+}
+
+async function loadUnresolvedBlockingFindingIds(
+  database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
+  workRef: WorkRef,
+  targetSha: string,
+  patchIdentity: string,
+): Promise<string[]> {
+  const query = await sql<ReviewSetFindingsRow>`
+    select unresolved_blocking_finding_ids_json
+    from review_sets
+    where work_ref_kind = ${workRef.kind}
+      and work_ref_id = ${workRef.id}
+      and target_sha = ${targetSha}
+      and patch_identity = ${patchIdentity}
+    order by created_at desc
+    limit 1
+  `.execute(database);
+  const row = query.rows[0];
+  return row
+    ? parseStringList(
+        row.unresolved_blocking_finding_ids_json,
+        "review.persisted_unresolved_findings_invalid",
+      )
+    : [];
 }
 
 export async function loadPendingIntegrativeReview(

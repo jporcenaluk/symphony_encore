@@ -151,6 +151,7 @@ describe("implementation continuation lifecycle", () => {
     let sequence = 0;
     const planned = await planImplementationContinuation({
       adapter: agent,
+      changeClass: "high_risk",
       configSnapshotId: "config-1",
       configuration: planningConfiguration(),
       database: opened.database,
@@ -251,6 +252,7 @@ describe("implementation continuation lifecycle", () => {
     let sequence = 0;
     const planned = await planImplementationContinuation({
       adapter: agent,
+      changeClass: "high_risk",
       configSnapshotId: "config-1",
       configuration: planningConfiguration(),
       database: opened.database,

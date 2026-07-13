@@ -17,6 +17,7 @@ import {
   AdjudicationResultSchema,
   ImplementationOutcomeSchema,
   type Issue,
+  type PlanReviewResult,
   PlanReviewResultSchema,
   PlanSchema,
   ReviewResultSchema,
@@ -199,10 +200,12 @@ export function createProductionScheduler(input: {
         const isIndependentVerification = claim.reason === "independent_verification_required";
         const isIntegrativeReview = claim.reason === "review_required";
         const isAdjudication = claim.reason === "adjudication_required";
+        const isReviewRework = claim.reason === "review_rework";
         const isSpecialistReview = claim.reason.startsWith("specialist_review_required:");
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
-          claim.reason === "plan_revision_required";
+          claim.reason === "plan_revision_required" ||
+          isReviewRework;
         if (
           (!isPlanReview &&
             !isIndependentVerification &&
@@ -625,21 +628,48 @@ export function createProductionScheduler(input: {
             const mode =
               claim.reason === "implementation_after_plan_approval"
                 ? ("approved_plan" as const)
-                : ("plan_revision" as const);
-            const plan = await loadLatestPlanByStatus(
-              input.database,
-              { id: issueId, kind: "issue" },
-              mode === "approved_plan" ? "approved" : "rejected",
-            );
-            const review = await loadLatestPlanReviewResult(input.database, {
-              id: issueId,
-              kind: "issue",
-            });
-            if (!plan || !review) {
+                : claim.reason === "plan_revision_required"
+                  ? ("plan_revision" as const)
+                  : ("review_rework" as const);
+            const workRef = { id: issueId, kind: "issue" as const };
+            const plan =
+              mode === "review_rework"
+                ? ((await loadLatestPlanByStatus(input.database, workRef, "approved")) ??
+                  (await loadLatestPlanByStatus(input.database, workRef, "validated")))
+                : await loadLatestPlanByStatus(
+                    input.database,
+                    workRef,
+                    mode === "approved_plan" ? "approved" : "rejected",
+                  );
+            if (!plan) {
               throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
+            }
+            let changeClass: "standard" | "high_risk" = "high_risk";
+            let reviewResult: PlanReviewResult;
+            if (mode === "review_rework") {
+              const source = await loadReviewReworkSource({
+                collectEvidence: input.review?.collectEvidence,
+                database: input.database,
+                environment: input.environment,
+                issue: stored.issue,
+                timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+              if (!source) {
+                throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
+              }
+              changeClass = source.changeClass;
+              reviewResult = reviewResultForRework(stored.issue, plan.revision, source);
+            } else {
+              const review = await loadLatestPlanReviewResult(input.database, workRef);
+              if (!review) {
+                throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
+              }
+              reviewResult = review.result;
             }
             const implementationPlanned = await planImplementationContinuation({
               adapter: agent,
+              changeClass,
               configSnapshotId: input.snapshot.id,
               configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
               database: input.database,
@@ -648,7 +678,7 @@ export function createProductionScheduler(input: {
               newId: randomUUID,
               now: () => new Date().toISOString(),
               plan,
-              reviewResult: review.result,
+              reviewResult,
               serviceRunId: input.serviceRunId,
               submitPlanSchema: PlanSchema,
               terminalResultSchema: ImplementationOutcomeSchema,
@@ -671,9 +701,13 @@ export function createProductionScheduler(input: {
                 issue: stored.issue,
                 now: () => new Date().toISOString(),
                 provisionalClassification: {
-                  changeClass: "high_risk",
-                  floor: "high_risk",
-                  reasons: ["classification.reviewed_high_risk_plan"],
+                  changeClass,
+                  floor: changeClass,
+                  reasons: [
+                    mode === "review_rework"
+                      ? "classification.review_rework"
+                      : "classification.reviewed_high_risk_plan",
+                  ],
                 },
                 riskPathPatterns: stringList(values, "class.risk_paths"),
                 safety,
@@ -852,6 +886,88 @@ export function createProductionScheduler(input: {
     },
     start: () => service.start(),
     trigger: () => service.trigger(),
+  };
+}
+
+type ReworkReviewResult = Extract<PlanReviewResult, { decision: "needs_rework" }>;
+
+interface ReviewReworkSource {
+  changeClass: "standard" | "high_risk";
+  changedFiles: readonly string[];
+  findings: ReworkReviewResult["findings"];
+  targetSha: string;
+  verificationRecordId: string;
+}
+
+async function loadReviewReworkSource(input: {
+  collectEvidence: typeof collectIntegrativeReviewContext | undefined;
+  database: OpenedDatabase["database"];
+  environment: Readonly<Record<string, string | undefined>>;
+  issue: Issue;
+  timeoutMs: number;
+  workspaceRoot: string;
+}): Promise<ReviewReworkSource | null> {
+  const pending = await loadPendingReviewCoordination(input.database, {
+    id: input.issue.id,
+    kind: "issue",
+  });
+  if (!pending || pending.unresolvedBlockingFindingIds.length === 0) return null;
+  const context = await (input.collectEvidence ?? collectIntegrativeReviewContext)({
+    baseSha: pending.targetBaseSha,
+    changeClass: pending.changeClass,
+    commandRunner: createNodeWorkspaceCommandRunner(),
+    sourceEnvironment: input.environment,
+    targetSha: pending.targetSha,
+    timeoutMs: input.timeoutMs,
+    verificationRecordId: pending.verificationRecordId,
+    workspace: pending.workspacePath,
+    workspaceRoot: input.workspaceRoot,
+  });
+  const unresolved = new Set(pending.unresolvedBlockingFindingIds);
+  const findings = pending.records.flatMap((record) =>
+    record.findings
+      .filter((finding) => finding.blocking && unresolved.has(finding.id))
+      .map((finding) => ({
+        behavior: `${finding.behavior}\nRequired disposition: ${finding.disposition}`,
+        blocking: true as const,
+        evidence: finding.evidence,
+        id: finding.id,
+        severity: finding.severity,
+      })),
+  );
+  if (findings.length !== unresolved.size) {
+    throw new Error("scheduler.review_rework_findings_incomplete");
+  }
+  return {
+    changeClass: pending.changeClass,
+    changedFiles: context.changedFiles,
+    findings,
+    targetSha: pending.targetSha,
+    verificationRecordId: pending.verificationRecordId,
+  };
+}
+
+function reviewResultForRework(
+  issue: Issue,
+  planRevision: number,
+  source: ReviewReworkSource,
+): ReworkReviewResult {
+  return {
+    decision: "needs_rework",
+    evidence: source.findings.flatMap((finding) => finding.evidence),
+    findings: source.findings,
+    handoff: {
+      acceptance_criteria: issue.acceptance_criteria,
+      commands: [
+        { command: `orchestrator verification ${source.verificationRecordId}`, exit_code: 0 },
+      ],
+      decisions_fixed: [],
+      files_changed: [...source.changedFiles],
+      goal: issue.title,
+      open_items: source.findings.map((finding) => finding.behavior),
+      revision: source.targetSha,
+    },
+    plan_revision: planRevision,
   };
 }
 

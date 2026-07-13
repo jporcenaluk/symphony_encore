@@ -22,7 +22,7 @@ import {
   prepareDispatchBudget,
 } from "@symphony/persistence";
 
-export type ImplementationContinuationMode = "approved_plan" | "plan_revision";
+export type ImplementationContinuationMode = "approved_plan" | "plan_revision" | "review_rework";
 
 export interface ImplementationContinuationConfiguration {
   attemptTokenCap: number;
@@ -46,7 +46,10 @@ export interface PlannedImplementationContinuation {
   dispatch: DispatchInput;
   estimatedTokens: number;
   estimatedUsd: number | null;
-  expectedReadyReason: "implementation_after_plan_approval" | "plan_revision_required";
+  expectedReadyReason:
+    | "implementation_after_plan_approval"
+    | "plan_revision_required"
+    | "review_rework";
   preflight: AgentPreflightResult;
   prompt: string;
   route: ComputeRoute;
@@ -54,6 +57,7 @@ export interface PlannedImplementationContinuation {
 
 export async function planImplementationContinuation(input: {
   adapter: AgentAdapter;
+  changeClass: "standard" | "high_risk";
   configSnapshotId: string;
   configuration: ImplementationContinuationConfiguration;
   database: OpenedDatabase["database"];
@@ -82,7 +86,7 @@ export async function planImplementationContinuation(input: {
   });
   assertPreflightManifest(preflight, manifest);
   const route = selectComputeRoute({
-    changeClass: "high_risk",
+    changeClass: input.changeClass,
     enabledProfiles: input.configuration.enabledProfiles,
     facts: new Set(input.plan.risk_facts),
     heuristicMinimum: null,
@@ -132,14 +136,11 @@ export async function planImplementationContinuation(input: {
     updatedAt: now,
   });
   const prompt = renderPrompt(input);
-  const expectedReadyReason =
-    input.mode === "approved_plan"
-      ? "implementation_after_plan_approval"
-      : "plan_revision_required";
+  const expectedReadyReason = expectedReason(input.mode);
   const dispatch: DispatchInput = {
     attempt: {
       attemptNumber,
-      changeClass: "high_risk",
+      changeClass: input.changeClass,
       computeProfile: route.profile,
       configSnapshotId: input.configSnapshotId,
       costUsd: null,
@@ -191,7 +192,10 @@ function assertSource(
       ? plan.status === "approved" &&
         plan.approved_by_attempt_id !== null &&
         reviewResult.decision === "approve"
-      : plan.status === "rejected" && reviewResult.decision === "needs_rework";
+      : mode === "plan_revision"
+        ? plan.status === "rejected" && reviewResult.decision === "needs_rework"
+        : (plan.status === "validated" || plan.status === "approved") &&
+          reviewResult.decision === "needs_rework";
   if (issue.state !== "In Progress" || !workMatches || !reviewMatches || !modeMatches) {
     throw new Error("implementation_continuation.source_invalid");
   }
@@ -204,9 +208,9 @@ function renderPrompt(input: {
   reviewResult: PlanReviewResult;
 }): string {
   const currentPlanState =
-    input.mode === "approved_plan"
-      ? input.plan
-      : { revision: input.plan.revision, status: input.plan.status };
+    input.mode === "plan_revision"
+      ? { revision: input.plan.revision, status: input.plan.status }
+      : input.plan;
   return [
     "Continue implementation from durable orchestrator state in this existing workspace.",
     `Current Plan state: ${JSON.stringify(currentPlanState)}`,
@@ -217,10 +221,26 @@ function renderPrompt(input: {
     `Remaining turn budget: ${input.configuration.maxTurns}`,
     `Remaining token budget: ${input.configuration.attemptTokenCap}`,
     "You must submit a Plan revision before further action when planned paths, verification, size, or risks change.",
-    input.mode === "plan_revision"
-      ? "First submit a revised Plan that resolves every blocking review finding; do not change code before it is accepted."
-      : "Implement the approved Plan and report a typed implementation outcome.",
+    modeInstruction(input.mode),
   ].join("\n");
+}
+
+function expectedReason(
+  mode: ImplementationContinuationMode,
+): PlannedImplementationContinuation["expectedReadyReason"] {
+  if (mode === "approved_plan") return "implementation_after_plan_approval";
+  if (mode === "plan_revision") return "plan_revision_required";
+  return "review_rework";
+}
+
+function modeInstruction(mode: ImplementationContinuationMode): string {
+  if (mode === "plan_revision") {
+    return "First submit a revised Plan that resolves every blocking review finding; do not change code before it is accepted.";
+  }
+  if (mode === "review_rework") {
+    return "Resolve every blocking review finding, re-run verification, and report a typed implementation outcome.";
+  }
+  return "Implement the approved Plan and report a typed implementation outcome.";
 }
 
 function resolvedProfiles(manifest: AgentAdapterManifest) {
