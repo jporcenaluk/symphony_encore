@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   inspectLinuxProcessOwnership,
+  isProcessGoneError,
   terminateLinuxProcessGroup,
 } from "./linux-process-ownership.js";
 
@@ -19,6 +20,12 @@ afterEach(async () => {
 });
 
 describe.runIf(process.platform === "linux")("Linux process ownership", () => {
+  it("treats every kernel process-disappearance code as an exit race", () => {
+    expect(isProcessGoneError(Object.assign(new Error("gone"), { code: "ENOENT" }))).toBe(true);
+    expect(isProcessGoneError(Object.assign(new Error("gone"), { code: "ESRCH" }))).toBe(true);
+    expect(isProcessGoneError(Object.assign(new Error("denied"), { code: "EACCES" }))).toBe(false);
+  });
+
   it("verifies and terminates the complete recorded process group", async () => {
     const child = spawn("/bin/bash", ["-c", "sleep 30 & wait"], {
       detached: true,

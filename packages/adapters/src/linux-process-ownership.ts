@@ -10,6 +10,11 @@ export interface LinuxProcessIdentity {
   processId: number;
 }
 
+export function isProcessGoneError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ESRCH";
+}
+
 export async function inspectLinuxProcessOwnership(
   identity: LinuxProcessIdentity,
 ): Promise<LinuxProcessOwnership> {
@@ -108,7 +113,7 @@ async function readProcessStat(
     }
     return { processGroupId, state };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (isProcessGoneError(error)) return null;
     throw error;
   }
 }
