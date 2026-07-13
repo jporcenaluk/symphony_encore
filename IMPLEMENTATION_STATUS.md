@@ -31,7 +31,7 @@ command. A green but narrower test does not complete a broader item.
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | Not started | API capability and durable routing tests |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Deterministic failure routing, receipt-less intent reconstruction, and fail-closed ServiceRun recovery pass; attempt/process closure pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, and atomic interrupted-attempt closure with exact ownership evidence pass; process termination adapter pending |
 | S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope and bootstrap-key boundary pass; auth/sandbox pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -134,3 +134,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | ServiceRun recovery sequencing and shared status contract |
 | 2026-07-13 | working tree | `make verify-fast` | 156 tests; lint, generated-contract drift, and typecheck passed | Failure classification, bounded retries, backoff, and fail-closed routes |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Failure classification, bounded retries, backoff, and fail-closed routes |
+| 2026-07-13 | working tree | `make verify-fast` | 158 tests; lint, generated-contract drift, and typecheck passed | Interrupted attempt closure, ownership evidence, settlement, and requeue |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Interrupted attempt closure, ownership evidence, settlement, and requeue |

@@ -1,4 +1,4 @@
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 
@@ -46,7 +46,15 @@ export async function finishAttempt(
   input: FinishAttemptInput,
 ): Promise<void> {
   await database.transaction().execute(async (transaction) => {
-    const close = await sql`
+    await finishAttemptInTransaction(transaction, input);
+  });
+}
+
+export async function finishAttemptInTransaction(
+  transaction: Transaction<DatabaseSchema>,
+  input: FinishAttemptInput,
+): Promise<void> {
+  const close = await sql`
       update attempts
       set ended_at = ${input.endedAt}, status = 'closed',
           terminal_result_id = ${input.terminalResult.id}, failure_class = ${input.failureClass},
@@ -59,11 +67,11 @@ export async function finishAttempt(
         and status != 'closed'
         and terminal_result_id is null
     `.execute(transaction);
-    if (close.numAffectedRows !== 1n) {
-      throw new Error(`Attempt ${input.attemptId} is already closed or missing`);
-    }
+  if (close.numAffectedRows !== 1n) {
+    throw new Error(`Attempt ${input.attemptId} is already closed or missing`);
+  }
 
-    await sql`
+  await sql`
       insert into terminal_results (id, attempt_id, role, result_kind, payload_json, created_at)
       values (
         ${input.terminalResult.id}, ${input.attemptId}, ${input.terminalResult.role},
@@ -71,31 +79,29 @@ export async function finishAttempt(
       )
     `.execute(transaction);
 
-    const links = await sql<ReservationLedgerRow>`
+  const links = await sql<ReservationLedgerRow>`
       select ledger_id, reserved_amount
       from budget_reservation_ledgers
       where reservation_id = ${input.reservationId}
       order by ledger_id
     `.execute(transaction);
-    const settlements = new Map(
-      input.settledLedgers.map((entry) => [entry.id, entry.actualAmount]),
-    );
-    if (
-      settlements.size !== input.settledLedgers.length ||
-      links.rows.length !== settlements.size ||
-      links.rows.some((link) => !settlements.has(link.ledger_id))
-    ) {
-      throw new Error(`Reservation ${input.reservationId} ledger settlement does not match`);
-    }
+  const settlements = new Map(input.settledLedgers.map((entry) => [entry.id, entry.actualAmount]));
+  if (
+    settlements.size !== input.settledLedgers.length ||
+    links.rows.length !== settlements.size ||
+    links.rows.some((link) => !settlements.has(link.ledger_id))
+  ) {
+    throw new Error(`Reservation ${input.reservationId} ledger settlement does not match`);
+  }
 
-    let hasOverrun = false;
-    for (const link of links.rows) {
-      const actualAmount = settlements.get(link.ledger_id);
-      if (actualAmount === undefined || actualAmount < 0) {
-        throw new Error(`Invalid actual amount for ledger ${link.ledger_id}`);
-      }
-      if (actualAmount > link.reserved_amount) hasOverrun = true;
-      const update = await sql`
+  let hasOverrun = false;
+  for (const link of links.rows) {
+    const actualAmount = settlements.get(link.ledger_id);
+    if (actualAmount === undefined || actualAmount < 0) {
+      throw new Error(`Invalid actual amount for ledger ${link.ledger_id}`);
+    }
+    if (actualAmount > link.reserved_amount) hasOverrun = true;
+    const update = await sql`
         update budget_ledgers
         set reserved = reserved - ${link.reserved_amount},
             consumed = consumed + ${actualAmount},
@@ -104,30 +110,28 @@ export async function finishAttempt(
             updated_at = ${input.endedAt}
         where id = ${link.ledger_id} and reserved >= ${link.reserved_amount}
       `.execute(transaction);
-      if (update.numAffectedRows !== 1n) {
-        throw new Error(
-          `Ledger ${link.ledger_id} cannot settle reservation ${input.reservationId}`,
-        );
-      }
+    if (update.numAffectedRows !== 1n) {
+      throw new Error(`Ledger ${link.ledger_id} cannot settle reservation ${input.reservationId}`);
     }
+  }
 
-    const reservation = await sql`
+  const reservation = await sql`
       update budget_reservations
       set actual_amounts_json = ${JSON.stringify(Object.fromEntries(settlements))},
           status = ${hasOverrun ? "overrun" : "settled"}, updated_at = ${input.endedAt}
       where id = ${input.reservationId} and status = 'reserved'
     `.execute(transaction);
-    if (reservation.numAffectedRows !== 1n) {
-      throw new Error(`Reservation ${input.reservationId} is already settled or missing`);
-    }
+  if (reservation.numAffectedRows !== 1n) {
+    throw new Error(`Reservation ${input.reservationId} is already settled or missing`);
+  }
 
-    const retryDueAt = input.nextClaim.mode === "RetryQueued" ? input.nextClaim.dueAt : null;
-    const questionId = input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.questionId : null;
-    const approvalRequestId =
-      input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.approvalRequestId : null;
-    const blockerPredicate =
-      input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.blockerPredicate : null;
-    const claim = await sql`
+  const retryDueAt = input.nextClaim.mode === "RetryQueued" ? input.nextClaim.dueAt : null;
+  const questionId = input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.questionId : null;
+  const approvalRequestId =
+    input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.approvalRequestId : null;
+  const blockerPredicate =
+    input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.blockerPredicate : null;
+  const claim = await sql`
       update claims
       set mode = ${input.nextClaim.mode}, updated_at = ${input.endedAt}, expires_at = null,
           reason = ${input.nextClaim.reason}, retry_due_at = ${retryDueAt},
@@ -137,8 +141,7 @@ export async function finishAttempt(
         and work_ref_id = ${input.workRef.id}
         and mode = 'Running'
     `.execute(transaction);
-    if (claim.numAffectedRows !== 1n) {
-      throw new Error(`Running claim for ${input.workRef.kind}:${input.workRef.id} is missing`);
-    }
-  });
+  if (claim.numAffectedRows !== 1n) {
+    throw new Error(`Running claim for ${input.workRef.kind}:${input.workRef.id} is missing`);
+  }
 }
