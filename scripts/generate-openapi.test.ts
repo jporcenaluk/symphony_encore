@@ -16,7 +16,12 @@ afterEach(async () => {
 describe("generated OpenAPI contract", () => {
   it("renders every registered Control API route", async () => {
     const document = JSON.parse(await renderOpenApi()) as { paths: Record<string, unknown> };
-    expect(Object.keys(document.paths)).toEqual(["/health", "/ready", "/api/v1/state"]);
+    expect(Object.keys(document.paths)).toEqual([
+      "/health",
+      "/ready",
+      "/api/v1/events",
+      "/api/v1/state",
+    ]);
   });
 
   it("detects stale output and writes the exact generated document", async () => {

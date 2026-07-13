@@ -1,5 +1,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 
+import { EventRecordSchema } from "./entity-records.js";
+
 const NonEmptyString = Type.String({ minLength: 1 });
 
 export const ActiveServiceStateSchema = Type.Union([
@@ -62,3 +64,22 @@ export const ControlStateSchema = Type.Object(
   { additionalProperties: false },
 );
 export type ControlState = Static<typeof ControlStateSchema>;
+
+export const EventRecordPageQuerySchema = Type.Object(
+  {
+    after_cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ maximum: 1000, minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+export type EventRecordPageQuery = Static<typeof EventRecordPageQuerySchema>;
+
+export const EventRecordPageSchema = Type.Object(
+  {
+    has_more: Type.Boolean(),
+    items: Type.Array(EventRecordSchema),
+    next_cursor: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+export type EventRecordPage = Static<typeof EventRecordPageSchema>;

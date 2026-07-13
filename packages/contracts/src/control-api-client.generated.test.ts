@@ -37,4 +37,19 @@ describe("generated Control API client", () => {
     expect(error).toBeInstanceOf(ControlApiClientError);
     expect(error).toMatchObject({ envelope: payload, status: 401 });
   });
+
+  it("builds the generated durable event cursor query", async () => {
+    const fetchImplementation = vi.fn(async () =>
+      Response.json({ has_more: false, items: [], next_cursor: 42 }),
+    );
+    const client = createControlApiClient("http://127.0.0.1:3000", fetchImplementation);
+
+    await expect(client.listEvents({ afterCursor: 42, limit: 25 })).resolves.toMatchObject({
+      next_cursor: 42,
+    });
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "http://127.0.0.1:3000/api/v1/events?after_cursor=42&limit=25",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
 });

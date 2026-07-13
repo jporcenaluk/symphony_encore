@@ -166,6 +166,505 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "Durable event page",
+        "tags": [
+          "control"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "after_cursor",
+            "required": false
+          },
+          {
+            "schema": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "has_more",
+                    "items",
+                    "next_cursor"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "required": [
+                              "change_class",
+                              "cost_usd",
+                              "cursor",
+                              "event_name",
+                              "id",
+                              "payload",
+                              "reason_code",
+                              "result",
+                              "service_run_id",
+                              "timestamp",
+                              "attempt_id",
+                              "compute_profile",
+                              "work_ref"
+                            ],
+                            "properties": {
+                              "change_class": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "trivial"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "standard"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "high_risk"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "cost_usd": {
+                                "anyOf": [
+                                  {
+                                    "minimum": 0,
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "cursor": {
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "event_name": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "payload": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "reason_code": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "result": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "service_run_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "timestamp": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "attempt_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "compute_profile": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "economy"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "standard"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "deep"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "work_ref": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "type": "object",
+                                    "required": [
+                                      "issue_id"
+                                    ],
+                                    "properties": {
+                                      "issue_id": {
+                                        "minLength": 1,
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "type": "object",
+                                    "required": [
+                                      "system_job_id"
+                                    ],
+                                    "properties": {
+                                      "system_job_id": {
+                                        "minLength": 1,
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "required": [
+                              "change_class",
+                              "cost_usd",
+                              "cursor",
+                              "event_name",
+                              "id",
+                              "payload",
+                              "reason_code",
+                              "result",
+                              "service_run_id",
+                              "timestamp",
+                              "attempt_id",
+                              "compute_profile",
+                              "work_ref"
+                            ],
+                            "properties": {
+                              "change_class": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "trivial"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "standard"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "high_risk"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "cost_usd": {
+                                "anyOf": [
+                                  {
+                                    "minimum": 0,
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "cursor": {
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "event_name": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "payload": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "reason_code": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "result": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "service_run_id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "timestamp": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "attempt_id": {
+                                "type": "null"
+                              },
+                              "compute_profile": {
+                                "type": "null"
+                              },
+                              "work_ref": {
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "type": "object",
+                                        "required": [
+                                          "issue_id"
+                                        ],
+                                        "properties": {
+                                          "issue_id": {
+                                            "minLength": 1,
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "type": "object",
+                                        "required": [
+                                          "system_job_id"
+                                        ],
+                                        "properties": {
+                                          "system_job_id": {
+                                            "minLength": 1,
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "next_cursor": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/state": {
       "get": {
         "operationId": "getControlState",

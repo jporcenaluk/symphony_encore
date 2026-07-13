@@ -5,6 +5,9 @@ import {
   type ControlState,
   ControlStateSchema,
   ErrorEnvelopeSchema,
+  type EventRecordPage,
+  EventRecordPageQuerySchema,
+  EventRecordPageSchema,
   HealthResponseSchema,
   ReadyResponseSchema,
 } from "@symphony/contracts";
@@ -18,6 +21,7 @@ export interface OperatorPrincipal {
 
 export interface ControlApiDependencies {
   authenticate(request: FastifyRequest): Promise<OperatorPrincipal | null>;
+  listEvents(input: { afterCursor: number; limit: number }): Promise<EventRecordPage>;
   readControlState(): Promise<ControlState>;
   readServiceStatus(): Promise<{ id: string; state: ActiveServiceState }>;
 }
@@ -37,6 +41,30 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
       info: { title: "Symphony Encore Control API", version: "0.0.0" },
       openapi: "3.1.0",
     },
+  });
+
+  server.setErrorHandler((error, _request, reply) => {
+    const validationIssues = extractValidationIssues(error);
+    if (validationIssues !== null) {
+      return reply.code(422).send({
+        error: {
+          code: "validation_failed",
+          current_version: null,
+          details: {
+            issues: validationIssues,
+          },
+          message: "Request validation failed",
+        },
+      });
+    }
+    return reply.code(500).send({
+      error: {
+        code: "internal_error",
+        current_version: null,
+        details: {},
+        message: "The request could not be completed",
+      },
+    });
   });
 
   server.get(
@@ -85,6 +113,54 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
   );
 
   server.get(
+    "/api/v1/events",
+    {
+      schema: {
+        operationId: "listEvents",
+        querystring: EventRecordPageQuerySchema,
+        response: {
+          200: EventRecordPageSchema,
+          401: ErrorEnvelopeSchema,
+          403: ErrorEnvelopeSchema,
+          422: ErrorEnvelopeSchema,
+        },
+        security: [{ sessionCookie: [] }],
+        summary: "Durable event page",
+        tags: ["control"],
+      },
+    },
+    async (request, reply) => {
+      const operator = await dependencies.authenticate(request);
+      if (operator === null) {
+        return reply.code(401).send({
+          error: {
+            code: "authentication_required",
+            current_version: null,
+            details: {},
+            message: "Authentication is required",
+          },
+        });
+      }
+      if (!operator.capabilities.includes("operator.read")) {
+        return reply.code(403).send({
+          error: {
+            code: "capability_required",
+            current_version: null,
+            details: { capability: "operator.read" },
+            message: "The operator.read capability is required",
+          },
+        });
+      }
+      return reply.code(200).send(
+        await dependencies.listEvents({
+          afterCursor: request.query.after_cursor ?? 0,
+          limit: request.query.limit ?? 100,
+        }),
+      );
+    },
+  );
+
+  server.get(
     "/api/v1/state",
     {
       schema: {
@@ -129,3 +205,24 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
 }
 
 export type ControlApi = Awaited<ReturnType<typeof createControlApi>>;
+
+function extractValidationIssues(
+  error: unknown,
+): { instance_path: string; keyword: string; message: string }[] | null {
+  if (typeof error !== "object" || error === null || !("validation" in error)) return null;
+  const validation = error.validation;
+  if (!Array.isArray(validation)) return null;
+  return validation.map((issue: unknown) => {
+    if (typeof issue !== "object" || issue === null) {
+      return { instance_path: "", keyword: "validation", message: "invalid value" };
+    }
+    return {
+      instance_path:
+        "instancePath" in issue && typeof issue.instancePath === "string" ? issue.instancePath : "",
+      keyword:
+        "keyword" in issue && typeof issue.keyword === "string" ? issue.keyword : "validation",
+      message:
+        "message" in issue && typeof issue.message === "string" ? issue.message : "invalid value",
+    };
+  });
+}

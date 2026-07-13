@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  appendEventRecord,
   applyMigrations,
   beginServiceRun,
   type OpenedDatabase,
@@ -60,6 +61,31 @@ describe("persistent Control API composition", () => {
       dispatch_enabled: false,
       service_run: { id: "run-1", status: "recovering" },
       version: "service-run:run-1:recovering",
+    });
+
+    await appendEventRecord(opened.database, {
+      attemptId: null,
+      changeClass: null,
+      computeProfile: null,
+      costUsd: null,
+      eventName: "service.recovery",
+      id: "event-1",
+      payload: { phase: "workspaces" },
+      reasonCode: "recovery.progress",
+      result: "recorded",
+      serviceRunId: "run-1",
+      timestamp: "2026-07-13T10:00:01Z",
+      workRef: null,
+    });
+    const events = await server.inject({
+      method: "GET",
+      url: "/api/v1/events?after_cursor=0&limit=10",
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.json()).toMatchObject({
+      has_more: false,
+      items: [{ cursor: 1, id: "event-1" }],
+      next_cursor: 1,
     });
   });
 });

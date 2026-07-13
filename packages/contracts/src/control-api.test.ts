@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ControlStateSchema,
   ErrorEnvelopeSchema,
+  EventRecordPageSchema,
   HealthResponseSchema,
   ReadyResponseSchema,
 } from "./control-api.js";
@@ -52,5 +53,16 @@ describe("Control API wire contracts", () => {
         version: "state-7",
       }),
     ).toBe(true);
+  });
+
+  it("pages durable events with an explicit resume cursor", () => {
+    expect(
+      Value.Check(EventRecordPageSchema, {
+        has_more: false,
+        items: [],
+        next_cursor: 42,
+      }),
+    ).toBe(true);
+    expect(Value.Check(EventRecordPageSchema, { has_more: false, items: [] })).toBe(false);
   });
 });

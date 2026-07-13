@@ -2,7 +2,13 @@
  * Generated from the registered Control API OpenAPI document.
  * Do not edit by hand; run `pnpm openapi:generate`.
  */
-import type { ControlState, ErrorEnvelope, HealthResponse, ReadyResponse } from "./control-api.js";
+import type {
+  ControlState,
+  ErrorEnvelope,
+  EventRecordPage,
+  HealthResponse,
+  ReadyResponse,
+} from "./control-api.js";
 
 export class ControlApiClientError extends Error {
   readonly envelope: ErrorEnvelope;
@@ -18,6 +24,7 @@ export class ControlApiClientError extends Error {
 export interface ControlApiClient {
   getHealth(): Promise<HealthResponse>;
   getReady(): Promise<ReadyResponse>;
+  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
   getControlState(): Promise<ControlState>;
 }
 
@@ -39,6 +46,13 @@ export function createControlApiClient(
   return {
     getHealth: () => request<HealthResponse>("/health", "GET"),
     getReady: () => request<ReadyResponse>("/ready", "GET"),
+    listEvents: (input = {}) => {
+      const query = new URLSearchParams();
+      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const suffix = query.size === 0 ? "" : `?${query}`;
+      return request<EventRecordPage>(`/api/v1/events${suffix}`, "GET");
+    },
     getControlState: () => request<ControlState>("/api/v1/state", "GET"),
   };
 }

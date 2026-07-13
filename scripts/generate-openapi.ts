@@ -24,6 +24,9 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
     async authenticate() {
       return null;
     },
+    async listEvents() {
+      return { has_more: false, items: [], next_cursor: 0 };
+    },
     async readControlState() {
       return {
         dispatch_enabled: false,
@@ -53,6 +56,7 @@ const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
   getControlState: "ControlState",
   getHealth: "HealthResponse",
   getReady: "ReadyResponse",
+  listEvents: "EventRecordPage",
 };
 
 export async function renderControlApiClient(): Promise<string> {
@@ -76,16 +80,30 @@ export async function renderControlApiClient(): Promise<string> {
   }
 
   const methods = operations
-    .map(
-      (operation) =>
-        `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`,
-    )
+    .map((operation) => {
+      if (operation.operationId === "listEvents") {
+        return `    listEvents: (input = {}) => {
+      const query = new URLSearchParams();
+      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const suffix = query.size === 0 ? "" : \`?\${query}\`;
+      return request<EventRecordPage>(\`${operation.path}\${suffix}\`, ${JSON.stringify(operation.method)});
+    },`;
+      }
+      return `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`;
+    })
     .join("\n");
   return `/**
  * Generated from the registered Control API OpenAPI document.
  * Do not edit by hand; run \`pnpm openapi:generate\`.
  */
-import type { ControlState, ErrorEnvelope, HealthResponse, ReadyResponse } from "./control-api.js";
+import type {
+  ControlState,
+  ErrorEnvelope,
+  EventRecordPage,
+  HealthResponse,
+  ReadyResponse,
+} from "./control-api.js";
 
 export class ControlApiClientError extends Error {
   readonly envelope: ErrorEnvelope;
@@ -99,7 +117,7 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-${operations.map((operation) => `  ${operation.operationId}(): Promise<${operation.returnType}>;`).join("\n")}
+${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
 }
 
 export function createControlApiClient(
