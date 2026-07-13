@@ -56,13 +56,29 @@ function insertClaim(opened: OpenedDatabase, workId: string): void {
     .run(workId);
 }
 
+function insertCheckout(opened: OpenedDatabase, workId: string, workspacePath: string): void {
+  opened.sqlite
+    .prepare(`
+      insert into workspace_checkouts (
+        work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
+        checkout_method, local_branch, created_at
+      ) values (
+        'issue', ?, ?, 'owner/repo', '0123456789abcdef0123456789abcdef01234567',
+        'trusted_repository_adapter', 'symphony/test', '2026-07-13T10:00:01Z'
+      )
+    `)
+    .run(workId, workspacePath);
+}
+
 describe("claimed workspace ownership", () => {
   it("projects one stable workspace for every durable claim", async () => {
     const opened = await temporaryDatabase();
     insertAttempt(opened, { id: "attempt-2", workId: "issue-2", workspacePath: "/work/issue-2" });
     insertClaim(opened, "issue-2");
+    insertCheckout(opened, "issue-2", "/work/issue-2");
     insertAttempt(opened, { id: "attempt-1", workId: "issue-1", workspacePath: "/work/issue-1" });
     insertClaim(opened, "issue-1");
+    insertCheckout(opened, "issue-1", "/work/issue-1");
 
     await expect(listClaimedWorkspaceOwnership(opened.database)).resolves.toEqual([
       { workRef: "issue:issue-1", workspacePath: "/work/issue-1" },
@@ -80,21 +96,18 @@ describe("claimed workspace ownership", () => {
       workspacePath: "/work/other",
     });
     insertClaim(opened, "issue-1");
+    insertCheckout(opened, "issue-1", "/work/issue-1");
 
     await expect(listClaimedWorkspaceOwnership(opened.database)).rejects.toThrow(
       "workspace.assignment_changed",
     );
   });
 
-  it("fails closed when two work refs claim the same stored path", async () => {
+  it("does not claim filesystem ownership before checkout provenance is committed", async () => {
     const opened = await temporaryDatabase();
-    insertAttempt(opened, { id: "attempt-1", workId: "issue-1", workspacePath: "/work/shared" });
+    insertAttempt(opened, { id: "attempt-1", workId: "issue-1", workspacePath: "/work/issue-1" });
     insertClaim(opened, "issue-1");
-    insertAttempt(opened, { id: "attempt-2", workId: "issue-2", workspacePath: "/work/shared" });
-    insertClaim(opened, "issue-2");
 
-    await expect(listClaimedWorkspaceOwnership(opened.database)).rejects.toThrow(
-      "workspace.cross_work_ownership",
-    );
+    await expect(listClaimedWorkspaceOwnership(opened.database)).resolves.toEqual([]);
   });
 });

@@ -45,6 +45,7 @@ describe("production migrations", () => {
       { name: "operator_identity_and_sessions", version: 8 },
       { name: "startup_failure_records", version: 9 },
       { name: "active_synthesis_job_guard", version: 10 },
+      { name: "workspace_checkout_provenance", version: 11 },
     ]);
   });
 
@@ -86,6 +87,7 @@ describe("production migrations", () => {
         "system_jobs",
         "usage_samples",
         "verification_records",
+        "workspace_checkouts",
       ]),
     );
   });

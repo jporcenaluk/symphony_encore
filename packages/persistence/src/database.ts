@@ -51,6 +51,7 @@ export interface DatabaseSchema {
   terminal_results: Record<string, unknown>;
   usage_samples: Record<string, unknown>;
   verification_records: Record<string, unknown>;
+  workspace_checkouts: Record<string, unknown>;
 }
 
 export interface OpenedDatabase {
@@ -843,6 +844,31 @@ const activeSynthesisJobMigration: RepositoryMigration = {
   version: 10,
 };
 
+const workspaceCheckoutMigration: RepositoryMigration = {
+  checksum: "sha256:d1846c466b8a206754992b293233eefa43d4d45f27af879672adc9b34a746f5e",
+  name: "workspace_checkout_provenance",
+  async up(database) {
+    await sql`
+      create table workspace_checkouts (
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        workspace_path text not null unique,
+        repository text not null,
+        base_sha text not null check (
+          length(base_sha) between 7 and 64 and base_sha not glob '*[^0-9A-Fa-f]*'
+        ),
+        checkout_method text not null check (
+          checkout_method in ('trusted_repository_adapter', 'operator_managed_mirror')
+        ),
+        local_branch text not null,
+        created_at text not null,
+        primary key (work_ref_kind, work_ref_id)
+      ) strict
+    `.execute(database);
+  },
+  version: 11,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -854,6 +880,7 @@ export const CORE_MIGRATIONS = [
   operatorIdentityMigration,
   startupFailureMigration,
   activeSynthesisJobMigration,
+  workspaceCheckoutMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

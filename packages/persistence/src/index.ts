@@ -24,4 +24,5 @@ export * from "./stage-transition.js";
 export * from "./startup-failure-store.js";
 export * from "./system-job-store.js";
 export * from "./verification-store.js";
+export * from "./workspace-checkout-store.js";
 export * from "./workspace-ownership.js";

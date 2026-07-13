@@ -60,6 +60,18 @@ async function fixture(): Promise<{
     .run();
   opened.sqlite
     .prepare(`
+      insert into workspace_checkouts (
+        work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
+        checkout_method, local_branch, created_at
+      ) values (
+        'issue', 'issue-1', ?, 'owner/repo',
+        '0123456789abcdef0123456789abcdef01234567',
+        'trusted_repository_adapter', 'symphony/issue-1', '2026-07-13T10:00:01Z'
+      )
+    `)
+    .run(owned);
+  opened.sqlite
+    .prepare(`
       insert into budget_ledgers (
         id, scope, scope_id, unit, base_limit, effective_limit, reserved, updated_at
       ) values ('attempt-ledger', 'attempt', 'attempt-1', 'tokens', 100, 100, 10, 't0')
