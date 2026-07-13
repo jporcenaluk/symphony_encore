@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
 import type { AgentAdapterManifest, AgentEvent } from "@symphony/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CodexSpawnProcess } from "./codex-app-server.js";
 import { createCodexAppServerAdapter } from "./codex-app-server.js";
 import type { AgentLaunchRequest, AgentPreflightResult } from "./contracts.js";
@@ -343,6 +343,57 @@ describe("Codex app-server adapter", () => {
       "turn_failed",
     ]);
     expect(events[0]).toMatchObject({ reasoning_effort: "low" });
+  });
+
+  it("waits for the orchestrator Plan decision before replying to the tool call", async () => {
+    const responses: Array<Record<string, unknown>> = [];
+    const spawnProcess = scriptedProcess((message, control) => {
+      if (message.method === "initialize") {
+        control.send({ id: message.id, result: {} });
+      } else if (message.method === "thread/start") {
+        control.send({ id: message.id, result: { thread: { id: "thread-plan" } } });
+      } else if (message.method === "thread/name/set") {
+        control.send({ id: message.id, result: {} });
+      } else if (message.method === "turn/start") {
+        control.send({ id: message.id, result: { turn: { id: "turn-plan" } } });
+        control.send({
+          id: "plan-decision",
+          method: "item/tool/call",
+          params: { arguments: { markdown: "Incomplete plan" }, tool: "submit_plan" },
+        });
+      } else if (message.id === "plan-decision") {
+        responses.push(message);
+        control.send({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-plan",
+            turn: { error: { message: "plan rejected" }, id: "turn-plan", status: "failed" },
+          },
+        });
+        control.close();
+      }
+    });
+    const onPlanSubmitted = vi.fn(async () => ({
+      accepted: false,
+      message: "Missing acceptance criterion: Reject stale versions",
+    }));
+    const adapter = createCodexAppServerAdapter({ manifest, readTimeoutMs: 1_000, spawnProcess });
+
+    const session = await adapter.launch(request({ onPlanSubmitted }));
+    const events = await collect(session.events);
+
+    expect(onPlanSubmitted).toHaveBeenCalledWith({ markdown: "Incomplete plan" });
+    expect(responses[0]?.result).toEqual({
+      contentItems: [
+        { text: "Missing acceptance criterion: Reject stale versions", type: "inputText" },
+      ],
+      success: false,
+    });
+    expect(events.map((event) => event.event)).toEqual([
+      "session_started",
+      "plan_reported",
+      "turn_failed",
+    ]);
   });
 
   it("terminates the session when the bounded event queue overflows", async () => {

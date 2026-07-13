@@ -137,11 +137,17 @@ export interface AgentLaunchRequest {
   attemptId: string;
   command: string;
   environment: Readonly<Record<string, string>>;
+  onPlanSubmitted?: (plan: unknown) => Promise<AgentPlanSubmissionDecision>;
   preflight: AgentPreflightResult;
   profile: "deep" | "economy" | "standard";
   prompt: string;
   title: string;
   workspacePath: string;
+}
+
+export interface AgentPlanSubmissionDecision {
+  accepted: boolean;
+  message: string;
 }
 
 export interface AgentSession {

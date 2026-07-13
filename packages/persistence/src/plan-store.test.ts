@@ -6,7 +6,7 @@ import type { Plan } from "@symphony/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { recordSubmittedPlan } from "./plan-store.js";
+import { markPlanValidated, recordSubmittedPlan } from "./plan-store.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -103,5 +103,30 @@ describe("submitted plan persistence", () => {
         plan: { ...plan(1), verification_commands: [] },
       }),
     ).rejects.toThrow("plan.invalid");
+  });
+
+  it("replays an exact submission after the orchestrator validates it", async () => {
+    await expect(
+      recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan: plan(1) }),
+    ).resolves.toEqual({ replayed: false });
+    await markPlanValidated(opened.database, {
+      attemptId: "attempt-1",
+      planId: "plan-1",
+      validatedAt: "2026-07-13T10:02:00Z",
+    });
+
+    await expect(
+      recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan: plan(1) }),
+    ).resolves.toEqual({ replayed: true });
+    expect(opened.sqlite.prepare("select status, validated_at from plans").get()).toEqual({
+      status: "validated",
+      validated_at: "2026-07-13T10:02:00Z",
+    });
+    await expect(
+      recordSubmittedPlan(opened.database, {
+        attemptId: "attempt-1",
+        plan: { ...plan(1), approach: "Conflicting replay" },
+      }),
+    ).rejects.toThrow("plan.idempotency_conflict");
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -182,6 +182,30 @@ describe("production reconciliation scheduler", () => {
     };
     const agent: AgentAdapter = {
       launch: vi.fn(async (request: AgentLaunchRequest) => {
+        const submittedPlan = {
+          acceptance_criteria: [
+            {
+              criterion_id: "criterion-1",
+              criterion_text: candidate.acceptance_criteria[0],
+              planned_evidence: "The production scheduler integration test",
+            },
+          ],
+          approach: "Exercise the production scheduling boundary.",
+          approved_by_attempt_id: null,
+          created_at: "2026-07-13T10:00:03.500Z",
+          created_by_attempt_id: request.attemptId,
+          estimated_changed_lines: 10,
+          estimated_files: 1,
+          id: "plan-1",
+          proposed_paths: ["apps/server/src/production-scheduler.ts"],
+          revision: 1,
+          risk_facts: [],
+          status: "draft" as const,
+          validated_at: null,
+          verification_commands: ["make verify-fast"],
+          work_ref: { issue_id: candidate.id },
+        };
+        const planDecision = request.onPlanSubmitted?.(submittedPlan);
         const session: AgentSession = {
           cancel: vi.fn(async () => undefined),
           events: {
@@ -195,6 +219,15 @@ describe("production reconciliation scheduler", () => {
                 thread_id: "thread-1",
                 timestamp: "2026-07-13T10:00:03.000Z",
                 turn_id: "turn-1",
+              };
+              const decision = await planDecision;
+              if (!decision?.accepted) throw new Error("production Plan gate rejected valid Plan");
+              yield {
+                attempt_id: request.attemptId,
+                event: "plan_reported" as const,
+                plan: submittedPlan,
+                session_id: "thread-1-turn-1",
+                timestamp: "2026-07-13T10:00:03.500Z",
               };
               yield {
                 attempt_id: request.attemptId,
@@ -298,6 +331,12 @@ describe("production reconciliation scheduler", () => {
     expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
       status: "settled",
     });
+    expect(opened.sqlite.prepare("select status from plans").get()).toEqual({
+      status: "validated",
+    });
+    await expect(readFile(path.join(workspaceRoot, "ORG-9", "PLAN.md"), "utf8")).resolves.toContain(
+      "Status: validated",
+    );
     await opened.close();
   });
 });

@@ -13,7 +13,7 @@ interface AttemptIdentityRow {
 export async function recordSubmittedPlan(
   database: Kysely<DatabaseSchema>,
   input: { attemptId: string; plan: unknown },
-): Promise<void> {
+): Promise<{ replayed: boolean }> {
   const plan = input.plan;
   if (!isPlan(plan)) throw new Error("plan.invalid");
   if (
@@ -23,7 +23,7 @@ export async function recordSubmittedPlan(
   ) {
     throw new Error("plan.submission_state_invalid");
   }
-  await database.transaction().execute(async (transaction) => {
+  return database.transaction().execute(async (transaction) => {
     const attempts = await sql<AttemptIdentityRow>`
       select role, status, work_ref_kind, work_ref_id
       from attempts where id = ${input.attemptId}
@@ -39,6 +39,16 @@ export async function recordSubmittedPlan(
       workRef.id !== attempt.work_ref_id
     ) {
       throw new Error("plan.attempt_work_ref_mismatch");
+    }
+    const existing = await sql<StoredPlanRow>`
+      select * from plans where id = ${plan.id}
+    `.execute(transaction);
+    const original = existing.rows[0];
+    if (original) {
+      if (submissionFingerprintFromRow(original) !== submissionFingerprint(plan)) {
+        throw new Error("plan.idempotency_conflict");
+      }
+      return { replayed: true };
     }
     const current = await sql<{ maximum: number | null }>`
       select max(revision) as maximum
@@ -71,6 +81,92 @@ export async function recordSubmittedPlan(
         ${plan.created_at}, ${plan.validated_at}, ${plan.approved_by_attempt_id}
       )
     `.execute(transaction);
+    return { replayed: false };
+  });
+}
+
+interface StoredPlanRow {
+  acceptance_criteria_json: string;
+  approach: string;
+  created_at: string;
+  created_by_attempt_id: string;
+  estimated_changed_lines: number;
+  estimated_files: number;
+  id: string;
+  proposed_paths_json: string;
+  revision: number;
+  risk_facts_json: string;
+  verification_commands_json: string;
+  work_ref_id: string;
+  work_ref_kind: "issue" | "system_job";
+}
+
+export async function markPlanValidated(
+  database: Kysely<DatabaseSchema>,
+  input: { attemptId: string; planId: string; validatedAt: string },
+): Promise<void> {
+  const update = await sql`
+    update plans
+    set status = 'validated', validated_at = ${input.validatedAt}
+    where id = ${input.planId}
+      and created_by_attempt_id = ${input.attemptId}
+      and status = 'draft'
+      and validated_at is null
+  `.execute(database);
+  if (update.numAffectedRows === 1n) return;
+  const existing = await sql<{
+    created_by_attempt_id: string;
+    status: string;
+    validated_at: string | null;
+  }>`
+    select created_by_attempt_id, status, validated_at
+    from plans where id = ${input.planId}
+  `.execute(database);
+  const plan = existing.rows[0];
+  if (
+    plan?.created_by_attempt_id === input.attemptId &&
+    plan.status === "validated" &&
+    plan.validated_at !== null
+  ) {
+    return;
+  }
+  throw new Error("plan.validation_state_conflict");
+}
+
+function submissionFingerprint(plan: Plan): string {
+  const workRef = planWorkRef(plan);
+  return JSON.stringify({
+    acceptanceCriteria: plan.acceptance_criteria,
+    approach: plan.approach,
+    createdAt: plan.created_at,
+    createdByAttemptId: plan.created_by_attempt_id,
+    estimatedChangedLines: plan.estimated_changed_lines,
+    estimatedFiles: plan.estimated_files,
+    id: plan.id,
+    proposedPaths: plan.proposed_paths,
+    revision: plan.revision,
+    riskFacts: plan.risk_facts,
+    verificationCommands: plan.verification_commands,
+    workRefId: workRef.id,
+    workRefKind: workRef.kind,
+  });
+}
+
+function submissionFingerprintFromRow(plan: StoredPlanRow): string {
+  return JSON.stringify({
+    acceptanceCriteria: JSON.parse(plan.acceptance_criteria_json),
+    approach: plan.approach,
+    createdAt: plan.created_at,
+    createdByAttemptId: plan.created_by_attempt_id,
+    estimatedChangedLines: plan.estimated_changed_lines,
+    estimatedFiles: plan.estimated_files,
+    id: plan.id,
+    proposedPaths: JSON.parse(plan.proposed_paths_json),
+    revision: plan.revision,
+    riskFacts: JSON.parse(plan.risk_facts_json),
+    verificationCommands: JSON.parse(plan.verification_commands_json),
+    workRefId: plan.work_ref_id,
+    workRefKind: plan.work_ref_kind,
   });
 }
 

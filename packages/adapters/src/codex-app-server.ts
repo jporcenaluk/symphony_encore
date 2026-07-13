@@ -17,6 +17,7 @@ import { validateAgentPreflight } from "./agent-preflight.js";
 import type {
   AgentAdapter,
   AgentLaunchRequest,
+  AgentPlanSubmissionDecision,
   AgentPreflightRequest,
   AgentPreflightResult,
   AgentSession,
@@ -227,7 +228,14 @@ async function launchCodexSession(
       return;
     }
     if ("id" in message) {
-      handleServerRequest(message, respond, emitEvent, context, request.preflight);
+      void handleServerRequest(
+        message,
+        respond,
+        emitEvent,
+        context,
+        request.preflight,
+        request.onPlanSubmitted,
+      ).catch(failSession);
       return;
     }
     const event = normalizeNotification(message.method, message.params, context);
@@ -390,13 +398,14 @@ function dynamicTool(
   return { description, inputSchema, name, type: "function" };
 }
 
-function handleServerRequest(
+async function handleServerRequest(
   message: JsonObject,
   respond: (id: string | number, result: unknown) => void,
   emitEvent: (event: AgentEvent) => void,
   context: NormalizationContext,
   preflight: AgentPreflightResult,
-): void {
+  onPlanSubmitted?: (plan: unknown) => Promise<AgentPlanSubmissionDecision>,
+): Promise<void> {
   const id = message.id;
   if (typeof id !== "string" && typeof id !== "number") return;
   const method = String(message.method);
@@ -434,6 +443,17 @@ function handleServerRequest(
         event: "plan_reported",
         plan: params.arguments,
       });
+      if (onPlanSubmitted) {
+        const decision = await onPlanSubmitted(params.arguments);
+        if (typeof decision.accepted !== "boolean" || !decision.message) {
+          throw new Error("agent Plan decision is invalid");
+        }
+        respond(id, {
+          contentItems: [{ text: decision.message, type: "inputText" }],
+          success: decision.accepted,
+        });
+        return;
+      }
     }
     respond(id, {
       contentItems: [{ text: `${tool} accepted.`, type: "inputText" }],

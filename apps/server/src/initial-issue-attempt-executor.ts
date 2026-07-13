@@ -1,4 +1,9 @@
-import type { AgentAdapter, TrackerAdapter, WorkspaceRepositoryAdapter } from "@symphony/adapters";
+import type {
+  AgentAdapter,
+  AgentPlanSubmissionDecision,
+  TrackerAdapter,
+  WorkspaceRepositoryAdapter,
+} from "@symphony/adapters";
 import { AGENT_ERROR_FAILURE_CLASS, type AgentErrorCode, type Issue } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
@@ -20,6 +25,7 @@ export interface ExecutePlannedInitialIssueAttemptInput {
   issue: Issue;
   newId(): string;
   now(): string;
+  onPlanSubmitted?: (plan: unknown) => Promise<AgentPlanSubmissionDecision>;
   planned: PlannedInitialIssueAttempt;
   repositoryAdapter: WorkspaceRepositoryAdapter;
   safety: PersistenceSafetyController;
@@ -34,6 +40,9 @@ export async function executePlannedInitialIssueAttempt(
   return executeInitialIssueDispatch({
     database: input.database,
     async launchWorker() {
+      const planSubmission = input.onPlanSubmitted
+        ? gatePlanSubmissionUntilBound(input.onPlanSubmitted)
+        : undefined;
       try {
         const prepared = await prepareIssueWorkspace({
           afterCreateCommand: input.afterCreateCommand,
@@ -52,13 +61,14 @@ export async function executePlannedInitialIssueAttempt(
         ) {
           throw new Error("dispatch.workspace_provenance_mismatch");
         }
-        return await launchAndBindAgentSession({
+        const bound = await launchAndBindAgentSession({
           adapter: input.adapter,
           database: input.database,
           request: {
             attemptId: input.planned.attemptId,
             command: input.agentCommand,
             environment: prepared.workerEnvironment,
+            ...(planSubmission ? { onPlanSubmitted: planSubmission.submit } : {}),
             preflight: input.planned.preflight,
             profile: input.planned.route.profile,
             prompt: input.planned.prompt,
@@ -67,7 +77,10 @@ export async function executePlannedInitialIssueAttempt(
           },
           safety: input.safety,
         });
+        planSubmission?.bound();
+        return bound;
       } catch (error) {
+        planSubmission?.failed(error);
         await closeLaunchFailure(input, error);
         throw error;
       }
@@ -77,6 +90,30 @@ export async function executePlannedInitialIssueAttempt(
     safety: input.safety,
     tracker: input.tracker,
   });
+}
+
+function gatePlanSubmissionUntilBound(
+  handler: (plan: unknown) => Promise<AgentPlanSubmissionDecision>,
+) {
+  let bindingError: Error | undefined;
+  let release: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    bound() {
+      release?.();
+    },
+    failed(error: unknown) {
+      bindingError = error instanceof Error ? error : new Error(String(error));
+      release?.();
+    },
+    async submit(plan: unknown) {
+      await ready;
+      if (bindingError) throw bindingError;
+      return handler(plan);
+    },
+  };
 }
 
 async function closeLaunchFailure(

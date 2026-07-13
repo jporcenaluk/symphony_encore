@@ -34,6 +34,7 @@ import {
 import { syncTrackerCandidates } from "./candidate-sync.js";
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
+import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -207,6 +208,14 @@ export function createProductionScheduler(input: {
             issue: stored.issue,
             newId: randomUUID,
             now: () => new Date().toISOString(),
+            onPlanSubmitted: createInitialPlanSubmissionHandler({
+              attemptId: planned.attemptId,
+              database: input.database,
+              issue: stored.issue,
+              now: () => new Date().toISOString(),
+              safety,
+              workspacePath: planned.record.dispatch.attempt.workspacePath,
+            }),
             planned,
             repositoryAdapter,
             safety,
