@@ -5,7 +5,7 @@ import {
   type Issue,
   isImplementationOutcome,
 } from "@symphony/contracts";
-import type { FailureClass } from "@symphony/domain";
+import { decideFailureRoute, type FailureClass } from "@symphony/domain";
 import {
   type PersistenceSafetyController,
   routeImplementationOutcome,
@@ -13,6 +13,7 @@ import {
 import {
   finishAttempt,
   loadAttemptSettlementState,
+  loadFailureRetryState,
   loadImplementationOutcomeCounts,
   type OpenedDatabase,
 } from "@symphony/persistence";
@@ -25,18 +26,27 @@ export async function closeInitialIssueAttempt(input: {
   database: OpenedDatabase["database"];
   endedAt: string;
   issue: Issue;
+  maxFailureRetries: number;
+  maxRetryBackoffMs: number;
   maxReworkCycles: number;
   newId(): string;
   providerRevision: string;
   reservationId: string;
+  retryJitterSample: number;
   safety: PersistenceSafetyController;
 }): Promise<void> {
   const terminalResultId = input.newId();
   if (
     !terminalResultId ||
     !input.providerRevision ||
+    !Number.isSafeInteger(input.maxFailureRetries) ||
+    input.maxFailureRetries < 0 ||
+    !Number.isSafeInteger(input.maxRetryBackoffMs) ||
+    input.maxRetryBackoffMs < 0 ||
     !Number.isSafeInteger(input.maxReworkCycles) ||
-    input.maxReworkCycles < 0
+    input.maxReworkCycles < 0 ||
+    input.retryJitterSample < 0 ||
+    input.retryJitterSample > 1
   ) {
     throw new Error("attempt_closure.identity_invalid");
   }
@@ -52,14 +62,23 @@ export async function closeInitialIssueAttempt(input: {
     const consumption = normalizeConsumption(input.consumption);
     const failureClass =
       consumption.kind === "failure" ? failureClassFor(consumption.errorCode) : null;
+    const failureState =
+      consumption.kind === "failure"
+        ? await loadFailureRetryState(input.database, {
+            id: input.issue.id,
+            kind: "issue",
+          })
+        : null;
+    const closure = closureRoute(input, consumption, outcomeCounts, failureState);
     await finishAttempt(input.database, {
       attemptId: input.attemptId,
       costUsd: settlement.costUsd,
       endedAt: input.endedAt,
       failureClass,
-      nextClaim: nextClaim(consumption, input.maxReworkCycles, outcomeCounts),
+      nextClaim: closure.nextClaim,
       parkedOriginStage: "In Progress",
       reservationId: input.reservationId,
+      ...(closure.retryEntry ? { retryEntry: closure.retryEntry } : {}),
       settledLedgers: settlement.ledgers.map((ledger) => ({
         actualAmount:
           ledger.unit === "tokens"
@@ -124,8 +143,92 @@ function normalizeConsumption(
   return consumption;
 }
 
-function nextClaim(
+function closureRoute(
+  input: Pick<
+    Parameters<typeof closeInitialIssueAttempt>[0],
+    "endedAt" | "maxFailureRetries" | "maxRetryBackoffMs" | "maxReworkCycles" | "retryJitterSample"
+  >,
   consumption: ReturnType<typeof normalizeConsumption>,
+  outcomeCounts: { noProgress: number; rework: number },
+  failureState: Awaited<ReturnType<typeof loadFailureRetryState>> | null,
+): {
+  nextClaim:
+    | { dueAt: string; mode: "RetryQueued"; reason: string }
+    | { mode: "Ready"; reason: string }
+    | {
+        approvalRequestId: null;
+        blockerPredicate: null;
+        mode: "AwaitingHuman";
+        questionId: null;
+        reason: string;
+      };
+  retryEntry: {
+    dueAt: string;
+    failureClass: string;
+    lastError: string;
+    maxRetries: number;
+    retryNumber: number;
+  } | null;
+} {
+  if (consumption.kind === "failure") {
+    const mapped = AGENT_ERROR_FAILURE_CLASS[consumption.errorCode];
+    if (mapped === "budget_exhausted") {
+      return { nextClaim: awaitingHuman("budget_exhausted"), retryEntry: null };
+    }
+    if (!failureState) throw new Error("attempt_closure.failure_state_missing");
+    const failureClass = failureClassFor(consumption.errorCode);
+    const classRetryNumber =
+      failureClass === "infrastructure"
+        ? failureState.infrastructureFailures + 1
+        : failureState.agentProcessFailures + 1;
+    const endedAtMs = Date.parse(input.endedAt);
+    if (!Number.isFinite(endedAtMs)) throw new Error("attempt_closure.timestamp_invalid");
+    const firstInfrastructureMs = failureState.firstInfrastructureFailureAt
+      ? Date.parse(failureState.firstInfrastructureFailureAt)
+      : endedAtMs;
+    if (!Number.isFinite(firstInfrastructureMs)) {
+      throw new Error("attempt_closure.persisted_retry_timestamp_invalid");
+    }
+    const decision = decideFailureRoute({
+      baseBackoffMs: 10_000,
+      elapsedInfrastructureFailureMs: Math.max(0, endedAtMs - firstInfrastructureMs),
+      failureClass,
+      jitterSample: input.retryJitterSample,
+      maxBackoffMs: input.maxRetryBackoffMs,
+      maxFailureRetries: input.maxFailureRetries,
+      retryAfterMs: null,
+      retryNumber: classRetryNumber,
+    });
+    if (decision.route === "retry") {
+      const dueAt = new Date(endedAtMs + decision.delayMs).toISOString();
+      return {
+        nextClaim: { dueAt, mode: "RetryQueued", reason: consumption.errorCode },
+        retryEntry: {
+          dueAt,
+          failureClass,
+          lastError: boundedReason(consumption.providerReason),
+          maxRetries: input.maxFailureRetries,
+          retryNumber: failureState.retryEntries + 1,
+        },
+      };
+    }
+    if (decision.route === "human") {
+      return { nextClaim: awaitingHuman("human_review"), retryEntry: null };
+    }
+    if (decision.route === "pause_scope") {
+      return { nextClaim: awaitingHuman(failureClass), retryEntry: null };
+    }
+    if (decision.route === "deny") {
+      return { nextClaim: awaitingHuman("policy"), retryEntry: null };
+    }
+    return { nextClaim: awaitingHuman("needs_input"), retryEntry: null };
+  }
+  const nextClaim = nextClaimForOutcome(consumption.result, input.maxReworkCycles, outcomeCounts);
+  return { nextClaim, retryEntry: null };
+}
+
+function nextClaimForOutcome(
+  result: ImplementationOutcome,
   maxReworkCycles: number,
   outcomeCounts: { noProgress: number; rework: number },
 ):
@@ -137,20 +240,11 @@ function nextClaim(
       questionId: null;
       reason: string;
     } {
-  if (consumption.kind === "failure") {
-    const failureClass = AGENT_ERROR_FAILURE_CLASS[consumption.errorCode];
-    return failureClass === "budget_exhausted" ||
-      failureClass === "auth" ||
-      failureClass === "configuration" ||
-      failureClass === "policy"
-      ? awaitingHuman(failureClass)
-      : { mode: "Ready", reason: consumption.errorCode };
-  }
-  switch (consumption.result.status) {
+  switch (result.status) {
     case "blocked":
     case "needs_input":
     case "budget_exhausted":
-      return awaitingHuman(consumption.result.status);
+      return awaitingHuman(result.status);
     case "completed":
       return { mode: "Ready", reason: "independent_verification_required" };
     case "plan_ready":
@@ -185,6 +279,15 @@ function nextClaim(
       return { mode: "Ready", reason: "implementation_failed" };
   }
   throw new Error("attempt_closure.outcome_status_invalid");
+}
+
+function boundedReason(value: string): string {
+  return (
+    value
+      .replace(/[\r\n\t]+/gu, " ")
+      .trim()
+      .slice(0, 512) || "agent failure"
+  );
 }
 
 function awaitingHuman(reason: string) {

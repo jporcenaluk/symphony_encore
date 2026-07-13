@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadClaimRecoveryState, renewRunningClaim } from "./claim-store.js";
+import { loadClaimRecoveryState, promoteDueRetryClaims, renewRunningClaim } from "./claim-store.js";
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 
 let directory: string;
@@ -112,5 +112,20 @@ describe("claim recovery state", () => {
         workRef: { id: "running", kind: "issue" },
       }),
     ).rejects.toThrow("claim.lease_not_renewable");
+  });
+
+  it("atomically promotes only due retry claims", async () => {
+    insertClaim({ id: "due", mode: "RetryQueued", retryDueAt: "2026-07-13T10:01:00Z" });
+    insertClaim({ id: "future", mode: "RetryQueued", retryDueAt: "2026-07-13T10:03:00Z" });
+
+    await expect(promoteDueRetryClaims(opened.database, "2026-07-13T10:02:00Z")).resolves.toBe(1);
+    expect(
+      opened.sqlite
+        .prepare("select work_ref_id, mode, retry_due_at from claims order by work_ref_id")
+        .all(),
+    ).toEqual([
+      { mode: "Ready", retry_due_at: null, work_ref_id: "due" },
+      { mode: "RetryQueued", retry_due_at: "2026-07-13T10:03:00Z", work_ref_id: "future" },
+    ]);
   });
 });

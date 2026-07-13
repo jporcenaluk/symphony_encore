@@ -54,6 +54,7 @@ import {
   loadPendingReviewCoordination,
   type OpenedDatabase,
   observeIssue,
+  promoteDueRetryClaims,
   routeNextReviewSpecialist,
   routeReviewAdjudication,
 } from "@symphony/persistence";
@@ -197,7 +198,9 @@ export function createProductionScheduler(input: {
         0,
         numberValue(values, "agent.max_concurrent") - (await countRunningClaims(input.database)),
       );
-      const recoveryState = await loadClaimRecoveryState(input.database, new Date().toISOString());
+      const recoveryNow = new Date().toISOString();
+      await promoteDueRetryClaims(input.database, recoveryNow);
+      const recoveryState = await loadClaimRecoveryState(input.database, recoveryNow);
       for (const claim of recoveryState.ready) {
         if (!safety.canDispatch()) break;
         const isReviewCoordination = claim.reason === "review_coordination_required";
@@ -723,6 +726,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
+              maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
+              maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
               maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
               newId: randomUUID,
               now: () => new Date().toISOString(),
@@ -750,6 +755,7 @@ export function createProductionScheduler(input: {
               }),
               planned: implementationPlanned,
               repositoryAdapter,
+              retryJitterSample: Math.random(),
               safety,
               serviceRunId: input.serviceRunId,
               sourceEnvironment: input.environment,
@@ -849,6 +855,8 @@ export function createProductionScheduler(input: {
             database: input.database,
             hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
             issue: stored.issue,
+            maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
+            maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
             maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
             newId: randomUUID,
             now: () => new Date().toISOString(),
@@ -866,6 +874,7 @@ export function createProductionScheduler(input: {
             }),
             planned,
             repositoryAdapter,
+            retryJitterSample: Math.random(),
             safety,
             serviceRunId: input.serviceRunId,
             sourceEnvironment: input.environment,

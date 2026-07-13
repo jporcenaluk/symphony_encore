@@ -14,7 +14,10 @@ export interface StartedInitialIssueAttemptLifecycle {
 
 type LifecycleInput = ExecutePlannedInitialIssueAttemptInput & {
   attemptTokenCap: number;
+  maxFailureRetries: number;
+  maxRetryBackoffMs: number;
   maxReworkCycles: number;
+  retryJitterSample: number;
   serviceRunId: string;
   usdCap: number;
 };
@@ -36,7 +39,10 @@ export async function runPlannedInitialIssueAttemptLifecycle(
 async function consumeAndClose(
   input: ExecutePlannedInitialIssueAttemptInput & {
     attemptTokenCap: number;
+    maxFailureRetries: number;
+    maxRetryBackoffMs: number;
     maxReworkCycles: number;
+    retryJitterSample: number;
     serviceRunId: string;
     usdCap: number;
   },
@@ -79,10 +85,13 @@ async function consumeAndClose(
     database: input.database,
     endedAt: input.now(),
     issue: input.issue,
+    maxFailureRetries: input.maxFailureRetries,
+    maxRetryBackoffMs: input.maxRetryBackoffMs,
     maxReworkCycles: input.maxReworkCycles,
     newId: input.newId,
     providerRevision,
     reservationId: input.planned.record.dispatch.reservation.id,
+    retryJitterSample: input.retryJitterSample,
     safety: input.safety,
   });
   return consumption;

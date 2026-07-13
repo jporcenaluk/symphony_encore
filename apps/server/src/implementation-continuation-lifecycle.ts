@@ -9,7 +9,10 @@ import { closeInitialIssueAttempt } from "./initial-issue-attempt-closure.js";
 
 type LifecycleInput = ExecuteImplementationContinuationInput & {
   attemptTokenCap: number;
+  maxFailureRetries: number;
+  maxRetryBackoffMs: number;
   maxReworkCycles: number;
+  retryJitterSample: number;
   serviceRunId: string;
   usdCap: number;
 };
@@ -72,10 +75,13 @@ async function consumeAndClose(
     database: input.database,
     endedAt: input.now(),
     issue: input.issue,
+    maxFailureRetries: input.maxFailureRetries,
+    maxRetryBackoffMs: input.maxRetryBackoffMs,
     maxReworkCycles: input.maxReworkCycles,
     newId: input.newId,
     providerRevision: started.repositoryRevision,
     reservationId: input.planned.dispatch.reservation.id,
+    retryJitterSample: input.retryJitterSample,
     safety: input.safety,
   });
   return consumption;

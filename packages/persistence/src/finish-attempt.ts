@@ -28,6 +28,13 @@ export interface FinishAttemptInput {
   nextClaim: NextClaim;
   parkedOriginStage?: string;
   reservationId: string;
+  retryEntry?: {
+    dueAt: string;
+    failureClass: string;
+    lastError: string;
+    maxRetries: number;
+    retryNumber: number;
+  };
   settledLedgers: readonly SettlementInput[];
   terminalResult: {
     id: string;
@@ -52,6 +59,50 @@ interface AttemptSettlementRow {
 
 interface ImplementationOutcomeRow {
   payload_json: string;
+}
+
+interface FailureRetryStateRow {
+  agent_process_failures: number;
+  infrastructure_failures: number;
+  retry_entries: number;
+  first_infrastructure_failure_at: string | null;
+}
+
+export interface FailureRetryState {
+  agentProcessFailures: number;
+  firstInfrastructureFailureAt: string | null;
+  infrastructureFailures: number;
+  retryEntries: number;
+}
+
+export async function loadFailureRetryState(
+  database: Kysely<DatabaseSchema>,
+  workRef: { id: string; kind: "issue" | "system_job" },
+): Promise<FailureRetryState> {
+  const query = await sql<FailureRetryStateRow>`
+    select
+      (select count(*) from attempts
+       where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}
+         and role = 'implementation' and status = 'closed'
+         and failure_class = 'agent_process') as agent_process_failures,
+      (select count(*) from attempts
+       where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}
+         and role = 'implementation' and status = 'closed'
+         and failure_class = 'infrastructure') as infrastructure_failures,
+      (select count(*) from retry_entries
+       where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}) as retry_entries,
+      (select min(created_at) from retry_entries
+       where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id}
+         and failure_class = 'infrastructure') as first_infrastructure_failure_at
+  `.execute(database);
+  const row = query.rows[0];
+  if (!row) throw new Error("retry.state_missing");
+  return {
+    agentProcessFailures: row.agent_process_failures,
+    firstInfrastructureFailureAt: row.first_infrastructure_failure_at,
+    infrastructureFailures: row.infrastructure_failures,
+    retryEntries: row.retry_entries,
+  };
 }
 
 export async function loadImplementationOutcomeCounts(
@@ -210,6 +261,31 @@ export async function finishAttemptInTransaction(
     `.execute(transaction);
   if (reservation.numAffectedRows !== 1n) {
     throw new Error(`Reservation ${input.reservationId} is already settled or missing`);
+  }
+
+  if (input.retryEntry) {
+    if (
+      input.nextClaim.mode !== "RetryQueued" ||
+      input.nextClaim.dueAt !== input.retryEntry.dueAt ||
+      input.retryEntry.retryNumber < 1 ||
+      input.retryEntry.maxRetries < 0 ||
+      !input.retryEntry.lastError
+    ) {
+      throw new Error("retry.entry_invalid");
+    }
+    await sql`
+      insert into retry_entries (
+        work_ref_kind, work_ref_id, attempt_id, failure_class, retry_number,
+        due_at, max_retries, last_error, created_at
+      ) values (
+        ${input.workRef.kind}, ${input.workRef.id}, ${input.attemptId},
+        ${input.retryEntry.failureClass}, ${input.retryEntry.retryNumber},
+        ${input.retryEntry.dueAt}, ${input.retryEntry.maxRetries},
+        ${input.retryEntry.lastError}, ${input.endedAt}
+      )
+    `.execute(transaction);
+  } else if (input.nextClaim.mode === "RetryQueued") {
+    throw new Error("retry.entry_missing");
   }
 
   const claim =

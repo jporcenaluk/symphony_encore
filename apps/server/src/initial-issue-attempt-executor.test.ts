@@ -464,6 +464,9 @@ describe("planned initial issue attempt execution", () => {
       allowlistedEnvironmentNames: [],
       attemptTokenCap: 400_000,
       maxReworkCycles: 2,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
+      retryJitterSample: 0.5,
       beforeRunCommand: null,
       database: opened.database,
       hookTimeoutMs: 60_000,
@@ -563,6 +566,9 @@ describe("planned initial issue attempt execution", () => {
         allowlistedEnvironmentNames: [],
         attemptTokenCap: 400_000,
         maxReworkCycles: 2,
+        maxFailureRetries: 2,
+        maxRetryBackoffMs: 300_000,
+        retryJitterSample: 0.5,
         beforeRunCommand: null,
         database: opened.database,
         hookTimeoutMs: 60_000,
@@ -588,7 +594,7 @@ describe("planned initial issue attempt execution", () => {
       status: "closed",
     });
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-      mode: "Ready",
+      mode: "RetryQueued",
       reason: "process_exit",
     });
     expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({

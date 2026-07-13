@@ -163,10 +163,13 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
       maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
+      retryJitterSample: 0.5,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
     });
 
@@ -196,10 +199,13 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
       maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
+      retryJitterSample: 0.5,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
     });
 
@@ -216,6 +222,44 @@ describe("initial issue attempt closure", () => {
     expect(JSON.parse(payload.payload_json)).toMatchObject({
       failure_class: "agent_process",
       status: "budget_exhausted",
+    });
+  });
+
+  it("queues infrastructure failures with a durable jittered backoff", async () => {
+    await closeInitialIssueAttempt({
+      attemptId: "attempt-1",
+      consumption: {
+        errorCode: "overloaded",
+        kind: "failure",
+        providerReason: "provider capacity exhausted",
+      },
+      database: opened.database,
+      endedAt: "2026-07-13T10:01:00Z",
+      issue,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
+      maxReworkCycles: 2,
+      newId: () => "result-1",
+      providerRevision: "revision-8",
+      reservationId: "reservation-1",
+      retryJitterSample: 0.5,
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+    });
+
+    expect(opened.sqlite.prepare("select mode, reason, retry_due_at from claims").get()).toEqual({
+      mode: "RetryQueued",
+      reason: "overloaded",
+      retry_due_at: "2026-07-13T10:01:10.000Z",
+    });
+    expect(
+      opened.sqlite
+        .prepare("select failure_class, retry_number, due_at, last_error from retry_entries")
+        .get(),
+    ).toEqual({
+      due_at: "2026-07-13T10:01:10.000Z",
+      failure_class: "infrastructure",
+      last_error: "provider capacity exhausted",
+      retry_number: 1,
     });
   });
 
@@ -267,10 +311,13 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
       maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
+      retryJitterSample: 0.5,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
     });
 
@@ -302,17 +349,23 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxFailureRetries: 2,
+      maxRetryBackoffMs: 300_000,
       maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
+      retryJitterSample: 0.5,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
     });
 
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-      mode: "Ready",
+      mode: "RetryQueued",
       reason: "result_invalid",
     });
+    expect(
+      opened.sqlite.prepare("select failure_class, retry_number from retry_entries").get(),
+    ).toEqual({ failure_class: "agent_process", retry_number: 1 });
     const payload = opened.sqlite.prepare("select payload_json from terminal_results").get() as {
       payload_json: string;
     };

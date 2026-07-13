@@ -60,6 +60,19 @@ export async function loadClaimRecoveryState(
   return state;
 }
 
+export async function promoteDueRetryClaims(
+  database: Kysely<DatabaseSchema>,
+  now: string,
+): Promise<number> {
+  parseTimestamp(now, "claim.invalid_recovery_time");
+  const update = await sql`
+    update claims
+    set mode = 'Ready', retry_due_at = null, updated_at = ${now}
+    where mode = 'RetryQueued' and retry_due_at <= ${now}
+  `.execute(database);
+  return Number(update.numAffectedRows);
+}
+
 export async function renewRunningClaim(
   database: Kysely<DatabaseSchema>,
   input: {

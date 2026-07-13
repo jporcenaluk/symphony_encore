@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import { createDispatch } from "./dispatch-store.js";
-import { finishAttempt, loadAttemptSettlementState } from "./finish-attempt.js";
+import {
+  finishAttempt,
+  loadAttemptSettlementState,
+  loadFailureRetryState,
+} from "./finish-attempt.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -134,6 +138,52 @@ describe("attempt closure transaction", () => {
       { consumed: 150, id: "fleet-ledger", reserved: 0 },
       { consumed: 150, id: "issue-ledger", reserved: 0 },
     ]);
+  });
+
+  it("commits a RetryEntry with its RetryQueued claim", async () => {
+    await finishAttempt(opened.database, {
+      ...finish,
+      failureClass: "agent_process",
+      nextClaim: {
+        dueAt: "2026-07-13T10:01:00Z",
+        mode: "RetryQueued",
+        reason: "process_exit",
+      },
+      retryEntry: {
+        dueAt: "2026-07-13T10:01:00Z",
+        failureClass: "agent_process",
+        lastError: "worker exited",
+        maxRetries: 2,
+        retryNumber: 1,
+      },
+    });
+
+    expect(opened.sqlite.prepare("select mode, retry_due_at from claims").get()).toEqual({
+      mode: "RetryQueued",
+      retry_due_at: "2026-07-13T10:01:00Z",
+    });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select attempt_id, failure_class, retry_number, due_at, max_retries, last_error from retry_entries",
+        )
+        .get(),
+    ).toEqual({
+      attempt_id: "attempt-1",
+      due_at: "2026-07-13T10:01:00Z",
+      failure_class: "agent_process",
+      last_error: "worker exited",
+      max_retries: 2,
+      retry_number: 1,
+    });
+    await expect(
+      loadFailureRetryState(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toEqual({
+      agentProcessFailures: 1,
+      firstInfrastructureFailureAt: null,
+      infrastructureFailures: 0,
+      retryEntries: 1,
+    });
   });
 
   it("rejects duplicate closure without changing the committed terminal result", async () => {
