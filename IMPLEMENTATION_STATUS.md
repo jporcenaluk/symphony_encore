@@ -32,7 +32,7 @@ command. A green but narrower test does not complete a broader item.
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated capability-gated Control API read foundation passes; mutations and remaining resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted-attempt closure, and fail-closed process/workspace recovery gating pass; process termination adapter pending |
-| S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
+| S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, monotonic bounded cursors, and restart replay pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
@@ -48,7 +48,7 @@ command. A green but narrower test does not complete a broader item.
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | TypeBox-validated health/readiness/state routes, OpenAPI generation, typed client, and drift gates pass; SSE and full API pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
-| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Six checksummed migrations cover all durable entities and content-addressed evidence; WAL, atomic core transactions, configuration history, and restart round-trips pass |
+| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Seven checksummed migrations cover durable entities, evidence, and append-only events; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox integration passes locally; macOS, CI matrix, signal, and documented WSL smoke test pending |
@@ -146,3 +146,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Stable claimed workspace ownership, quarantine, and startup readiness gate |
 | 2026-07-13 | working tree | `make verify-fast` | 196 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Fastify liveness/readiness, authenticated state read, generated API contract and client |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Fastify liveness/readiness, authenticated state read, generated API contract and client |
+| 2026-07-13 | working tree | `make verify-fast` | 204 tests; lint, contract/OpenAPI/client drift, and typecheck passed | SQLite-backed control state and append-only resumable Event Record cursors |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | SQLite-backed control state and append-only resumable Event Record cursors |

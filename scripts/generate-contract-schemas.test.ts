@@ -22,6 +22,7 @@ test("renders the public contract catalog deterministically", () => {
   assert("Attempt" in document.schemas);
   assert("ControlState" in document.schemas);
   assert("ErrorEnvelope" in document.schemas);
+  assert("EventRecord" in document.schemas);
   assert("ImplementationOutcome" in document.schemas);
   assert("VerificationRecord" in document.schemas);
   assert.deepEqual(Object.keys(document.schemas), Object.keys(document.schemas).toSorted());

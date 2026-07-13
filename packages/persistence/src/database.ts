@@ -20,6 +20,7 @@ export interface DatabaseSchema {
   configuration_acknowledgments: Record<string, unknown>;
   configuration_overrides: Record<string, unknown>;
   evidence_blobs: Record<string, unknown>;
+  event_records: Record<string, unknown>;
   guard_decisions: Record<string, unknown>;
   issues: Record<string, unknown>;
   lessons: Record<string, unknown>;
@@ -717,6 +718,39 @@ const verificationEvidenceMigration: RepositoryMigration = {
   version: 6,
 };
 
+const appendOnlyEventRecordsMigration: RepositoryMigration = {
+  checksum: "sha256:72b0bc278ad67b56c07edb7c038f50d91a92749761800110d86ea0d76e165bb6",
+  name: "append_only_event_records",
+  async up(database) {
+    await sql`
+      create table event_records (
+        cursor integer primary key autoincrement,
+        id text not null unique,
+        service_run_id text not null references service_runs(id),
+        work_ref_kind text check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text,
+        attempt_id text references attempts(id),
+        compute_profile text check (compute_profile in ('economy', 'standard', 'deep')),
+        change_class text check (change_class in ('trivial', 'standard', 'high_risk')),
+        timestamp text not null,
+        event_name text not null,
+        result text not null,
+        reason_code text not null,
+        cost_usd real check (cost_usd is null or cost_usd >= 0),
+        payload_json text not null check (json_valid(payload_json)),
+        check ((work_ref_kind is null) = (work_ref_id is null)),
+        check ((attempt_id is null) = (compute_profile is null)),
+        check (attempt_id is null or work_ref_kind is not null)
+      ) strict
+    `.execute(database);
+    await sql`
+      create index event_records_work_timeline
+      on event_records (work_ref_kind, work_ref_id, cursor)
+    `.execute(database);
+  },
+  version: 7,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -724,6 +758,7 @@ export const CORE_MIGRATIONS = [
   configurationAcknowledgmentMigration,
   durableDomainRecordsMigration,
   verificationEvidenceMigration,
+  appendOnlyEventRecordsMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

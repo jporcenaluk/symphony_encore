@@ -613,6 +613,50 @@ export const LogRecordSchema = Type.Object(
 );
 export type LogRecord = Static<typeof LogRecordSchema>;
 
+const CommonEventRecordProperties = {
+  change_class: Type.Union([
+    Type.Literal("trivial"),
+    Type.Literal("standard"),
+    Type.Literal("high_risk"),
+    Type.Null(),
+  ]),
+  cost_usd: Type.Union([NonNegativeNumber, Type.Null()]),
+  cursor: Type.Integer({ minimum: 1 }),
+  event_name: NonEmptyString,
+  id: NonEmptyString,
+  payload: Type.Record(Type.String(), Type.Unknown()),
+  reason_code: NonEmptyString,
+  result: NonEmptyString,
+  service_run_id: NonEmptyString,
+  timestamp: NonEmptyString,
+};
+
+export const EventRecordSchema = Type.Union([
+  Type.Object(
+    {
+      ...CommonEventRecordProperties,
+      attempt_id: NonEmptyString,
+      compute_profile: Type.Union([
+        Type.Literal("economy"),
+        Type.Literal("standard"),
+        Type.Literal("deep"),
+      ]),
+      work_ref: WorkRefSchema,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...CommonEventRecordProperties,
+      attempt_id: Type.Null(),
+      compute_profile: Type.Null(),
+      work_ref: Type.Union([WorkRefSchema, Type.Null()]),
+    },
+    { additionalProperties: false },
+  ),
+]);
+export type EventRecord = Static<typeof EventRecordSchema>;
+
 export const BudgetLedgerSchema = Type.Object(
   {
     adjustment: Type.Number(),

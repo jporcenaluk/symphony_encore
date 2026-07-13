@@ -2,6 +2,7 @@ import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it } from "vitest";
 
 import {
+  EventRecordSchema,
   IssueSchema,
   MutationAuthorizationSchema,
   ReviewSetSchema,
@@ -107,6 +108,45 @@ describe("cross-record ownership contracts", () => {
       Value.Check(UsageSampleSchema, {
         ...sample,
         system_job_id: "job-1",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("append-only event contract", () => {
+  it("carries a durable cursor and the applicable attempt routing facts", () => {
+    expect(
+      Value.Check(EventRecordSchema, {
+        attempt_id: "attempt-1",
+        change_class: "standard",
+        compute_profile: "standard",
+        cost_usd: 0.02,
+        cursor: 7,
+        event_name: "attempt.dispatched",
+        id: "event-7",
+        payload: { role: "implementation" },
+        reason_code: "dispatch.eligible",
+        result: "accepted",
+        service_run_id: "run-1",
+        timestamp: "2026-07-13T10:00:00Z",
+        work_ref: workRef,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EventRecordSchema, {
+        attempt_id: "attempt-1",
+        change_class: null,
+        compute_profile: null,
+        cost_usd: null,
+        cursor: 0,
+        event_name: "attempt.dispatched",
+        id: "event-0",
+        payload: {},
+        reason_code: "dispatch.eligible",
+        result: "accepted",
+        service_run_id: "run-1",
+        timestamp: "2026-07-13T10:00:00Z",
+        work_ref: workRef,
       }),
     ).toBe(false);
   });

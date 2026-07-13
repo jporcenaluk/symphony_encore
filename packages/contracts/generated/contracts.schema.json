@@ -4238,6 +4238,273 @@
         }
       }
     },
+    "EventRecord": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "change_class",
+            "cost_usd",
+            "cursor",
+            "event_name",
+            "id",
+            "payload",
+            "reason_code",
+            "result",
+            "service_run_id",
+            "timestamp",
+            "attempt_id",
+            "compute_profile",
+            "work_ref"
+          ],
+          "properties": {
+            "change_class": {
+              "anyOf": [
+                {
+                  "const": "trivial",
+                  "type": "string"
+                },
+                {
+                  "const": "standard",
+                  "type": "string"
+                },
+                {
+                  "const": "high_risk",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cost_usd": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cursor": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "event_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "payload": {
+              "type": "object",
+              "patternProperties": {
+                "^(.*)$": {}
+              }
+            },
+            "reason_code": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "result": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "service_run_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "timestamp": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "attempt_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "compute_profile": {
+              "anyOf": [
+                {
+                  "const": "economy",
+                  "type": "string"
+                },
+                {
+                  "const": "standard",
+                  "type": "string"
+                },
+                {
+                  "const": "deep",
+                  "type": "string"
+                }
+              ]
+            },
+            "work_ref": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "issue_id"
+                  ],
+                  "properties": {
+                    "issue_id": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "system_job_id"
+                  ],
+                  "properties": {
+                    "system_job_id": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "change_class",
+            "cost_usd",
+            "cursor",
+            "event_name",
+            "id",
+            "payload",
+            "reason_code",
+            "result",
+            "service_run_id",
+            "timestamp",
+            "attempt_id",
+            "compute_profile",
+            "work_ref"
+          ],
+          "properties": {
+            "change_class": {
+              "anyOf": [
+                {
+                  "const": "trivial",
+                  "type": "string"
+                },
+                {
+                  "const": "standard",
+                  "type": "string"
+                },
+                {
+                  "const": "high_risk",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cost_usd": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cursor": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "event_name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "payload": {
+              "type": "object",
+              "patternProperties": {
+                "^(.*)$": {}
+              }
+            },
+            "reason_code": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "result": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "service_run_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "timestamp": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "attempt_id": {
+              "type": "null"
+            },
+            "compute_profile": {
+              "type": "null"
+            },
+            "work_ref": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "issue_id"
+                      ],
+                      "properties": {
+                        "issue_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    },
+                    {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "system_job_id"
+                      ],
+                      "properties": {
+                        "system_job_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
     "EvidenceRef": {
       "anyOf": [
         {

@@ -41,6 +41,7 @@ describe("production migrations", () => {
       { name: "exact_configuration_acknowledgments", version: 4 },
       { name: "durable_domain_records", version: 5 },
       { name: "verification_evidence_blobs", version: 6 },
+      { name: "append_only_event_records", version: 7 },
     ]);
   });
 
@@ -57,6 +58,7 @@ describe("production migrations", () => {
         "agent_approval_requests",
         "budget_adjustments",
         "evidence_blobs",
+        "event_records",
         "guard_decisions",
         "issues",
         "lessons",
