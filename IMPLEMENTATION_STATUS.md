@@ -38,7 +38,7 @@ command. A green but narrower test does not complete a broader item.
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Authenticated bounded `gh api` GraphQL transport, GitHub tracker normalization, checklist extraction, complete-page enforcement, revision recheck, authorization matrix, provider-independent contracts, and normalized PR snapshot schema pass; Projects queries and repository-hosting implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
 | S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, immutable snapshots, trusted workflow-path loading, and ordinary startup snapshot integration pass; live change detection and full API/UI candidate integration pending |
-| S19 | Core and real-integration conformance reports | Not started | `make conformance` and redacted real-profile report |
+| S19 | Core and real-integration conformance reports | In progress | `make conformance` runs the fast deterministic gate, emits an exact-revision machine-readable partial report, and fails rather than claiming incomplete Core coverage; complete matrix and redacted real profile remain pending |
 
 ## Technology-stack coverage
 
@@ -72,7 +72,7 @@ command. A green but narrower test does not complete a broader item.
 | D09 | Dependabot for pnpm, Actions, and Docker | Implemented | Valid weekly npm, GitHub Actions, and Docker updater configuration with major toolchain updates kept visible |
 | D10 | Fast staged-file hooks and optional pre-push verification | Implemented | Husky/lint-staged operate on selected staged files; staged policy rejects whitespace, conflict markers, binaries, and large blobs; checksum-pinned Gitleaks rejects a synthetic staged secret with redacted output; Conventional Commit subjects and documented bypass policy pass |
 | D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache, 14-day failed Playwright artifact retention, operator runbooks, WSL smoke procedure, and verified-digest rollback policy exist; publication and environment-specific rollback proof pending |
-| D12 | Complete stable Make command interface | In progress | Setup, supervised dev, format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; conformance pending |
+| D12 | Complete stable Make command interface | In progress | Setup, supervised dev, format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, production-build test-e2e, image, and honest conformance-report targets exist; image execution and complete Core conformance remain pending |
 
 ## Core conformance matrix
 
@@ -192,3 +192,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make verify-fast` | 307 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Publication/release policy plus process-exit race regression |
 | 2026-07-13 | working tree | `make verify-fast` | 311 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Operator-store corruption terminates owned processes, records observed receipts and durable failure, and exits fail closed |
 | 2026-07-13 | working tree | `make verify-fast` | 320 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Supervised synthesis triggering, lesson-backed saturation and decay, and one-active-SystemJob durability |
+| 2026-07-13 | working tree | `node scripts/conformance-report.ts /tmp/symphony-core-conformance.json` | Exited 1 after writing an exact-revision report with two completed and 33 missing Core IDs | Honest partial conformance reporting; Real Integration remains `not_run` |
+| 2026-07-13 | working tree | `make verify-fast` | 324 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Conformance schema, ledger parsing, Make interface, and partial-result safeguards |

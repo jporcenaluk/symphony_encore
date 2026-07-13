@@ -97,5 +97,5 @@ credential directories, Docker sockets, or a developer home directory into an ag
 `GET /ready` returns 200 only after recovery and bootstrap complete. SIGINT and SIGTERM stop the
 active service run durably before the process exits.
 
-Use the companion runbooks for the
-[security posture](security.md) and [release, WSL, and rollback checks](release.md).
+Use the companion runbooks for the [security posture](security.md),
+[conformance reports](conformance.md), and [release, WSL, and rollback checks](release.md).

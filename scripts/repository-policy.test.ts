@@ -48,6 +48,7 @@ test("declares the required workspace and Make target contract", () => {
     "image",
     "verify-fast",
     "verify",
+    "conformance",
   ]);
 });
 

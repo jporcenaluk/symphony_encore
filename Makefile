@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := verify-fast
 
-.PHONY: setup dev build start format lint typecheck test test-integration test-e2e image verify-fast verify
+.PHONY: setup dev build start format lint typecheck test test-integration test-e2e image verify-fast verify conformance
 
 setup:
 	corepack pnpm install --frozen-lockfile
@@ -42,3 +42,6 @@ image:
 verify-fast: lint typecheck test
 
 verify: verify-fast test-integration build test-e2e image
+
+conformance: verify-fast
+	corepack pnpm conformance

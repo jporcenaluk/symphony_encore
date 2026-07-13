@@ -28,6 +28,7 @@ export const REQUIRED_MAKE_TARGETS = [
   "image",
   "verify-fast",
   "verify",
+  "conformance",
 ] as const;
 
 const FORBIDDEN_DOMAIN_DEPENDENCIES = ["fastify", "react", "kysely", "pino", "better-sqlite3"];
