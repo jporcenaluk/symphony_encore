@@ -79,6 +79,19 @@ describe("initial bootstrap transaction", () => {
     });
     expect(
       opened.sqlite
+        .prepare(
+          "select key, version, operation, acknowledgment_state, reload_state from configuration_overrides",
+        )
+        .get(),
+    ).toEqual({
+      acknowledgment_state: "acknowledged",
+      key: "human.operators",
+      operation: "set",
+      reload_state: "active",
+      version: 1,
+    });
+    expect(
+      opened.sqlite
         .prepare("select count(*) as count from sqlite_schema where sql like '%sha256:bootstrap%'")
         .get(),
     ).toEqual({ count: 0 });

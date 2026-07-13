@@ -102,6 +102,24 @@ export async function completeInitialBootstrap(
         'accepted', ${request.consumedAt}, null, null
       )
     `.execute(transaction);
+    const operatorConfiguration = [
+      {
+        auth_subject: request.authSubject,
+        capabilities: [...REQUIRED_OPERATOR_CAPABILITIES],
+        id: request.operatorId,
+        ...(request.trackerLogin === null ? {} : { tracker_login: request.trackerLogin }),
+      },
+    ];
+    await sql`
+      insert into configuration_overrides (
+        key, version, operation, value_json, created_by, created_at, reason,
+        validation_result, acknowledgment_state, reload_state, operator_action_id
+      ) values (
+        'human.operators', 1, 'set', ${JSON.stringify(operatorConfiguration)},
+        ${request.operatorId}, ${request.consumedAt}, 'initial_administrator',
+        'valid', 'acknowledged', 'active', ${request.actionId}
+      )
+    `.execute(transaction);
     await sql`
       insert into bootstrap_state (
         singleton, candidate_hash, operator_id, config_snapshot_id,

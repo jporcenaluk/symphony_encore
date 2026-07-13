@@ -11,4 +11,5 @@ export * from "./persistent-control-api.js";
 export * from "./process-recovery.js";
 export * from "./runtime-options.js";
 export * from "./service-runtime.js";
+export * from "./startup-configuration.js";
 export * from "./startup-recovery.js";

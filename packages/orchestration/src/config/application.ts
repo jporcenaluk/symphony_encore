@@ -39,6 +39,7 @@ export interface ApplyConfigurationInput {
   acknowledgedHashes: ReadonlySet<string>;
   candidate: ConfigurationResolution;
   previous?: AppliedConfiguration;
+  restartBoundaryReached?: boolean;
 }
 
 function canonicalize(value: unknown): string {
@@ -114,7 +115,12 @@ export function applyConfigurationCandidate(input: ApplyConfigurationInput): App
       effectiveVersion = previousEntry?.effectiveVersion ?? "missing";
       reloadState = "pending_ack";
       hasPending = true;
-    } else if (changed && candidate.reload === "restart" && previousEntry) {
+    } else if (
+      changed &&
+      candidate.reload === "restart" &&
+      previousEntry &&
+      !input.restartBoundaryReached
+    ) {
       effectiveValue = previousEntry.effectiveValue;
       effectiveSource = previousEntry.effectiveSource;
       effectiveVersion = previousEntry.effectiveVersion;

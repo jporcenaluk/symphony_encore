@@ -60,9 +60,13 @@ export function buildBootstrapCandidate(
       "workflow.path": options.workflowPath,
     },
     context: { ...context, pristineStore: false },
-    workflow: withOperator(workflow.config, operator),
+    overrides: [{ key: "human.operators", value: [operator], version: 1 }],
+    workflow: withoutOperators(workflow.config),
   });
   assertValid(ordinary.errors);
+  if (!isLoopbackHost(ordinary.values["server.host"])) {
+    throw new Error("bootstrap.non_loopback_forbidden");
+  }
 
   const effectiveConfig = Object.fromEntries(
     CONFIGURATION_KEYS.flatMap((key) =>
@@ -108,6 +112,10 @@ function assertValid(errors: readonly { code: string; key: string }[]): void {
   if (first) throw new Error(`bootstrap.configuration_invalid:${first.code}:${first.key}`);
 }
 
+function isLoopbackHost(value: unknown): boolean {
+  return value === "127.0.0.1" || value === "::1" || value === "localhost";
+}
+
 function withoutOperators(config: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const copy = structuredClone(config) as Record<string, unknown>;
   const human = copy.human;
@@ -115,19 +123,6 @@ function withoutOperators(config: Readonly<Record<string, unknown>>): Record<str
     delete (human as Record<string, unknown>).operators;
     if (Object.keys(human).length === 0) delete copy.human;
   }
-  return copy;
-}
-
-function withOperator(
-  config: Readonly<Record<string, unknown>>,
-  operator: Readonly<Record<string, unknown>>,
-): Record<string, unknown> {
-  const copy = withoutOperators(config);
-  const human =
-    typeof copy.human === "object" && copy.human !== null && !Array.isArray(copy.human)
-      ? (copy.human as Record<string, unknown>)
-      : {};
-  copy.human = { ...human, operators: [operator] };
   return copy;
 }
 

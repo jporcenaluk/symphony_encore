@@ -9,7 +9,7 @@ command. A green but narrower test does not complete a broader item.
 ## Current state
 
 - Branch target: `feat/symphony-encore-core`.
-- Current milestone: first-run bootstrap, container, and canonical delivery pipeline.
+- Current milestone: workflow runtime integration, container, and canonical delivery pipeline.
 - Canonical gate: `make verify` is implemented; a current full local run is pending listener and
   Docker availability.
 - Pull request: not opened yet.
@@ -37,7 +37,7 @@ command. A green but narrower test does not complete a broader item.
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Loopback-only exact-hash bootstrap now validates and snapshots the full workflow candidate, atomically creates matching local authority, disables dispatch and mutations until completion, and joins salted credentials, hash-only sessions, same-origin CSRF, bootstrap-key rejection, credential scrubbing, and Linux/WSL Bubblewrap isolation; full corruption recovery and macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Authenticated bounded `gh api` GraphQL transport, GitHub tracker normalization, checklist extraction, complete-page enforcement, revision recheck, authorization matrix, provider-independent contracts, and normalized PR snapshot schema pass; Projects queries and repository-hosting implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
-| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, immutable snapshots, trusted workflow-path loading, and first-run startup validation pass; ordinary startup and reload integration pending |
+| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, immutable snapshots, trusted workflow-path loading, and ordinary startup snapshot integration pass; live change detection and full API/UI candidate integration pending |
 | S19 | Core and real-integration conformance reports | Not started | `make conformance` and redacted real-profile report |
 
 ## Technology-stack coverage
@@ -180,3 +180,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make verify-fast` | 281 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Container policy, deferred-dependency enforcement, and delivery configuration |
 | 2026-07-13 | working tree | `make verify-fast` | 289 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Full-workflow bootstrap candidate, narrow pristine exemption, exact loopback API/UI, and durable authority identity |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | First-run bootstrap and operational runbook slice |
+| 2026-07-13 | working tree | `make verify-fast` | 294 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Ordinary workflow startup, durable bootstrap operator override, restart-bound application, and secure persisted bind |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Ordinary startup configuration integration |

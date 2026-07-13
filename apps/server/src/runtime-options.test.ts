@@ -6,6 +6,7 @@ import { parseRuntimeOptions } from "./runtime-options.js";
 describe("production runtime options", () => {
   it("uses loopback and stable local paths by default", () => {
     expect(parseRuntimeOptions({}, "/srv/symphony")).toEqual({
+      allowNonLoopback: false,
       databasePath: path.join("/srv/symphony", ".symphony", "symphony.sqlite3"),
       host: "127.0.0.1",
       port: 8080,
@@ -59,7 +60,7 @@ describe("production runtime options", () => {
         },
         "/srv/symphony",
       ),
-    ).toMatchObject({ host: "0.0.0.0", secureCookies: true });
+    ).toMatchObject({ allowNonLoopback: true, host: "0.0.0.0", secureCookies: true });
     expect(() => parseRuntimeOptions({ SYMPHONY_PORT: "0" }, "/srv/symphony")).toThrow(
       "runtime.invalid_port",
     );

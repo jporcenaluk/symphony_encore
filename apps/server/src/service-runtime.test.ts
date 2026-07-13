@@ -61,6 +61,7 @@ describe("production service lifecycle", () => {
         return () => times.shift() ?? "2026-07-13T10:02:00Z";
       })(),
       options: {
+        allowNonLoopback: false,
         databasePath: fixture.databasePath,
         host: "127.0.0.1",
         port: 8080,
@@ -72,6 +73,33 @@ describe("production service lifecycle", () => {
       },
       output: () => undefined,
       serviceRunId: () => "service-run-1",
+      startupConfiguration: {
+        environment: {},
+        home: rootHome(fixture.root),
+        systemTemp: path.join(fixture.root, "tmp"),
+        workflow: {
+          config: {
+            agent: {
+              approval_policy: "on-request",
+              thread_sandbox: "workspace-write",
+              turn_sandbox_policy: "workspace-write",
+            },
+            server: { auth_kind: "local" },
+            tracker: {
+              kind: "github",
+              owner: "example",
+              project_number: 1,
+              repo_name: "repo",
+              repo_owner: "example",
+            },
+            workspace: { root: fixture.workspaceRoot, verify_command: "make verify" },
+          },
+          path: path.join(fixture.root, "WORKFLOW.md"),
+          prompt: "Complete {{ issue.title }}.",
+          sourceHash: "sha256:startup-workflow",
+          warnings: [],
+        },
+      },
     });
 
     expect(listen).toHaveBeenCalledOnce();
@@ -94,6 +122,11 @@ describe("production service lifecycle", () => {
         .prepare("select status, end_reason from service_runs where id = ?")
         .get("service-run-1"),
     ).toEqual({ end_reason: "signal", status: "stopped" });
+    expect(reopened.sqlite.prepare("select count(*) as count from config_snapshots").get()).toEqual(
+      {
+        count: 2,
+      },
+    );
     await reopened.close();
   });
 
@@ -136,6 +169,7 @@ describe("production service lifecycle", () => {
       listen: async () => "http://127.0.0.1:48081",
       now: () => "2026-07-13T10:00:00Z",
       options: {
+        allowNonLoopback: false,
         databasePath,
         host: "127.0.0.1",
         port: 8080,
@@ -177,4 +211,39 @@ describe("production service lifecycle", () => {
     });
     await opened.close();
   });
+
+  it("requires an explicit secure deployment acknowledgment for a persisted remote bind", async () => {
+    const fixture = await initializedFixture();
+    const opened = openDatabase(fixture.databasePath);
+    const snapshot = opened.sqlite
+      .prepare("select effective_config_json from config_snapshots limit 1")
+      .get() as { effective_config_json: string };
+    const effectiveConfig = JSON.parse(snapshot.effective_config_json) as Record<string, unknown>;
+    effectiveConfig["server.host"] = "0.0.0.0";
+    opened.sqlite
+      .prepare("update config_snapshots set effective_config_json = ?")
+      .run(JSON.stringify(effectiveConfig));
+    await opened.close();
+
+    await expect(
+      startProductionService({
+        listen: vi.fn(async () => "http://0.0.0.0:8080"),
+        options: {
+          allowNonLoopback: false,
+          databasePath: fixture.databasePath,
+          host: "127.0.0.1",
+          port: 8080,
+          secureCookies: false,
+          sessionTtlMs: 60_000,
+          uiRoot: fixture.uiRoot,
+          workflowPath: path.join(fixture.root, "WORKFLOW.md"),
+          workspaceRoot: fixture.workspaceRoot,
+        },
+      }),
+    ).rejects.toThrow("runtime.non_loopback_ack_required");
+  });
 });
+
+function rootHome(root: string): string {
+  return path.join(root, "home");
+}

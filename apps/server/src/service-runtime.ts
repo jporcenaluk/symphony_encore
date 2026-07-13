@@ -12,11 +12,14 @@ import {
   beginServiceRun,
   type ConfigurationSnapshot,
   inspectBootstrapEligibility,
+  loadAcknowledgedCandidateHashes,
+  loadActiveOverrides,
   loadLatestConfigurationSnapshot,
   openDatabase,
   readControlState,
   readServiceStatus,
   stopServiceRun,
+  storeConfigurationSnapshot,
 } from "@symphony/persistence";
 import type { FastifyBaseLogger } from "fastify";
 
@@ -25,6 +28,7 @@ import { createLocalBootstrap } from "./local-bootstrap.js";
 import { createLocalSessionAuth } from "./local-session-auth.js";
 import { createPersistentControlApi } from "./persistent-control-api.js";
 import type { RuntimeOptions } from "./runtime-options.js";
+import { createStartupConfiguration } from "./startup-configuration.js";
 import { recoverLinuxStartupState } from "./startup-recovery.js";
 
 export interface ProductionServiceInput {
@@ -42,12 +46,17 @@ export interface ProductionServiceInput {
   options: RuntimeOptions;
   output?: (line: string) => void;
   serviceRunId?: () => string;
+  startupConfiguration?: {
+    environment: Readonly<Record<string, string | undefined>>;
+    home: string;
+    systemTemp: string;
+    workflow: Parameters<typeof createStartupConfiguration>[0]["workflow"];
+  };
 }
 
 export async function startProductionService(input: ProductionServiceInput) {
   const now = input.now ?? (() => new Date().toISOString());
   await mkdir(path.dirname(input.options.databasePath), { recursive: true });
-  await mkdir(input.options.workspaceRoot, { recursive: true });
   const opened = openDatabase(input.options.databasePath);
   let httpRuntime: Awaited<ReturnType<typeof startHttpRuntime>> | undefined;
   try {
@@ -56,7 +65,7 @@ export async function startProductionService(input: ProductionServiceInput) {
     if (eligibility.kind === "operator_store_missing_nonpristine") {
       throw new Error("runtime.operator_store_missing_nonpristine");
     }
-    const initialSnapshot =
+    let initialSnapshot =
       eligibility.kind === "initialized"
         ? await loadLatestConfigurationSnapshot(opened.database)
         : undefined;
@@ -70,6 +79,41 @@ export async function startProductionService(input: ProductionServiceInput) {
       throw new Error("runtime.bootstrap_loopback_required");
     }
     const bootstrapInput = eligibility.kind === "pristine" ? input.bootstrap : undefined;
+    if (initialSnapshot && input.startupConfiguration) {
+      const startup = createStartupConfiguration({
+        acknowledgedHashes: await loadAcknowledgedCandidateHashes(opened.database),
+        createdAt: now(),
+        environment: input.startupConfiguration.environment,
+        home: input.startupConfiguration.home,
+        id: randomUUID(),
+        options: input.options,
+        overrides: (await loadActiveOverrides(opened.database)).flatMap((override) =>
+          CONFIGURATION_KEYS.includes(override.key as ConfigurationKey)
+            ? [override as { key: ConfigurationKey; value: unknown; version: number }]
+            : [],
+        ),
+        previousSnapshot: initialSnapshot,
+        systemTemp: input.startupConfiguration.systemTemp,
+        workflow: input.startupConfiguration.workflow,
+      });
+      await storeConfigurationSnapshot(opened.database, startup.snapshot);
+      initialSnapshot = startup.snapshot;
+      for (const warning of startup.warnings) input.logger?.warn({ warning }, "workflow warning");
+    }
+    const runtimeOptions = optionsFromSnapshot(
+      input.options,
+      bootstrapInput?.configSnapshot ?? initialSnapshot,
+    );
+    if (bootstrapInput && !isLoopbackHost(runtimeOptions.host)) {
+      throw new Error("runtime.bootstrap_loopback_required");
+    }
+    if (!isLoopbackHost(runtimeOptions.host) && !runtimeOptions.allowNonLoopback) {
+      throw new Error("runtime.non_loopback_ack_required");
+    }
+    if (!isLoopbackHost(runtimeOptions.host) && !runtimeOptions.secureCookies) {
+      throw new Error("runtime.secure_cookies_required");
+    }
+    await mkdir(runtimeOptions.workspaceRoot, { recursive: true });
 
     let serviceRunId: string | undefined;
     async function activate(snapshot: ConfigurationSnapshot) {
@@ -92,7 +136,7 @@ export async function startProductionService(input: ProductionServiceInput) {
         quarantineId: nextServiceRunId,
         serviceRunId: nextServiceRunId,
         terminalResultId: (attemptId) => `interrupted:${attemptId}:${nextServiceRunId}`,
-        workspaceRoot: input.options.workspaceRoot,
+        workspaceRoot: runtimeOptions.workspaceRoot,
       });
       serviceRunId = nextServiceRunId;
     }
@@ -132,16 +176,16 @@ export async function startProductionService(input: ProductionServiceInput) {
               state: "starting" as const,
             })
           : readServiceStatus(opened.database),
-      sessionCookieSecure: input.options.secureCookies,
+      sessionCookieSecure: runtimeOptions.secureCookies,
       validateConfigurationOverride,
     });
     httpRuntime = await startHttpRuntime({
-      host: input.options.host,
+      host: runtimeOptions.host,
       ...(input.listen ? { listen: input.listen } : {}),
       ...(input.output ? { output: input.output } : {}),
-      port: input.options.port,
+      port: runtimeOptions.port,
       server,
-      uiRoot: input.options.uiRoot,
+      uiRoot: runtimeOptions.uiRoot,
     });
     if (bootstrapInput) {
       (input.output ?? ((line) => process.stdout.write(`${line}\n`)))(
@@ -195,6 +239,22 @@ function bootstrapControlState(candidateHash: string) {
 
 function isLoopbackHost(host: string): boolean {
   return host === "127.0.0.1" || host === "::1" || host === "localhost";
+}
+
+function optionsFromSnapshot(
+  options: RuntimeOptions,
+  snapshot: ConfigurationSnapshot | undefined,
+): RuntimeOptions {
+  if (!snapshot) return options;
+  const host = snapshot.effectiveConfig["server.host"];
+  const port = snapshot.effectiveConfig["server.port"];
+  const workspaceRoot = snapshot.effectiveConfig["workspace.root"];
+  return {
+    ...options,
+    host: typeof host === "string" ? host : options.host,
+    port: typeof port === "number" ? port : options.port,
+    workspaceRoot: typeof workspaceRoot === "string" ? workspaceRoot : options.workspaceRoot,
+  };
 }
 
 function validateConfigurationOverride(input: {

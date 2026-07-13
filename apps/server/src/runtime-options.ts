@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 export interface RuntimeOptions {
+  allowNonLoopback: boolean;
   bootstrapAuthSubject?: string;
   bootstrapCredentialHash?: string;
   databasePath: string;
@@ -42,6 +43,7 @@ export function parseRuntimeOptions(
   }
 
   return {
+    allowNonLoopback,
     ...(bootstrapAuthSubject && bootstrapCredential
       ? {
           bootstrapAuthSubject,

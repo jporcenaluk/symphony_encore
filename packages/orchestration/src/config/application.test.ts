@@ -113,6 +113,27 @@ describe("configuration candidate application", () => {
     });
   });
 
+  it("applies an acknowledged restart candidate at the startup boundary", () => {
+    const previous = initialConfiguration();
+    const candidate = resolve({
+      ...baseWorkflow,
+      server: { ...baseWorkflow.server, host: "0.0.0.0" },
+    });
+
+    const applied = applyConfigurationCandidate({
+      acknowledgedHashes: new Set([candidateHashForEntry(candidate.entries["server.host"])]),
+      candidate,
+      previous,
+      restartBoundaryReached: true,
+    });
+
+    expect(applied.entries["server.host"]).toMatchObject({
+      acknowledgmentState: "acknowledged",
+      effectiveValue: "0.0.0.0",
+      reloadState: "active",
+    });
+  });
+
   it("treats an authorized file-ack+ override as its acknowledgment", () => {
     const previous = initialConfiguration();
     const candidate = resolve(baseWorkflow, [

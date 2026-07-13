@@ -30,28 +30,32 @@ export async function runProductionMain() {
   const logger = createRootLogger({ level: process.env.LOG_LEVEL ?? "info" });
   try {
     const options = parseRuntimeOptions(process.env, process.cwd());
-    const workflow =
+    const workflow = await loadWorkflowFile({
+      cwd: process.cwd(),
+      readFile: (filename) => readFile(filename, "utf8"),
+      trustedPath: options.workflowPath,
+    });
+    const bootstrap =
       options.bootstrapAuthSubject && options.bootstrapCredentialHash
-        ? await loadWorkflowFile({
-            cwd: process.cwd(),
-            readFile: (filename) => readFile(filename, "utf8"),
-            trustedPath: options.workflowPath,
+        ? buildBootstrapCandidate({
+            createdAt: new Date().toISOString(),
+            environment: process.env,
+            home: homedir(),
+            options,
+            systemTemp: tmpdir(),
+            workflow,
           })
         : undefined;
-    const bootstrap = workflow
-      ? buildBootstrapCandidate({
-          createdAt: new Date().toISOString(),
-          environment: process.env,
-          home: homedir(),
-          options,
-          systemTemp: tmpdir(),
-          workflow,
-        })
-      : undefined;
     const service = await startProductionService({
       ...(bootstrap ? { bootstrap } : {}),
       logger,
       options,
+      startupConfiguration: {
+        environment: process.env,
+        home: homedir(),
+        systemTemp: tmpdir(),
+        workflow,
+      },
     });
     installShutdownHandlers(service.close, undefined, (error) => {
       logger.fatal({ error }, "service shutdown failed");
