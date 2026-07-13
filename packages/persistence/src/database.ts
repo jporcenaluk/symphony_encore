@@ -9,7 +9,9 @@ interface SchemaMigrationTable {
 }
 
 export interface DatabaseSchema {
+  agent_approval_requests: Record<string, unknown>;
   attempts: Record<string, unknown>;
+  budget_adjustments: Record<string, unknown>;
   budget_ledgers: Record<string, unknown>;
   budget_reservation_ledgers: Record<string, unknown>;
   budget_reservations: Record<string, unknown>;
@@ -17,12 +19,31 @@ export interface DatabaseSchema {
   config_snapshots: Record<string, unknown>;
   configuration_acknowledgments: Record<string, unknown>;
   configuration_overrides: Record<string, unknown>;
+  guard_decisions: Record<string, unknown>;
+  issues: Record<string, unknown>;
+  lessons: Record<string, unknown>;
+  live_sessions: Record<string, unknown>;
+  log_records: Record<string, unknown>;
+  mutation_authorizations: Record<string, unknown>;
   operator_actions: Record<string, unknown>;
   operator_idempotency_keys: Record<string, unknown>;
+  operator_questions: Record<string, unknown>;
+  parked_work: Record<string, unknown>;
+  plans: Record<string, unknown>;
+  repository_links: Record<string, unknown>;
+  retry_entries: Record<string, unknown>;
+  review_records: Record<string, unknown>;
+  review_sets: Record<string, unknown>;
+  rules: Record<string, unknown>;
   schema_migrations: SchemaMigrationTable;
   service_runs: Record<string, unknown>;
+  side_effect_intents: Record<string, unknown>;
+  side_effect_receipts: Record<string, unknown>;
   stage_transitions: Record<string, unknown>;
+  system_jobs: Record<string, unknown>;
   terminal_results: Record<string, unknown>;
+  usage_samples: Record<string, unknown>;
+  verification_records: Record<string, unknown>;
 }
 
 export interface OpenedDatabase {
@@ -291,11 +312,398 @@ const configurationAcknowledgmentMigration: RepositoryMigration = {
   version: 4,
 };
 
+const durableDomainRecordsMigration: RepositoryMigration = {
+  checksum: "sha256:61e92320ad7c29cc61b72b6f9f9a8dcd7c9f257e9e612a5bc67d415ad553a23e",
+  name: "durable_domain_records",
+  async up(database) {
+    await sql`
+      create table issues (
+        id text primary key,
+        identifier text not null unique,
+        title text not null,
+        description text not null,
+        acceptance_criteria_json text not null check (json_valid(acceptance_criteria_json)),
+        state text not null check (state in ('Backlog', 'Todo', 'In Progress', 'Review', 'Human', 'Done')),
+        labels_json text not null check (json_valid(labels_json)),
+        priority integer,
+        blocked_by_json text not null check (json_valid(blocked_by_json)),
+        assignee_id text,
+        repo_owner text not null,
+        repo_name text not null,
+        url text not null,
+        provider_revision text not null,
+        created_at text not null,
+        updated_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create index issues_dispatch_order on issues (state, priority, created_at, identifier)
+    `.execute(database);
+    await sql`
+      create table system_jobs (
+        id text primary key,
+        kind text not null check (kind in ('synthesis', 'repair')),
+        parent_work_ref_kind text check (parent_work_ref_kind in ('issue', 'system_job')),
+        parent_work_ref_id text,
+        repository text not null,
+        workspace_path text not null,
+        goal text not null,
+        acceptance_criteria_json text not null check (json_valid(acceptance_criteria_json)),
+        config_snapshot_id text not null references config_snapshots(id),
+        status text not null check (status in ('queued', 'running', 'review', 'merge', 'rework', 'human', 'budget_exhausted', 'failed', 'done')),
+        input_tokens integer not null default 0 check (input_tokens >= 0),
+        output_tokens integer not null default 0 check (output_tokens >= 0),
+        cost_usd real check (cost_usd is null or cost_usd >= 0),
+        created_at text not null,
+        started_at text,
+        ended_at text,
+        final_result_id text,
+        check (
+          (kind = 'repair' and parent_work_ref_kind is not null and parent_work_ref_id is not null)
+          or (kind = 'synthesis' and parent_work_ref_kind is null and parent_work_ref_id is null)
+        )
+      ) strict
+    `.execute(database);
+    await sql`
+      create table verification_records (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text not null references attempts(id),
+        config_snapshot_id text not null references config_snapshots(id),
+        target_revision text not null,
+        command_hash text not null,
+        started_at text not null,
+        ended_at text not null,
+        exit_code integer not null,
+        result text not null check (result in ('passed', 'failed', 'error')),
+        stdout_ref text,
+        stderr_ref text,
+        environment_policy_hash text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table review_records (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text not null unique references attempts(id),
+        reviewer_role text not null check (reviewer_role in ('integrative_review', 'specialist_review', 'adjudication')),
+        target_sha text not null,
+        target_base_sha text not null,
+        patch_identity text not null,
+        decision text not null check (decision in ('approve', 'needs_rework', 'needs_human', 'blocked')),
+        findings_json text not null check (json_valid(findings_json)),
+        created_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table review_sets (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        target_sha text not null,
+        target_base_sha text not null,
+        patch_identity text not null,
+        required_reviewer_roles_json text not null check (json_valid(required_reviewer_roles_json)),
+        required_specialist_names_json text not null check (json_valid(required_specialist_names_json)),
+        verification_record_id text not null references verification_records(id),
+        guard_decision_ids_json text not null check (json_valid(guard_decision_ids_json)),
+        review_record_ids_json text not null check (json_valid(review_record_ids_json)),
+        unresolved_blocking_finding_ids_json text not null check (json_valid(unresolved_blocking_finding_ids_json)),
+        carried_from_review_set_id text references review_sets(id),
+        carry_forward_guard_decision_id text,
+        decision text not null check (decision in ('approve', 'needs_rework', 'needs_human', 'blocked')),
+        created_at text not null,
+        check ((carried_from_review_set_id is null) = (carry_forward_guard_decision_id is null))
+      ) strict
+    `.execute(database);
+    await sql`
+      create table guard_decisions (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        requested_transition text not null,
+        result text not null check (result in ('allow', 'deny')),
+        reason_code text not null,
+        evidence_json text not null check (json_valid(evidence_json)),
+        created_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table lessons (
+        id text primary key,
+        created_at text not null,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        source text not null check (source in ('guard_denial', 'rework', 'review_finding', 'escaped_defect', 'plan_rejection', 'tool_failure', 'budget_exhausted', 'confusion')),
+        text text not null,
+        evidence_json text not null check (json_valid(evidence_json))
+      ) strict
+    `.execute(database);
+    await sql`
+      create table rules (
+        id text primary key,
+        text text not null,
+        lesson_ids_json text not null check (json_valid(lesson_ids_json)),
+        citation_count integer not null default 0 check (citation_count >= 0),
+        last_cited_at text
+      ) strict
+    `.execute(database);
+    await sql`
+      create table live_sessions (
+        attempt_id text primary key references attempts(id),
+        session_id text not null,
+        thread_id text not null,
+        turn_id text,
+        process_id integer not null check (process_id >= 0),
+        process_group_id integer not null check (process_group_id >= 0),
+        adapter_version text not null,
+        protocol_schema_hash text not null,
+        last_event text not null,
+        last_event_at text not null,
+        turn_count integer not null default 0 check (turn_count >= 0),
+        last_input_tokens integer not null default 0 check (last_input_tokens >= 0),
+        last_output_tokens integer not null default 0 check (last_output_tokens >= 0),
+        last_total_tokens integer not null default 0 check (last_total_tokens = last_input_tokens + last_output_tokens),
+        ownership_verified_at text
+      ) strict
+    `.execute(database);
+    await sql`
+      create table retry_entries (
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text not null references attempts(id),
+        failure_class text not null,
+        retry_number integer not null check (retry_number > 0),
+        due_at text not null,
+        max_retries integer not null check (max_retries >= 0),
+        last_error text not null,
+        created_at text not null,
+        primary key (work_ref_kind, work_ref_id, retry_number)
+      ) strict
+    `.execute(database);
+    await sql`
+      create table parked_work (
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        origin_stage text not null,
+        reason text not null,
+        blocker_predicate text,
+        question_id text,
+        parked_at text not null,
+        last_checked_at text not null,
+        resolved_at text,
+        primary key (work_ref_kind, work_ref_id)
+      ) strict
+    `.execute(database);
+    await sql`
+      create table operator_questions (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text not null references attempts(id),
+        text text not null,
+        options_json text not null check (json_valid(options_json)),
+        default_answer text not null,
+        comment_marker text not null,
+        comment_cursor text,
+        asked_at text not null,
+        reminded_at text,
+        answered_at text,
+        answer text,
+        answered_by text,
+        check (
+          (answered_at is null and answer is null and answered_by is null)
+          or (answered_at is not null and answer is not null and answered_by is not null)
+        )
+      ) strict
+    `.execute(database);
+    await sql`
+      create table agent_approval_requests (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text not null references attempts(id),
+        action_kind text not null,
+        scope text not null,
+        summary text not null,
+        requested_at text not null,
+        expires_at text not null,
+        status text not null check (status in ('pending', 'approved', 'denied', 'expired')),
+        decided_at text,
+        decided_by text,
+        decision text
+      ) strict
+    `.execute(database);
+    await sql`
+      create table mutation_authorizations (
+        id text primary key,
+        intent_id text not null unique,
+        idempotency_key text not null,
+        scope text not null check (scope in ('work', 'fleet')),
+        work_ref_kind text check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text,
+        service_run_id text not null references service_runs(id),
+        actor_kind text not null check (actor_kind in ('orchestrator_policy', 'operator')),
+        actor_id text not null,
+        attempt_role text,
+        operator_capability text,
+        config_snapshot_id text not null references config_snapshots(id),
+        action text not null,
+        target text not null,
+        observed_state_ref text not null,
+        target_revision text,
+        decision_rule_ids_json text not null check (json_valid(decision_rule_ids_json)),
+        authorized_at text not null,
+        expires_at text not null,
+        check (
+          (scope = 'work' and work_ref_kind is not null and work_ref_id is not null)
+          or (scope = 'fleet' and work_ref_kind is null and work_ref_id is null)
+        )
+      ) strict
+    `.execute(database);
+    await sql`
+      create table side_effect_intents (
+        id text primary key,
+        idempotency_key text not null unique,
+        scope text not null check (scope in ('work', 'fleet')),
+        work_ref_kind text check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text,
+        service_run_id text not null references service_runs(id),
+        attempt_id text references attempts(id),
+        action text not null,
+        target text not null,
+        target_revision text,
+        request_payload_hash text not null,
+        authorization_id text not null unique references mutation_authorizations(id),
+        status text not null check (status in ('pending', 'applying', 'applied', 'failed', 'unknown')),
+        created_at text not null,
+        updated_at text not null,
+        check (
+          (scope = 'work' and work_ref_kind is not null and work_ref_id is not null)
+          or (scope = 'fleet' and work_ref_kind is null and work_ref_id is null)
+        )
+      ) strict
+    `.execute(database);
+    await sql`
+      create table side_effect_receipts (
+        intent_id text primary key references side_effect_intents(id),
+        provider_request_id text not null,
+        result text not null,
+        result_revision text,
+        response_payload_hash text not null,
+        applied_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table repository_links (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        cycle integer not null check (cycle > 0),
+        kind text not null check (kind in ('primary', 'repair')),
+        repo_owner text not null,
+        repo_name text not null,
+        branch text not null,
+        pull_request_number integer not null check (pull_request_number > 0),
+        pull_request_url text not null,
+        head_sha text not null,
+        base_ref text not null,
+        base_sha text not null,
+        state text not null,
+        created_at text not null,
+        updated_at text not null,
+        unique (work_ref_kind, work_ref_id, cycle, kind)
+      ) strict
+    `.execute(database);
+    await sql`
+      create table plans (
+        id text primary key,
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        revision integer not null check (revision > 0),
+        status text not null check (status in ('draft', 'validated', 'approved', 'rejected', 'superseded')),
+        approach text not null,
+        acceptance_criteria_json text not null check (json_valid(acceptance_criteria_json)),
+        proposed_paths_json text not null check (json_valid(proposed_paths_json)),
+        verification_commands_json text not null check (json_valid(verification_commands_json)),
+        estimated_files integer not null check (estimated_files >= 0),
+        estimated_changed_lines integer not null check (estimated_changed_lines >= 0),
+        risk_facts_json text not null check (json_valid(risk_facts_json)),
+        created_by_attempt_id text not null references attempts(id),
+        created_at text not null,
+        validated_at text,
+        approved_by_attempt_id text references attempts(id),
+        unique (work_ref_kind, work_ref_id, revision)
+      ) strict
+    `.execute(database);
+    await sql`
+      create table log_records (
+        id text primary key,
+        service_run_id text not null references service_runs(id),
+        work_ref_kind text check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text,
+        attempt_id text references attempts(id),
+        session_id text,
+        stage_transition_id text references stage_transitions(id),
+        timestamp text not null,
+        level text not null check (level in ('trace', 'debug', 'info', 'warn', 'error', 'fatal')),
+        event_name text not null,
+        message text not null,
+        structured_fields_json text not null check (json_valid(structured_fields_json)),
+        check ((work_ref_kind is null) = (work_ref_id is null))
+      ) strict
+    `.execute(database);
+    await sql`
+      create index log_records_timeline on log_records (timestamp, id)
+    `.execute(database);
+    await sql`
+      create table usage_samples (
+        id text primary key,
+        service_run_id text not null references service_runs(id),
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        attempt_id text references attempts(id),
+        system_job_id text references system_jobs(id),
+        timestamp text not null,
+        input_tokens integer not null check (input_tokens >= 0),
+        output_tokens integer not null check (output_tokens >= 0),
+        total_tokens integer not null check (total_tokens = input_tokens + output_tokens),
+        billable_categories_json text not null check (json_valid(billable_categories_json)),
+        derived_input_tokens integer not null check (derived_input_tokens >= 0),
+        derived_output_tokens integer not null check (derived_output_tokens >= 0),
+        derived_total_tokens integer not null check (derived_total_tokens = derived_input_tokens + derived_output_tokens),
+        cost_usd real check (cost_usd is null or cost_usd >= 0),
+        check ((attempt_id is not null) != (system_job_id is not null))
+      ) strict
+    `.execute(database);
+    await sql`
+      create index usage_samples_rolling on usage_samples (timestamp, id)
+    `.execute(database);
+    await sql`
+      create table budget_adjustments (
+        id text primary key,
+        ledger_id text not null references budget_ledgers(id),
+        action text not null check (action in ('set_limit', 'add_allowance', 'start_new_allowance_epoch')),
+        amount real not null,
+        reason text not null,
+        operator_action_id text not null unique references operator_actions(id),
+        prior_version integer not null check (prior_version >= 0),
+        new_version integer not null check (new_version = prior_version + 1),
+        created_at text not null
+      ) strict
+    `.execute(database);
+  },
+  version: 5,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
   configurationOverrideMigration,
   configurationAcknowledgmentMigration,
+  durableDomainRecordsMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

@@ -39,7 +39,43 @@ describe("production migrations", () => {
       { name: "durable_stage_transitions", version: 2 },
       { name: "configuration_overrides_and_operator_audit", version: 3 },
       { name: "exact_configuration_acknowledgments", version: 4 },
+      { name: "durable_domain_records", version: 5 },
     ]);
+  });
+
+  it("creates a durable table for every remaining Section 3 entity", async () => {
+    const opened = await temporaryDatabase();
+    await applyMigrations(opened.database);
+
+    const tables = opened.sqlite
+      .prepare("select name from sqlite_schema where type = 'table' order by name")
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        "agent_approval_requests",
+        "budget_adjustments",
+        "guard_decisions",
+        "issues",
+        "lessons",
+        "live_sessions",
+        "log_records",
+        "mutation_authorizations",
+        "operator_questions",
+        "parked_work",
+        "plans",
+        "repository_links",
+        "retry_entries",
+        "review_records",
+        "review_sets",
+        "rules",
+        "side_effect_intents",
+        "side_effect_receipts",
+        "system_jobs",
+        "usage_samples",
+        "verification_records",
+      ]),
+    );
   });
 
   it("rejects an altered checksum for an applied migration", async () => {
