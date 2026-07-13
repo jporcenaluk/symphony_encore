@@ -18,6 +18,7 @@ import {
   type Issue,
   PlanReviewResultSchema,
   PlanSchema,
+  ReviewResultSchema,
 } from "@symphony/contracts";
 import type { ComputeProfile, ProvisionalClassification } from "@symphony/domain";
 import {
@@ -37,6 +38,7 @@ import {
   loadLatestPlanReviewResult,
   loadLatestValidatedPlan,
   loadPendingIndependentVerification,
+  loadPendingIntegrativeReview,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
@@ -52,6 +54,9 @@ import {
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
+import { startPlannedIntegrativeReviewAttemptLifecycle } from "./integrative-review-attempt-lifecycle.js";
+import { planIntegrativeReviewAttempt } from "./integrative-review-attempt-planner.js";
+import { collectIntegrativeReviewContext } from "./integrative-review-evidence.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
 import {
@@ -74,6 +79,7 @@ export function createProductionScheduler(input: {
   serviceRunId: string;
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
+  review?: { collectEvidence?: typeof collectIntegrativeReviewContext };
   verification?: { execute?: VerificationExecutor; readRevision?: RevisionReader };
 }) {
   const values = input.snapshot.effectiveConfig;
@@ -170,11 +176,15 @@ export function createProductionScheduler(input: {
         if (availableSlots < 1 || !safety.canDispatch()) break;
         const isPlanReview = claim.reason === "plan_review_required";
         const isIndependentVerification = claim.reason === "independent_verification_required";
+        const isIntegrativeReview = claim.reason === "review_required";
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
           claim.reason === "plan_revision_required";
         if (
-          (!isPlanReview && !isIndependentVerification && !isImplementationContinuation) ||
+          (!isPlanReview &&
+            !isIndependentVerification &&
+            !isIntegrativeReview &&
+            !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
         ) {
           continue;
@@ -206,6 +216,81 @@ export function createProductionScheduler(input: {
               workRef: { id: issueId, kind: "issue" },
               workspaceRoot: stringValue(values, "workspace.root"),
             });
+            continue;
+          }
+          if (isIntegrativeReview) {
+            const target = await loadPendingIntegrativeReview(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.review_target_missing:${issueId}`);
+            const context = await (
+              input.review?.collectEvidence ?? collectIntegrativeReviewContext
+            )({
+              baseSha: target.baseSha,
+              changeClass: target.changeClass,
+              commandRunner: createNodeWorkspaceCommandRunner(),
+              sourceEnvironment: input.environment,
+              targetSha: target.targetSha,
+              timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+              verificationRecordId: target.verificationRecordId,
+              workspace: target.workspacePath,
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            const reviewPlanned = await planIntegrativeReviewAttempt({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              context,
+              database: input.database,
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              serviceRunId: input.serviceRunId,
+              terminalResultSchema: ReviewResultSchema,
+            });
+            const reviewStarted = await startPlannedIntegrativeReviewAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              planned: reviewPlanned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            availableSlots -= 1;
+            running.set(reviewPlanned.attemptId, {
+              attemptId: reviewPlanned.attemptId,
+              attemptLane: "In Progress",
+              expectedExpiresAt: reviewPlanned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId,
+              lastEventAt: reviewStarted.bound.started.timestamp,
+              processGroupId: reviewStarted.bound.session.processGroupId,
+              processId: reviewStarted.bound.session.processId,
+              workspacePath: reviewPlanned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              reviewStarted.completion,
+              () => running.delete(reviewPlanned.attemptId),
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: reviewPlanned.attemptId, error },
+                  "integrative review lifecycle failed",
+                ),
+            );
             continue;
           }
           let planned:

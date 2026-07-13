@@ -112,6 +112,10 @@ export const ReviewResultSchema = Type.Union([
 ]);
 export type ReviewResult = Static<typeof ReviewResultSchema>;
 
+export function isReviewResult(value: unknown): value is ReviewResult {
+  return Value.Check(ReviewResultSchema, value);
+}
+
 const ResolutionSchema = Type.Object(
   {
     conflict_id: NonEmptyString,

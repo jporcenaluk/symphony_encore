@@ -64,6 +64,7 @@ const effectiveConfig = {
   "hooks.timeout_ms": 60_000,
   "persistence.lease_ttl_ms": 120_000,
   "polling.interval_ms": 30_000,
+  "review.snapshot_timeout_ms": 30_000,
   "tracker.acceptance_criteria_heading": "Acceptance Criteria",
   "tracker.assignee": null,
   "tracker.owner": "owner",
@@ -153,7 +154,7 @@ describe("production reconciliation scheduler", () => {
     ).toThrow("scheduler.config:env.allowlist");
   });
 
-  it("dispatches an eligible candidate through durable lifecycle closure", async () => {
+  it("dispatches an eligible candidate through verification and integrative review", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "symphony-production-dispatch-"));
     directories.push(directory);
     const workspaceRoot = path.join(directory, "workspaces");
@@ -190,6 +191,7 @@ describe("production reconciliation scheduler", () => {
     };
     const agent: AgentAdapter = {
       launch: vi.fn(async (request: AgentLaunchRequest) => {
+        const isReview = request.preflight.role === "integrative_review";
         const submittedPlan = {
           acceptance_criteria: [
             {
@@ -213,7 +215,7 @@ describe("production reconciliation scheduler", () => {
           verification_commands: ["make verify-fast"],
           work_ref: { issue_id: candidate.id },
         };
-        const planDecision = request.onPlanSubmitted?.(submittedPlan);
+        const planDecision = isReview ? undefined : request.onPlanSubmitted?.(submittedPlan);
         const session: AgentSession = {
           cancel: vi.fn(async () => undefined),
           events: {
@@ -228,6 +230,28 @@ describe("production reconciliation scheduler", () => {
                 timestamp: "2026-07-13T10:00:03.000Z",
                 turn_id: "turn-1",
               };
+              if (isReview) {
+                yield {
+                  attempt_id: request.attemptId,
+                  event: "terminal_result_reported" as const,
+                  result: {
+                    decision: "approve",
+                    evidence: [{ kind: "commit", sha: "abc1234" }],
+                    findings: [],
+                    target_sha: "abc1234",
+                  },
+                  session_id: "thread-1-turn-1",
+                  timestamp: "2026-07-13T10:00:04.000Z",
+                };
+                yield {
+                  attempt_id: request.attemptId,
+                  event: "turn_completed" as const,
+                  provider_reason: "completed",
+                  session_id: "thread-1-turn-1",
+                  timestamp: "2026-07-13T10:00:05.000Z",
+                };
+                return;
+              }
               const decision = await planDecision;
               if (!decision?.accepted) throw new Error("production Plan gate rejected valid Plan");
               yield {
@@ -305,12 +329,26 @@ describe("production reconciliation scheduler", () => {
         resultRevision: "revision-8",
       })),
     };
+    const logger = { error: vi.fn(), warn: vi.fn() };
     const scheduler = createProductionScheduler({
       agent,
       database: opened.database,
       environment: {},
+      logger,
       prompt: "Implement {{ issue.title }}.",
       repositoryAdapter,
+      review: {
+        collectEvidence: vi.fn(async (request) => ({
+          baseSha: request.baseSha,
+          changeClass: request.changeClass,
+          changedFiles: ["apps/server/src/production-scheduler.ts"],
+          diff: "diff --git a/apps/server/src/production-scheduler.ts b/apps/server/src/production-scheduler.ts",
+          patchIdentity: "sha256:patch",
+          repositoryDocs: [],
+          targetSha: request.targetSha,
+          verificationRecordId: request.verificationRecordId,
+        })),
+      },
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
@@ -340,21 +378,39 @@ describe("production reconciliation scheduler", () => {
       }),
     );
     await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_required",
+      }),
+    );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_coordination_required",
+      }),
+    );
     await scheduler.close();
 
-    expect(agent.launch).toHaveBeenCalledOnce();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(agent.launch).toHaveBeenCalledTimes(2);
     expect(tracker.updateIssueLane).toHaveBeenCalledWith(
       candidate.id,
       "In Progress",
       "dispatch.eligible",
       expect.any(Object),
     );
-    expect(opened.sqlite.prepare("select status from attempts").get()).toEqual({
-      status: "closed",
-    });
+    expect(
+      opened.sqlite.prepare("select role, status from attempts order by attempt_number").all(),
+    ).toEqual([
+      { role: "implementation", status: "closed" },
+      { role: "integrative_review", status: "closed" },
+    ]);
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
-      reason: "review_required",
+      reason: "review_coordination_required",
     });
     expect(
       opened.sqlite.prepare("select target_revision, result from verification_records").get(),
@@ -365,6 +421,9 @@ describe("production reconciliation scheduler", () => {
     expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
       status: "settled",
     });
+    expect(
+      opened.sqlite.prepare("select reviewer_role, target_sha, decision from review_records").get(),
+    ).toEqual({ decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" });
     expect(opened.sqlite.prepare("select status from plans").get()).toEqual({
       status: "validated",
     });

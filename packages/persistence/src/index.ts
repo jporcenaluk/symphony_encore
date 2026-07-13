@@ -21,6 +21,7 @@ export * from "./live-session-store.js";
 export * from "./operator-auth-store.js";
 export * from "./plan-review-finish-store.js";
 export * from "./plan-store.js";
+export * from "./review-store.js";
 export * from "./scheduler-store.js";
 export * from "./service-run-store.js";
 export * from "./side-effect-store.js";
