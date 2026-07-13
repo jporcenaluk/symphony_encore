@@ -27,7 +27,6 @@ run_container() {
   fi
   docker run --detach --name "$container" \
     --read-only \
-    --tmpfs /tmp:rw,noexec,nosuid,size=256m \
     --mount "type=volume,src=${volume},dst=/var/lib/symphony" \
     --mount "type=bind,src=${workflow},dst=/opt/symphony/WORKFLOW.md,readonly" \
     --health-interval 1s --health-start-period 1s --health-retries 15 --health-timeout 2s \
@@ -109,14 +108,6 @@ docker rm "$container" >/dev/null
 
 docker run --rm --read-only \
   --mount "type=volume,src=${volume},dst=/var/lib/symphony" \
-  --entrypoint node "$image" -e '
-    const Database = require("better-sqlite3");
-    const database = new Database("/var/lib/symphony/symphony.sqlite3", { readonly: true });
-    const rows = database.prepare("select status, end_reason from service_runs").all();
-    if (rows.length !== 2 || rows.some((row) => row.status !== "stopped" || row.end_reason !== "signal")) {
-      console.error(rows);
-      process.exit(1);
-    }
-  '
+  "$image" node dist/container-smoke.js /var/lib/symphony/symphony.sqlite3
 
 printf 'Container runtime smoke passed\n'
