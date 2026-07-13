@@ -25,7 +25,8 @@ At the baseline revision:
 - PR `#3` is open as a draft and contains 403 files and 86,770 additions.
 - CodeQL passed, but the main CI workflow failed on Linux, macOS, workflow lint, image smoke, and
   the aggregate required check.
-- Core Conformance reports only `C-DUR-03` and `C-UI-04` as complete.
+- the legacy prose-driven Core report marked only `C-DUR-03` and `C-UI-04` complete; the corrected
+  ledger retains only `C-DUR-03` as directly proven;
 - the Real Integration Profile has not run;
 - `production_ready` is false;
 - Docker is unavailable in the current WSL environment;
@@ -246,9 +247,11 @@ contracts happens only at boundaries.
 
 ### 5.3 Canonical startup flow
 
-1. Resolve trusted paths and open SQLite.
-2. Acquire an exclusive service lock before creating a live `ServiceRun`.
-3. Apply and verify immutable migrations.
+1. Resolve and canonicalize the configured database path without opening SQLite.
+2. Acquire a non-reentrant OS-level exclusive lock for that canonical store path before touching the
+   database, WAL, or migrations. Hold it through worker shutdown and database close.
+3. Open SQLite, apply and verify immutable migrations, and persist a new fencing epoch plus
+   `ServiceRun` identity. Every privileged writer rejects a stale epoch.
 4. Resolve and fully validate configuration without persisting secret values.
 5. Enter recovering/read-only mode.
 6. Load claims, attempts, sessions, retries, questions, stages, budgets, workspaces, and unresolved
@@ -257,11 +260,15 @@ contracts happens only at boundaries.
 8. Reconcile every unresolved provider intent by idempotency key without issuing a new mutation.
 9. Close interrupted work, settle usage, rebuild timers and rolling budgets, and quarantine unsafe
    workspaces.
-10. Publish a durable recovery result.
+10. Publish a durable recovery result bound to the lock identity and fencing epoch.
 11. Enable the authenticated mutation kernel and canonical scheduler only after every required
     recovery step succeeds.
 
 Failure before step 11 leaves external mutations and dispatch disabled.
+
+Lock acquisition is keyed by the resolved database identity, so symlink and path aliases cannot
+create independent owners. Crash recovery and stale lock handling are platform-specific adapter
+responsibilities and are tested with two real processes, not two connections in one process.
 
 ### 5.4 Canonical poll flow
 
@@ -408,14 +415,16 @@ premature global target would reward low-value tests and make native/process/pla
 
 1. Repair the clean-runner CI baseline and harden the conformance harness so later evidence is
    trustworthy.
-2. Add deterministic runtime services, canonical identities, shared test fixtures, and the common
-   attempt-session runner.
-3. Add the exclusive service lock, complete startup reconciliation, persistence fail-closed gate,
-   and privileged mutation application service.
-4. Fully validate configuration changes, add the live configuration manager, and centralize control
+2. Add deterministic runtime services, canonical identities, shared test fixtures, and narrow
+   characterization seams without moving provider mutations.
+3. Add the pre-database OS service lock and fencing, complete startup reconciliation, persistence
+   fail-closed gate, and privileged mutation application service.
+4. Extract the common attempt-session runner, scheduler shell, Ready-handler registry,
+   publication, and merge coordinators into `packages/orchestration` after they can depend on the
+   hardened startup and mutation services.
+5. Fully validate configuration changes, add the live configuration manager, and centralize control
    mutations and rejection audit.
-5. Enforce the Codex posture and OS execution boundary, then implement durable approval handling.
-6. Extract the canonical scheduler and Ready-handler registry into `packages/orchestration`.
+6. Enforce the Codex posture and OS execution boundary, then implement durable approval handling.
 7. Implement exactly-one results, final-diff reclassification, rolling budgets, Guard Decisions,
    review carry-forward, and complete recovery routes.
 8. Complete lessons, notifications, sampled audits, quality metrics, durable logs, retention, and
