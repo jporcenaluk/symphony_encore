@@ -157,3 +157,20 @@ export interface AgentAdapter {
   manifest(): Promise<AgentAdapterManifest>;
   preflight(request: AgentPreflightRequest): Promise<AgentPreflightResult>;
 }
+
+export interface WorkspacePopulation {
+  baseSha: string;
+  checkoutMethod: "operator_managed_mirror" | "trusted_repository_adapter";
+  createdAt: string;
+  localBranch: string;
+  repository: string;
+  workspacePath: string;
+}
+
+export interface WorkspaceRepositoryAdapter {
+  populateIssueWorkspace(input: {
+    identifier: string;
+    repository: string;
+    workspaceRoot: string;
+  }): Promise<WorkspacePopulation>;
+}

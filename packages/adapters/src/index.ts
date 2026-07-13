@@ -8,6 +8,7 @@ export * from "./gh-cli-api.js";
 export * from "./github-projects-transport.js";
 export * from "./github-repository-hosting.js";
 export * from "./github-tracker.js";
+export * from "./github-workspace.js";
 export * from "./linux-hook-runner.js";
 export * from "./linux-process-ownership.js";
 export * from "./linux-sandbox.js";
