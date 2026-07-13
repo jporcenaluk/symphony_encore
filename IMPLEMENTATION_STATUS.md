@@ -70,7 +70,7 @@ command. A green but narrower test does not complete a broader item.
 | D07 | Verified immutable artifacts, SBOM, provenance, and checksums | Not started | Successful trusted-main publication |
 | D08 | Tag promotion without rebuilding | Not started | Release workflow and artifact lookup test |
 | D09 | Dependabot for pnpm, Actions, and Docker | Implemented | Valid weekly npm, GitHub Actions, and Docker updater configuration with major toolchain updates kept visible |
-| D10 | Fast staged-file hooks and optional pre-push verification | Not started | Hook fixture tests |
+| D10 | Fast staged-file hooks and optional pre-push verification | Implemented | Husky/lint-staged operate on selected staged files; staged policy rejects whitespace, conflict markers, binaries, and large blobs; checksum-pinned Gitleaks rejects a synthetic staged secret with redacted output; Conventional Commit subjects and documented bypass policy pass |
 | D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache, 14-day failed Playwright artifact retention, operator runbooks, WSL smoke procedure, and verified-digest rollback policy exist; publication and environment-specific rollback proof pending |
 | D12 | Complete stable Make command interface | In progress | Setup, supervised dev, format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; conformance pending |
 
@@ -185,3 +185,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make verify-fast` | 296 tests; lint, contract/OpenAPI/client drift, and typecheck passed | One-terminal dev supervision, signal forwarding, and sibling-failure teardown |
 | 2026-07-13 | working tree | `bash -n scripts/verify-container.sh` | Container smoke script parsed successfully | Non-root read-only runtime, loopback bootstrap, health/readiness/UI, volume restart, and durable signal stop |
 | 2026-07-13 | working tree | `actionlint 1.7.12` and `zizmor 1.26.1 --persona pedantic --offline` | Workflow syntax passed; no security findings | Image runtime smoke integration |
+| 2026-07-13 | working tree | `node scripts/install-gitleaks.ts` and `scripts/verify-gitleaks.ts` | Checksum-pinned Gitleaks 8.30.1 installed; synthetic staged secret rejected with redacted output and clean staged content passed | Repository-owned pre-commit secret gate |
+| 2026-07-13 | working tree | `make verify-fast` | 304 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Staged snapshot policy, Gitleaks installer mapping, Husky wiring, and commit-message policy |

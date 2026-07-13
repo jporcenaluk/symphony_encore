@@ -5,6 +5,8 @@ SHELL := /bin/bash
 
 setup:
 	corepack pnpm install --frozen-lockfile
+	node scripts/install-gitleaks.ts
+	node --import ./scripts/typescript-source-loader.mjs scripts/verify-gitleaks.ts
 	corepack pnpm exec husky
 
 dev:
