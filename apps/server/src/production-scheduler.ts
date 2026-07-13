@@ -14,7 +14,7 @@ import {
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
 import { ImplementationOutcomeSchema, type Issue, PlanSchema } from "@symphony/contracts";
-import type { ComputeProfile } from "@symphony/domain";
+import type { ComputeProfile, ProvisionalClassification } from "@symphony/domain";
 import {
   evaluateIssueEligibility,
   PersistenceSafetyController,
@@ -213,7 +213,11 @@ export function createProductionScheduler(input: {
               database: input.database,
               issue: stored.issue,
               now: () => new Date().toISOString(),
+              provisionalClassification: plannedProvisionalClassification(planned),
+              riskPathPatterns: stringList(values, "class.risk_paths"),
               safety,
+              trivialMaxChangedLines: numberValue(values, "class.trivial_max_changed_lines"),
+              trivialPathPatterns: stringList(values, "class.trivial_patterns"),
               workspacePath: planned.record.dispatch.attempt.workspacePath,
             }),
             planned,
@@ -339,6 +343,23 @@ function initialAttemptConfiguration(
       ...(home ? [pathFromRoot(home, ".agents/skills"), pathFromRoot(home, ".codex/skills")] : []),
     ],
     workspaceRoot: stringValue(values, "workspace.root"),
+  };
+}
+
+function plannedProvisionalClassification(
+  planned: Awaited<ReturnType<typeof planInitialIssueAttempt>>,
+): ProvisionalClassification {
+  const attempt = planned.record.dispatch.attempt;
+  const classificationReasons = attempt.routingReasons.filter(
+    (reason) => !reason.startsWith("route."),
+  );
+  if (attempt.changeClass === "high_risk") {
+    return { changeClass: "high_risk", floor: "high_risk", reasons: classificationReasons };
+  }
+  return {
+    changeClass: "standard",
+    floor: classificationReasons.includes("classification.unknown") ? null : "standard",
+    reasons: classificationReasons,
   };
 }
 

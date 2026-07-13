@@ -1,7 +1,7 @@
 import type { Plan } from "@symphony/contracts";
 import { describe, expect, it } from "vitest";
 
-import { validateImplementationPlan } from "./plan-gate.js";
+import { classifyImplementationPlan, validateImplementationPlan } from "./plan-gate.js";
 
 const validPlan: Plan = {
   acceptance_criteria: [
@@ -40,6 +40,64 @@ describe("deterministic implementation Plan gate", () => {
         plan: validPlan,
       }),
     ).toEqual({ accepted: true, objections: [] });
+  });
+
+  it("computes the first authoritative class from configured path and size facts", () => {
+    const unknownProvisional = {
+      changeClass: "standard" as const,
+      floor: null,
+      reasons: ["classification.unknown"],
+    };
+    expect(
+      classifyImplementationPlan({
+        plan: {
+          ...validPlan,
+          estimated_changed_lines: 10,
+          estimated_files: 1,
+          proposed_paths: ["docs/operator/guide.md"],
+        },
+        provisional: unknownProvisional,
+        riskPathPatterns: [],
+        trivialMaxChangedLines: 25,
+        trivialPathPatterns: ["docs/**"],
+      }),
+    ).toEqual({
+      changeClass: "trivial",
+      reasons: ["classification.trivial_paths", "classification.trivial_size"],
+    });
+    expect(
+      classifyImplementationPlan({
+        plan: validPlan,
+        provisional: unknownProvisional,
+        riskPathPatterns: ["apps/server/src/**"],
+        trivialMaxChangedLines: 25,
+        trivialPathPatterns: ["docs/**"],
+      }),
+    ).toEqual({
+      changeClass: "high_risk",
+      reasons: ["risk.configured_path:apps/server/src/**"],
+    });
+    expect(
+      classifyImplementationPlan({
+        plan: {
+          ...validPlan,
+          estimated_changed_lines: 10,
+          estimated_files: 1,
+          proposed_paths: ["docs/operator/guide.md"],
+        },
+        provisional: {
+          changeClass: "standard",
+          floor: "standard",
+          reasons: ["classification.explicit_standard"],
+        },
+        riskPathPatterns: [],
+        trivialMaxChangedLines: 25,
+        trivialPathPatterns: ["docs/**"],
+      }),
+    ).toEqual({
+      changeClass: "standard",
+      reasons: ["classification.explicit_standard"],
+    });
   });
 
   it("returns stable specific objections for coverage, path, and size defects", () => {

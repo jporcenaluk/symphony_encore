@@ -6,7 +6,11 @@ import type { Plan } from "@symphony/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { markPlanValidated, recordSubmittedPlan } from "./plan-store.js";
+import {
+  markPlanValidated,
+  recordAuthoritativePlanClassification,
+  recordSubmittedPlan,
+} from "./plan-store.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -128,5 +132,40 @@ describe("submitted plan persistence", () => {
         plan: { ...plan(1), approach: "Conflicting replay" },
       }),
     ).rejects.toThrow("plan.idempotency_conflict");
+  });
+
+  it("pins the first authoritative Plan class to its running attempt", async () => {
+    await recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan: plan(1) });
+    await markPlanValidated(opened.database, {
+      attemptId: "attempt-1",
+      planId: "plan-1",
+      validatedAt: "2026-07-13T10:02:00Z",
+    });
+
+    await recordAuthoritativePlanClassification(opened.database, {
+      attemptId: "attempt-1",
+      changeClass: "high_risk",
+      expectedProvisionalClass: "standard",
+      planId: "plan-1",
+      reasons: ["risk.configured_path:packages/persistence/**"],
+      validatedAt: "2026-07-13T10:02:00Z",
+    });
+
+    expect(
+      opened.sqlite.prepare("select change_class, routing_reasons_json from attempts").get(),
+    ).toEqual({
+      change_class: "high_risk",
+      routing_reasons_json: '["risk.configured_path:packages/persistence/**"]',
+    });
+    await expect(
+      recordAuthoritativePlanClassification(opened.database, {
+        attemptId: "attempt-1",
+        changeClass: "trivial",
+        expectedProvisionalClass: "standard",
+        planId: "plan-1",
+        reasons: ["classification.trivial_paths"],
+        validatedAt: "2026-07-13T10:02:00Z",
+      }),
+    ).rejects.toThrow("plan.authoritative_class_conflict");
   });
 });

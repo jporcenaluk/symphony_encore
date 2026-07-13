@@ -3,18 +3,28 @@ import path from "node:path";
 
 import type { AgentPlanSubmissionDecision } from "@symphony/adapters";
 import { type Issue, isPlan, type Plan } from "@symphony/contracts";
+import type { ProvisionalClassification } from "@symphony/domain";
 import {
+  classifyImplementationPlan,
   type PersistenceSafetyController,
   validateImplementationPlan,
 } from "@symphony/orchestration";
-import { markPlanValidated, type OpenedDatabase, recordSubmittedPlan } from "@symphony/persistence";
+import {
+  type OpenedDatabase,
+  recordAuthoritativePlanClassification,
+  recordSubmittedPlan,
+} from "@symphony/persistence";
 
 export function createInitialPlanSubmissionHandler(input: {
   attemptId: string;
   database: OpenedDatabase["database"];
   issue: Issue;
   now(): string;
+  provisionalClassification: ProvisionalClassification;
+  riskPathPatterns: readonly string[];
   safety: PersistenceSafetyController;
+  trivialMaxChangedLines: number;
+  trivialPathPatterns: readonly string[];
   workspacePath: string;
 }): (plan: unknown) => Promise<AgentPlanSubmissionDecision> {
   return async (candidate) => {
@@ -36,17 +46,33 @@ export function createInitialPlanSubmissionHandler(input: {
         ].join("\n"),
       );
     }
+    const classification = classifyImplementationPlan({
+      plan: candidate,
+      provisional: input.provisionalClassification,
+      riskPathPatterns: input.riskPathPatterns,
+      trivialMaxChangedLines: input.trivialMaxChangedLines,
+      trivialPathPatterns: input.trivialPathPatterns,
+    });
     try {
-      await markPlanValidated(input.database, {
+      await recordAuthoritativePlanClassification(input.database, {
         attemptId: input.attemptId,
+        changeClass: classification.changeClass,
+        expectedProvisionalClass: input.provisionalClassification.changeClass,
         planId: candidate.id,
+        reasons: classification.reasons,
         validatedAt: input.now(),
       });
     } catch (error) {
       return handlePlanOrPersistenceError(input.safety, error);
     }
     await writePlanProjection(input.workspacePath, candidate);
-    return { accepted: true, message: `Plan revision ${candidate.revision} accepted.` };
+    return {
+      accepted: true,
+      message:
+        classification.changeClass === "high_risk"
+          ? `Plan revision ${candidate.revision} validated as high_risk. Stop implementation and report plan_ready.`
+          : `Plan revision ${candidate.revision} accepted.`,
+    };
   };
 }
 

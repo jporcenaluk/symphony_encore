@@ -10,6 +10,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
 
 const directories: string[] = [];
+const classificationConfiguration = {
+  provisionalClassification: {
+    changeClass: "standard" as const,
+    floor: null,
+    reasons: ["classification.unknown"],
+  },
+  riskPathPatterns: [] as string[],
+  trivialMaxChangedLines: 25,
+  trivialPathPatterns: [] as string[],
+};
 
 afterEach(async () => {
   for (const directory of directories.splice(0)) {
@@ -92,6 +102,7 @@ describe("initial Plan submission boundary", () => {
       database: target.opened.database,
       issue,
       now: () => "2026-07-13T10:02:00Z",
+      ...classificationConfiguration,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
       workspacePath: target.workspacePath,
     });
@@ -117,6 +128,7 @@ describe("initial Plan submission boundary", () => {
       database: target.opened.database,
       issue,
       now: () => "2026-07-13T10:02:00Z",
+      ...classificationConfiguration,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
       workspacePath: target.workspacePath,
     });
@@ -140,6 +152,29 @@ describe("initial Plan submission boundary", () => {
       status: "draft",
     });
     await expect(readFile(path.join(target.workspacePath, "PLAN.md"), "utf8")).rejects.toThrow();
+    await target.opened.close();
+  });
+
+  it("raises a configured risk path and tells the session to stop for Plan review", async () => {
+    const target = await fixture();
+    const handler = createInitialPlanSubmissionHandler({
+      attemptId: "attempt-1",
+      database: target.opened.database,
+      issue,
+      now: () => "2026-07-13T10:02:00Z",
+      ...classificationConfiguration,
+      riskPathPatterns: ["apps/server/src/**"],
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+      workspacePath: target.workspacePath,
+    });
+
+    await expect(handler(plan())).resolves.toEqual({
+      accepted: true,
+      message: "Plan revision 1 validated as high_risk. Stop implementation and report plan_ready.",
+    });
+    expect(target.opened.sqlite.prepare("select change_class from attempts").get()).toEqual({
+      change_class: "high_risk",
+    });
     await target.opened.close();
   });
 });

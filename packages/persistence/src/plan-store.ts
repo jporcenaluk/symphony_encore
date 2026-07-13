@@ -1,4 +1,5 @@
 import { isPlan, type Plan } from "@symphony/contracts";
+import type { ChangeClass } from "@symphony/domain";
 import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -131,6 +132,80 @@ export async function markPlanValidated(
     return;
   }
   throw new Error("plan.validation_state_conflict");
+}
+
+interface ClassificationTargetRow {
+  change_class: ChangeClass;
+  plan_status: string;
+  routing_reasons_json: string;
+  status: string;
+  validated_at: string | null;
+}
+
+export async function recordAuthoritativePlanClassification(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    attemptId: string;
+    changeClass: ChangeClass;
+    expectedProvisionalClass: ChangeClass;
+    planId: string;
+    reasons: readonly string[];
+    validatedAt: string;
+  },
+): Promise<void> {
+  await database.transaction().execute(async (transaction) => {
+    const targets = await sql<ClassificationTargetRow>`
+      select attempt.change_class, attempt.routing_reasons_json, attempt.status,
+             plan.status as plan_status, plan.validated_at
+      from attempts attempt
+      join plans plan
+        on plan.id = ${input.planId}
+        and plan.created_by_attempt_id = attempt.id
+      where attempt.id = ${input.attemptId}
+        and attempt.role = 'implementation'
+    `.execute(transaction);
+    const target = targets.rows[0];
+    if (
+      target?.status === "running" &&
+      target.plan_status === "validated" &&
+      target.validated_at !== null &&
+      target.change_class === input.changeClass
+    ) {
+      return;
+    }
+    if (
+      target?.status !== "running" ||
+      target.change_class !== input.expectedProvisionalClass ||
+      (target.plan_status !== "draft" && target.plan_status !== "validated") ||
+      (target.change_class === "high_risk" && input.changeClass !== "high_risk")
+    ) {
+      throw new Error("plan.authoritative_class_conflict");
+    }
+    const existingReasons = JSON.parse(target.routing_reasons_json) as unknown;
+    if (
+      !Array.isArray(existingReasons) ||
+      existingReasons.some((reason) => typeof reason !== "string")
+    ) {
+      throw new Error("plan.routing_reasons_corrupt");
+    }
+    const reasons = [...new Set([...existingReasons, ...input.reasons])];
+    if (target.plan_status === "draft") {
+      const planUpdate = await sql`
+        update plans
+        set status = 'validated', validated_at = ${input.validatedAt}
+        where id = ${input.planId} and status = 'draft' and validated_at is null
+      `.execute(transaction);
+      if (planUpdate.numAffectedRows !== 1n) {
+        throw new Error("plan.validation_state_conflict");
+      }
+    }
+    const update = await sql`
+      update attempts
+      set change_class = ${input.changeClass}, routing_reasons_json = ${JSON.stringify(reasons)}
+      where id = ${input.attemptId} and change_class = ${input.expectedProvisionalClass}
+    `.execute(transaction);
+    if (update.numAffectedRows !== 1n) throw new Error("plan.authoritative_class_conflict");
+  });
 }
 
 function submissionFingerprint(plan: Plan): string {

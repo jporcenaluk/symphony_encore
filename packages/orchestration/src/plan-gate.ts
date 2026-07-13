@@ -1,6 +1,11 @@
 import path from "node:path";
 
 import type { Plan } from "@symphony/contracts";
+import {
+  type AuthoritativeClassification,
+  classifyAuthoritatively,
+  type ProvisionalClassification,
+} from "@symphony/domain";
 
 export interface ImplementationPlanGateInput {
   acceptanceCriteria: readonly string[];
@@ -10,6 +15,43 @@ export interface ImplementationPlanGateInput {
 export interface ImplementationPlanGateResult {
   accepted: boolean;
   objections: readonly string[];
+}
+
+export interface ImplementationPlanClassificationInput {
+  plan: Plan;
+  provisional: ProvisionalClassification;
+  riskPathPatterns: readonly string[];
+  trivialMaxChangedLines: number;
+  trivialPathPatterns: readonly string[];
+}
+
+export function classifyImplementationPlan(
+  input: ImplementationPlanClassificationInput,
+): AuthoritativeClassification {
+  const riskFacts = input.riskPathPatterns.flatMap((pattern) =>
+    input.plan.proposed_paths.some((candidate) => matchesPathPattern(candidate, pattern))
+      ? [`risk.configured_path:${pattern}`]
+      : [],
+  );
+  const everyPathMatchesTrivialPattern =
+    input.plan.proposed_paths.length > 0 &&
+    input.plan.proposed_paths.every((candidate) =>
+      input.trivialPathPatterns.some((pattern) => matchesPathPattern(candidate, pattern)),
+    );
+  return classifyAuthoritatively(
+    input.provisional,
+    {
+      acceptanceCriteriaPresent: input.plan.acceptance_criteria.length > 0,
+      changedLines: input.plan.estimated_changed_lines,
+      everyPathMatchesTrivialPattern,
+      riskFacts,
+      standardFacts: [],
+    },
+    {
+      trivialMaxChangedLines: input.trivialMaxChangedLines,
+      trivialPatternsConfigured: input.trivialPathPatterns.length > 0,
+    },
+  );
 }
 
 export function validateImplementationPlan(
@@ -84,4 +126,28 @@ function isCanonicalRepositoryPath(candidate: string): boolean {
     !candidate.startsWith("../") &&
     path.posix.normalize(candidate) === candidate
   );
+}
+
+function matchesPathPattern(candidate: string, pattern: string): boolean {
+  if (!isCanonicalRepositoryPath(candidate) || !isCanonicalRepositoryPath(pattern)) return false;
+  let expression = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index] as string;
+    if (character === "*" && pattern[index + 1] === "*") {
+      if (pattern[index + 2] === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+      } else {
+        expression += ".*";
+        index += 1;
+      }
+    } else if (character === "*") {
+      expression += "[^/]*";
+    } else if (character === "?") {
+      expression += "[^/]";
+    } else {
+      expression += character.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+    }
+  }
+  return new RegExp(`${expression}$`, "u").test(candidate);
 }
