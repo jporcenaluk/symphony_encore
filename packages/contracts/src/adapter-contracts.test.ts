@@ -44,6 +44,18 @@ describe("normalized agent adapter contracts", () => {
     expect(Value.Check(AgentEventSchema, { ...event, last_token_usage: 20 })).toBe(false);
   });
 
+  it("carries submitted plans over the normalized event boundary", () => {
+    expect(
+      Value.Check(AgentEventSchema, {
+        attempt_id: "attempt-1",
+        event: "plan_reported",
+        plan: { revision: 1 },
+        session_id: "thread-1-turn-1",
+        timestamp: "2026-07-13T10:00:00Z",
+      }),
+    ).toBe(true);
+  });
+
   it("publishes immutable protocol, profile, price, and capability metadata", () => {
     expect(
       Value.Check(AgentAdapterManifestSchema, {

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { Type } from "@sinclair/typebox";
 import type { AgentSession } from "@symphony/adapters";
-import type { AgentAdapterManifest, AgentEvent } from "@symphony/contracts";
+import { type AgentAdapterManifest, type AgentEvent, PlanSchema } from "@symphony/contracts";
 import { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   applyMigrations,
@@ -106,7 +106,7 @@ function bound(
       protocolSchemaHash: manifest.protocol.schema_hash,
       resolvedSkills: [],
       role: "implementation",
-      submitPlanSchema: null,
+      submitPlanSchema: PlanSchema,
       terminalResultSchema: Type.Object(
         { status: Type.String(), summary: Type.String() },
         { additionalProperties: false },
@@ -143,11 +143,41 @@ function tokenUsage(totalTokens = 100): AgentEvent {
 describe("agent event consumption", () => {
   it("persists usage and terminal ordering before returning a reported result", async () => {
     const result = { status: "completed", summary: "done" };
+    const plan = {
+      acceptance_criteria: [
+        {
+          criterion_id: "criterion-1",
+          criterion_text: "It works",
+          planned_evidence: "pnpm test",
+        },
+      ],
+      approach: "Implement and verify.",
+      approved_by_attempt_id: null,
+      created_at: "2026-07-13T10:00:02Z",
+      created_by_attempt_id: "attempt-1",
+      estimated_changed_lines: 10,
+      estimated_files: 1,
+      id: "plan-1",
+      proposed_paths: ["src/feature.ts"],
+      revision: 1,
+      risk_facts: [],
+      status: "draft" as const,
+      validated_at: null,
+      verification_commands: ["pnpm test"],
+      work_ref: { issue_id: "issue-1" },
+    };
     await expect(
       consumeAgentSession({
         attemptTokenCap: 1_000,
         bound: bound([
           tokenUsage(),
+          {
+            attempt_id: "attempt-1",
+            event: "plan_reported",
+            plan,
+            session_id: "thread-1-turn-1",
+            timestamp: "2026-07-13T10:00:02Z",
+          },
           {
             attempt_id: "attempt-1",
             event: "terminal_result_reported",
@@ -173,6 +203,11 @@ describe("agent event consumption", () => {
     ).resolves.toEqual({ kind: "terminal_result", result });
     expect(opened.sqlite.prepare("select count(*) as count from usage_samples").get()).toEqual({
       count: 1,
+    });
+    expect(opened.sqlite.prepare("select id, revision, status from plans").get()).toEqual({
+      id: "plan-1",
+      revision: 1,
+      status: "draft",
     });
     expect(opened.sqlite.prepare("select last_event from live_sessions").get()).toEqual({
       last_event: "turn_completed",
@@ -233,6 +268,40 @@ describe("agent event consumption", () => {
       providerReason: "terminal result violated the negotiated role schema",
     });
     expect(cancel).toHaveBeenCalledWith("result_invalid");
+  });
+
+  it("rejects an invalid submitted plan without latching persistence safety", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const safety = new PersistenceSafetyController(vi.fn(async () => undefined));
+    await expect(
+      consumeAgentSession({
+        attemptTokenCap: 1_000,
+        bound: bound(
+          [
+            {
+              attempt_id: "attempt-1",
+              event: "plan_reported",
+              plan: { revision: 1 },
+              session_id: "thread-1-turn-1",
+              timestamp: "2026-07-13T10:00:03Z",
+            },
+          ],
+          cancel,
+        ),
+        database: opened.database,
+        manifest,
+        newId: () => "usage-1",
+        safety,
+        serviceRunId: "run-1",
+        usdCap: 5,
+      }),
+    ).resolves.toEqual({
+      errorCode: "result_invalid",
+      kind: "failure",
+      providerReason: "submitted plan violated the negotiated schema",
+    });
+    expect(cancel).toHaveBeenCalledWith("result_invalid");
+    expect(safety.canDispatch()).toBe(true);
   });
 
   it("derives priced cached-input cost and enforces the USD cap", async () => {

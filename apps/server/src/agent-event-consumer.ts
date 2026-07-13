@@ -1,11 +1,13 @@
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AgentAdapterManifest, AgentErrorCode, AgentEvent } from "@symphony/contracts";
+import { validateAgentToolArguments } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   type OpenedDatabase,
   recordAttemptUsageSample,
   recordLiveSessionEvent,
+  recordSubmittedPlan,
 } from "@symphony/persistence";
 
 import type { BoundAgentSession } from "./agent-session-binding.js";
@@ -84,6 +86,17 @@ export async function consumeAgentSession(input: {
         turnId: input.bound.started.turn_id,
       }),
     );
+    if (isPlanReported(event)) {
+      const schema = input.bound.preflight.submitPlanSchema;
+      if (schema === null || !validateAgentToolArguments(schema, event.plan)) {
+        await input.bound.session.cancel("result_invalid");
+        await input.bound.session.waitForExit();
+        return failure("result_invalid", "submitted plan violated the negotiated schema");
+      }
+      const invalid = await storePlan(input, event.plan);
+      if (invalid) return invalid;
+      continue;
+    }
     if (isTerminalResult(event)) {
       if (!terminalResultIsValid(input.bound.preflight.terminalResultSchema, event.result)) {
         await input.bound.session.cancel("result_invalid");
@@ -121,6 +134,42 @@ export async function consumeAgentSession(input: {
   }
   await input.bound.session.waitForExit();
   return failure("process_exit", "agent event stream ended before turn completion");
+}
+
+function isPlanReported(
+  event: AgentEvent,
+): event is AgentEvent & { event: "plan_reported"; plan: unknown } {
+  return event.event === "plan_reported" && "plan" in event;
+}
+
+async function storePlan(
+  input: Parameters<typeof consumeAgentSession>[0],
+  plan: unknown,
+): Promise<AgentConsumptionResult | null> {
+  try {
+    await recordSubmittedPlan(input.database, {
+      attemptId: input.bound.started.attempt_id,
+      plan,
+    });
+    return null;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("plan.")) {
+      await input.bound.session.cancel("result_invalid");
+      await input.bound.session.waitForExit();
+      return failure("result_invalid", error.message);
+    }
+    const persistenceError = error instanceof Error ? error : new Error(String(error));
+    try {
+      await input.safety.recordFailure(persistenceError);
+    } finally {
+      try {
+        await input.bound.session.cancel("persistence_failure");
+      } catch {
+        // The safety controller's process-group stop remains authoritative.
+      }
+    }
+    throw persistenceError;
+  }
 }
 
 function terminalResultIsValid(

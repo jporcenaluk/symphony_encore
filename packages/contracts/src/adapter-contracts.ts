@@ -188,6 +188,14 @@ export const AgentEventSchema = Type.Union([
   Type.Object(
     {
       ...CommonEventProperties,
+      event: Type.Literal("plan_reported"),
+      plan: Type.Unknown(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...CommonEventProperties,
       event: Type.Literal("notification"),
       message: NonEmptyString,
     },

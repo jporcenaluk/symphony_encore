@@ -431,8 +431,8 @@ function handleServerRequest(
     } else {
       emitEvent({
         ...commonEvent(context),
-        event: "notification",
-        message: "Implementation plan submitted.",
+        event: "plan_reported",
+        plan: params.arguments,
       });
     }
     respond(id, {

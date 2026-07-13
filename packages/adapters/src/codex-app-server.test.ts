@@ -221,6 +221,20 @@ describe("Codex app-server adapter", () => {
           },
         });
         control.send({
+          id: "plan-1",
+          method: "item/tool/call",
+          params: {
+            arguments: { markdown: "Plan the change." },
+            callId: "plan-call-1",
+            namespace: null,
+            threadId: "thread-1",
+            tool: "submit_plan",
+            turnId: "turn-1",
+          },
+        });
+      } else if (message.id === "plan-1") {
+        expect(message.result).toMatchObject({ success: true });
+        control.send({
           id: "tool-1",
           method: "item/tool/call",
           params: {
@@ -254,6 +268,7 @@ describe("Codex app-server adapter", () => {
       "action_started",
       "action_completed",
       "token_usage",
+      "plan_reported",
       "terminal_result_reported",
       "turn_completed",
     ]);
@@ -271,7 +286,8 @@ describe("Codex app-server adapter", () => {
       output_tokens: 4,
       total_tokens: 12,
     });
-    expect(events[4]).toMatchObject({ result: { outcome: "success" } });
+    expect(events[4]).toMatchObject({ plan: { markdown: "Plan the change." } });
+    expect(events[5]).toMatchObject({ result: { outcome: "success" } });
     await expect(session.waitForExit()).resolves.toEqual({ code: 0, signal: null });
   });
 

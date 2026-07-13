@@ -569,6 +569,10 @@ export const PlanSchema = Type.Object(
 );
 export type Plan = Static<typeof PlanSchema>;
 
+export function isPlan(value: unknown): value is Plan {
+  return Value.Check(PlanSchema, value);
+}
+
 export const ServiceRunSchema = Type.Object(
   {
     end_reason: NullableString,

@@ -2088,6 +2088,43 @@
             "session_id",
             "timestamp",
             "event",
+            "plan"
+          ],
+          "properties": {
+            "attempt_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "timestamp": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "event": {
+              "const": "plan_reported",
+              "type": "string"
+            },
+            "plan": {}
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "attempt_id",
+            "session_id",
+            "timestamp",
+            "event",
             "message"
           ],
           "properties": {
