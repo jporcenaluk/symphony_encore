@@ -59,7 +59,7 @@ and one smoke test per workspace package.
 - [x] Create every required workspace package and both apps with inward-only dependencies.
 - [x] Implement every stable Make target from `CICD.md` Section 12; targets that depend on later
   milestones must fail with a clear `not implemented` result until replaced by real checks.
-- [ ] Add a policy test that rejects package cycles, forbidden dependencies, floating action refs,
+- [x] Add a policy test that rejects package cycles, forbidden dependencies, floating action refs,
   conflict markers, and generated-contract drift.
 - [x] Verify with `make verify-fast`; expect all implemented baseline checks and smoke tests to pass.
 
@@ -73,7 +73,7 @@ and one smoke test per workspace package.
   attempt invariants, authorization scopes, and ReviewSet carry-forward invariants.
 - [ ] Implement pure lane, claim, attempt, classification, routing, outcome, review, merge, budget,
   retention, and failure transition functions with exhaustive discriminated-union handling.
-- [ ] Generate and commit JSON Schemas for agent tools and public contracts; fail drift checks when
+- [x] Generate and commit JSON Schemas for agent tools and public contracts; fail drift checks when
   generated output changes.
 - [ ] Verify with `pnpm --filter @symphony/domain test` and
   `pnpm --filter @symphony/contracts test`.

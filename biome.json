@@ -19,7 +19,8 @@
       "!!**/coverage",
       "!!**/dist",
       "!!**/node_modules",
-      "!!**/playwright-report"
+      "!!**/playwright-report",
+      "!!packages/contracts/generated"
     ]
   },
   "formatter": {

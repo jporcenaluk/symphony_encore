@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run",
+    "test": "vitest run --root ../.. apps/server/src",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
