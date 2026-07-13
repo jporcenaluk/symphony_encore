@@ -12510,11 +12510,11 @@
               "type": "string"
             },
             {
-              "const": "running",
+              "const": "recovering",
               "type": "string"
             },
             {
-              "const": "stopping",
+              "const": "ready",
               "type": "string"
             },
             {

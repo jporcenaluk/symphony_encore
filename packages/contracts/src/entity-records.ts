@@ -577,8 +577,8 @@ export const ServiceRunSchema = Type.Object(
     startup_config_snapshot_id: NonEmptyString,
     status: Type.Union([
       Type.Literal("starting"),
-      Type.Literal("running"),
-      Type.Literal("stopping"),
+      Type.Literal("recovering"),
+      Type.Literal("ready"),
       Type.Literal("stopped"),
       Type.Literal("interrupted"),
       Type.Literal("failed"),

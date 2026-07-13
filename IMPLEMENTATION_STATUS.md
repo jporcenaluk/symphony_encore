@@ -31,7 +31,7 @@ command. A green but narrower test does not complete a broader item.
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | Not started | API capability and durable routing tests |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Receipt-less side-effect intents reconstruct deterministically; lease/process recovery pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Receipt-less intents reconstruct and ServiceRun recovery stays fail-closed until ownership reconciliation; attempt/process closure pending |
 | S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope and bootstrap-key boundary pass; auth/sandbox pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -130,3 +130,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Complete entity tables and issue restart repository |
 | 2026-07-13 | working tree | `make verify-fast` | 147 tests; lint, generated-contract drift, and typecheck passed | Authorized intents, idempotency, reconciliation, receipt-confirmed stages |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Authorized intents, idempotency, reconciliation, receipt-confirmed stages |
+| 2026-07-13 | working tree | `make verify-fast` | 150 tests; lint, generated-contract drift, and typecheck passed | ServiceRun recovery sequencing and shared status contract |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | ServiceRun recovery sequencing and shared status contract |

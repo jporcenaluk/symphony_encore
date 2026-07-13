@@ -8,5 +8,6 @@ export * from "./dispatch-store.js";
 export * from "./finish-attempt.js";
 export * from "./issue-store.js";
 export * from "./lane-mutation-receipt.js";
+export * from "./service-run-store.js";
 export * from "./side-effect-store.js";
 export * from "./stage-transition.js";

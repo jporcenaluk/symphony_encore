@@ -120,4 +120,21 @@ describe("durable record catalog", () => {
       }),
     ).toBe(true);
   });
+
+  it("uses the durable startup recovery and readiness states", () => {
+    const serviceRun = {
+      end_reason: null,
+      ended_at: null,
+      host_id: "host-1",
+      id: "run-1",
+      service_version: "0.0.0",
+      start_reason: "startup",
+      started_at: "2026-07-13T10:00:00Z",
+      startup_config_snapshot_id: "config-1",
+      status: "recovering",
+    };
+    expect(Value.Check(ServiceRunSchema, serviceRun)).toBe(true);
+    expect(Value.Check(ServiceRunSchema, { ...serviceRun, status: "ready" })).toBe(true);
+    expect(Value.Check(ServiceRunSchema, { ...serviceRun, status: "running" })).toBe(false);
+  });
 });
