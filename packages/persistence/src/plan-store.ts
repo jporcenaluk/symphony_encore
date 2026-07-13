@@ -142,6 +142,28 @@ interface ClassificationTargetRow {
   validated_at: string | null;
 }
 
+export async function loadAttemptPlanGateState(
+  database: Kysely<DatabaseSchema>,
+  attemptId: string,
+): Promise<{ changeClass: ChangeClass; validatedPlan: boolean }> {
+  const result = await sql<{ change_class: ChangeClass; validated_plan: number }>`
+    select attempt.change_class,
+      exists(
+        select 1 from plans plan
+        where plan.created_by_attempt_id = attempt.id
+          and plan.status = 'validated'
+          and plan.validated_at is not null
+      ) as validated_plan
+    from attempts attempt
+    where attempt.id = ${attemptId}
+      and attempt.role = 'implementation'
+      and attempt.status = 'running'
+  `.execute(database);
+  const row = result.rows[0];
+  if (!row) throw new Error("plan.gate_attempt_missing");
+  return { changeClass: row.change_class, validatedPlan: row.validated_plan === 1 };
+}
+
 export async function recordAuthoritativePlanClassification(
   database: Kysely<DatabaseSchema>,
   input: {

@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executePlannedInitialIssueAttempt } from "./initial-issue-attempt-executor.js";
 import { runPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
+import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
 
 let directory: string;
 let workspaceRoot: string;
@@ -148,6 +149,40 @@ function createAgent(order: string[], terminalResult?: unknown): AgentAdapter {
               timestamp: "2026-07-13T10:00:03.000Z",
               turn_id: "turn-1",
             };
+            if (request.onPlanSubmitted) {
+              const submittedPlan = {
+                acceptance_criteria: [
+                  {
+                    criterion_id: "criterion-1",
+                    criterion_text: issue.acceptance_criteria[0],
+                    planned_evidence: "The lifecycle integration test",
+                  },
+                ],
+                approach: "Exercise the composed implementation lifecycle.",
+                approved_by_attempt_id: null,
+                created_at: "2026-07-13T10:00:03.500Z",
+                created_by_attempt_id: request.attemptId,
+                estimated_changed_lines: 10,
+                estimated_files: 1,
+                id: "lifecycle-plan-1",
+                proposed_paths: ["apps/server/src/initial-issue-attempt-lifecycle.ts"],
+                revision: 1,
+                risk_facts: [],
+                status: "draft" as const,
+                validated_at: null,
+                verification_commands: ["make verify-fast"],
+                work_ref: { issue_id: issue.id },
+              };
+              const decision = await request.onPlanSubmitted(submittedPlan);
+              if (!decision.accepted) throw new Error("lifecycle Plan unexpectedly rejected");
+              yield {
+                attempt_id: request.attemptId,
+                event: "plan_reported" as const,
+                plan: submittedPlan,
+                session_id: "thread-1-turn-1",
+                timestamp: "2026-07-13T10:00:03.500Z",
+              };
+            }
             if (terminalResult !== undefined) {
               yield {
                 attempt_id: request.attemptId,
@@ -429,6 +464,22 @@ describe("planned initial issue attempt execution", () => {
       issue,
       newId: () => "lifecycle-result-1",
       now: () => "2026-07-13T10:01:00.000Z",
+      onPlanSubmitted: createInitialPlanSubmissionHandler({
+        attemptId: planned.attemptId,
+        database: opened.database,
+        issue,
+        now: () => "2026-07-13T10:00:03.500Z",
+        provisionalClassification: {
+          changeClass: "standard",
+          floor: null,
+          reasons: ["classification.unknown"],
+        },
+        riskPathPatterns: [],
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        trivialMaxChangedLines: 25,
+        trivialPathPatterns: [],
+        workspacePath: planned.record.dispatch.attempt.workspacePath,
+      }),
       planned,
       repositoryAdapter,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),

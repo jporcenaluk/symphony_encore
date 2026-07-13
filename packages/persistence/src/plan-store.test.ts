@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import {
+  loadAttemptPlanGateState,
   markPlanValidated,
   recordAuthoritativePlanClassification,
   recordSubmittedPlan,
@@ -135,6 +136,10 @@ describe("submitted plan persistence", () => {
   });
 
   it("pins the first authoritative Plan class to its running attempt", async () => {
+    await expect(loadAttemptPlanGateState(opened.database, "attempt-1")).resolves.toEqual({
+      changeClass: "standard",
+      validatedPlan: false,
+    });
     await recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan: plan(1) });
     await markPlanValidated(opened.database, {
       attemptId: "attempt-1",
@@ -156,6 +161,10 @@ describe("submitted plan persistence", () => {
     ).toEqual({
       change_class: "high_risk",
       routing_reasons_json: '["risk.configured_path:packages/persistence/**"]',
+    });
+    await expect(loadAttemptPlanGateState(opened.database, "attempt-1")).resolves.toEqual({
+      changeClass: "high_risk",
+      validatedPlan: true,
     });
     await expect(
       recordAuthoritativePlanClassification(opened.database, {

@@ -8,8 +8,11 @@ import { type AgentAdapterManifest, type AgentEvent, PlanSchema } from "@symphon
 import { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   applyMigrations,
+  markPlanValidated,
   type OpenedDatabase,
   openDatabase,
+  recordAuthoritativePlanClassification,
+  recordSubmittedPlan,
   startLiveAttemptSession,
 } from "@symphony/persistence";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -166,6 +169,12 @@ describe("agent event consumption", () => {
       verification_commands: ["pnpm test"],
       work_ref: { issue_id: "issue-1" },
     };
+    await recordSubmittedPlan(opened.database, { attemptId: "attempt-1", plan });
+    await markPlanValidated(opened.database, {
+      attemptId: "attempt-1",
+      planId: "plan-1",
+      validatedAt: "2026-07-13T10:00:02Z",
+    });
     await expect(
       consumeAgentSession({
         attemptTokenCap: 1_000,
@@ -207,11 +216,117 @@ describe("agent event consumption", () => {
     expect(opened.sqlite.prepare("select id, revision, status from plans").get()).toEqual({
       id: "plan-1",
       revision: 1,
-      status: "draft",
+      status: "validated",
     });
     expect(opened.sqlite.prepare("select last_event from live_sessions").get()).toEqual({
       last_event: "turn_completed",
     });
+  });
+
+  it("cancels an implementation action that starts before Plan validation", async () => {
+    const cancel = vi.fn(async () => undefined);
+    await expect(
+      consumeAgentSession({
+        attemptTokenCap: 1_000,
+        bound: bound(
+          [
+            {
+              action_id: "action-1",
+              attempt_id: "attempt-1",
+              cwd: "/tmp/work/issue-1",
+              event: "action_started",
+              exit_code: null,
+              kind: "file_change",
+              output_ref: null,
+              result_status: null,
+              session_id: "thread-1-turn-1",
+              summary: "Edit source",
+              timestamp: "2026-07-13T10:00:02Z",
+            },
+          ],
+          cancel,
+        ),
+        database: opened.database,
+        manifest,
+        newId: () => "usage-1",
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        serviceRunId: "run-1",
+        usdCap: 5,
+      }),
+    ).resolves.toEqual({
+      errorCode: "result_invalid",
+      kind: "failure",
+      providerReason: "implementation action started before a validated Plan",
+    });
+    expect(cancel).toHaveBeenCalledWith("result_invalid");
+  });
+
+  it("allows a newly high-risk Plan to terminate only as plan_ready", async () => {
+    const submittedPlan = {
+      acceptance_criteria: [
+        {
+          criterion_id: "criterion-1",
+          criterion_text: "It works",
+          planned_evidence: "pnpm test",
+        },
+      ],
+      approach: "Implement and verify.",
+      approved_by_attempt_id: null,
+      created_at: "2026-07-13T10:00:02Z",
+      created_by_attempt_id: "attempt-1",
+      estimated_changed_lines: 10,
+      estimated_files: 1,
+      id: "plan-1",
+      proposed_paths: ["src/feature.ts"],
+      revision: 1,
+      risk_facts: [],
+      status: "draft" as const,
+      validated_at: null,
+      verification_commands: ["pnpm test"],
+      work_ref: { issue_id: "issue-1" },
+    };
+    await recordSubmittedPlan(opened.database, {
+      attemptId: "attempt-1",
+      plan: submittedPlan,
+    });
+    await recordAuthoritativePlanClassification(opened.database, {
+      attemptId: "attempt-1",
+      changeClass: "high_risk",
+      expectedProvisionalClass: "standard",
+      planId: "plan-1",
+      reasons: ["risk.configured_path:src/**"],
+      validatedAt: "2026-07-13T10:00:02Z",
+    });
+    const cancel = vi.fn(async () => undefined);
+
+    await expect(
+      consumeAgentSession({
+        attemptTokenCap: 1_000,
+        bound: bound(
+          [
+            {
+              attempt_id: "attempt-1",
+              event: "terminal_result_reported",
+              result: { status: "completed", summary: "done" },
+              session_id: "thread-1-turn-1",
+              timestamp: "2026-07-13T10:00:03Z",
+            },
+          ],
+          cancel,
+        ),
+        database: opened.database,
+        manifest,
+        newId: () => "usage-1",
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        serviceRunId: "run-1",
+        usdCap: 5,
+      }),
+    ).resolves.toEqual({
+      errorCode: "result_invalid",
+      kind: "failure",
+      providerReason: "high-risk implementation must stop with plan_ready",
+    });
+    expect(cancel).toHaveBeenCalledWith("result_invalid");
   });
 
   it("stores the cap-reaching sample and cancels before accepting further events", async () => {

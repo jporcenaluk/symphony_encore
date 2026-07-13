@@ -4,6 +4,7 @@ import type { AgentAdapterManifest, AgentErrorCode, AgentEvent } from "@symphony
 import { validateAgentToolArguments } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
+  loadAttemptPlanGateState,
   type OpenedDatabase,
   recordAttemptUsageSample,
   recordLiveSessionEvent,
@@ -86,6 +87,17 @@ export async function consumeAgentSession(input: {
         turnId: input.bound.started.turn_id,
       }),
     );
+    if (event.event === "action_started" && input.bound.preflight.submitPlanSchema !== null) {
+      const gate = await durable(input, () =>
+        loadAttemptPlanGateState(input.database, input.bound.started.attempt_id),
+      );
+      if (!gate.validatedPlan) {
+        return rejectBound(input.bound, "implementation action started before a validated Plan");
+      }
+      if (gate.changeClass === "high_risk") {
+        return rejectBound(input.bound, "high-risk implementation continued after Plan validation");
+      }
+    }
     if (isPlanReported(event)) {
       const schema = input.bound.preflight.submitPlanSchema;
       if (schema === null || !validateAgentToolArguments(schema, event.plan)) {
@@ -103,6 +115,8 @@ export async function consumeAgentSession(input: {
         await input.bound.session.waitForExit();
         return failure("result_invalid", "terminal result violated the negotiated role schema");
       }
+      const gateFailure = await implementationTerminalGateFailure(input, event.result);
+      if (gateFailure) return rejectBound(input.bound, gateFailure);
       terminalResult = event.result;
       terminalResultReported = true;
       continue;
@@ -134,6 +148,41 @@ export async function consumeAgentSession(input: {
   }
   await input.bound.session.waitForExit();
   return failure("process_exit", "agent event stream ended before turn completion");
+}
+
+async function implementationTerminalGateFailure(
+  input: Parameters<typeof consumeAgentSession>[0],
+  result: unknown,
+): Promise<string | null> {
+  if (input.bound.preflight.submitPlanSchema === null || !isRecord(result)) return null;
+  const status = result.status;
+  if (typeof status !== "string") return null;
+  const gate = await durable(input, () =>
+    loadAttemptPlanGateState(input.database, input.bound.started.attempt_id),
+  );
+  if (gate.changeClass === "high_risk") {
+    return gate.validatedPlan && status === "plan_ready"
+      ? null
+      : "high-risk implementation must stop with plan_ready";
+  }
+  if (status === "plan_ready") return "plan_ready requires a high-risk authoritative Plan";
+  if ((status === "completed" || status === "needs_rework") && !gate.validatedPlan) {
+    return "implementation outcome requires a validated Plan";
+  }
+  return null;
+}
+
+async function rejectBound(
+  bound: BoundAgentSession,
+  providerReason: string,
+): Promise<AgentConsumptionResult> {
+  await bound.session.cancel("result_invalid");
+  await bound.session.waitForExit();
+  return failure("result_invalid", providerReason);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPlanReported(
