@@ -35,7 +35,7 @@ test-e2e:
 	corepack pnpm test:e2e
 
 image:
-	@node scripts/not-implemented.ts image
+	corepack pnpm run image
 
 verify-fast: lint typecheck test
 

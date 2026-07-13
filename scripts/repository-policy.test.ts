@@ -94,6 +94,25 @@ test("rejects forbidden domain dependencies and workspace cycles", async () => {
   assert(violations.some((item) => item.includes("workspace dependency cycle")));
 });
 
+test("rejects technologies deferred by the stack contract", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      dependencies: { xstate: "5.0.0" },
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+  });
+
+  assert(
+    (await validateRepository(root)).some((item) =>
+      item.includes("package.json uses deferred dependency xstate"),
+    ),
+  );
+});
+
 test("rejects workspace dependencies that point outward", async () => {
   const root = await fixture({
     "package.json": JSON.stringify({
@@ -177,4 +196,26 @@ test("rejects floating GitHub Action references", async () => {
       item.includes("must use a full 40-character commit SHA"),
     ),
   );
+});
+
+test("rejects mutable or root production container definitions", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Dockerfile: "FROM node:24-slim\nUSER root\nCMD node apps/server/dist/main.js\n",
+    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(
+    violations.some((item) => item.includes("Dockerfile base images must pin a sha256 digest")),
+  );
+  assert(
+    violations.some((item) => item.includes("Dockerfile must select a non-root numeric user")),
+  );
+  assert(violations.some((item) => item.includes("Dockerfile CMD must use exec form")));
 });

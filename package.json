@@ -12,6 +12,7 @@
     "contracts:check": "node --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts --check",
     "contracts:generate": "node --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts",
     "format": "biome check --write .",
+    "image": "docker build --tag symphony-encore:verify .",
     "lint": "biome check . && markdownlint-cli2 && node scripts/repository-policy.ts && pnpm contracts:check && pnpm openapi:check",
     "openapi:check": "node --import ./scripts/typescript-source-loader.mjs scripts/generate-openapi.ts --check",
     "openapi:generate": "node --import ./scripts/typescript-source-loader.mjs scripts/generate-openapi.ts",

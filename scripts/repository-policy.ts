@@ -31,6 +31,22 @@ export const REQUIRED_MAKE_TARGETS = [
 ] as const;
 
 const FORBIDDEN_DOMAIN_DEPENDENCIES = ["fastify", "react", "kysely", "pino", "better-sqlite3"];
+const DEFERRED_DEPENDENCIES = new Set([
+  "@tanstack/start",
+  "@temporalio/client",
+  "@temporalio/worker",
+  "@trpc/server",
+  "bullmq",
+  "electron",
+  "graphql",
+  "ioredis",
+  "next",
+  "pg",
+  "redis",
+  "trpc",
+  "ws",
+  "xstate",
+]);
 
 const ALLOWED_WORKSPACE_DEPENDENCIES: Readonly<Record<string, readonly string[]>> = {
   "@symphony/adapters": ["@symphony/contracts", "@symphony/domain"],
@@ -173,6 +189,7 @@ export async function validateRepository(root: string): Promise<string[]> {
   const rootManifest = await manifestAt(path.join(root, "package.json"));
   const nodeVersion = (await optionalRead(path.join(root, ".node-version")))?.trim();
   const makefile = await optionalRead(path.join(root, "Makefile"));
+  const dockerfile = await optionalRead(path.join(root, "Dockerfile"));
   const workspace = await optionalRead(path.join(root, "pnpm-workspace.yaml"));
 
   if (nodeVersion !== "24.17.0") {
@@ -183,6 +200,26 @@ export async function validateRepository(root: string): Promise<string[]> {
   }
   if (rootManifest?.packageManager !== "pnpm@11.12.0") {
     violations.push("package.json packageManager must pin pnpm 11.12.0");
+  }
+
+  if (dockerfile !== undefined) {
+    const images = [...dockerfile.matchAll(/^FROM\s+([^\s]+)(?:\s+AS\s+[^\s]+)?$/gimu)].map(
+      (match) => match[1] ?? "",
+    );
+    if (
+      images.length === 0 ||
+      images.some(
+        (image) => image.toLowerCase() !== "scratch" && !/@sha256:[a-f0-9]{64}$/u.test(image),
+      )
+    ) {
+      violations.push("Dockerfile base images must pin a sha256 digest");
+    }
+    if (!/^USER\s+[1-9][0-9]*$/mu.test(dockerfile)) {
+      violations.push("Dockerfile must select a non-root numeric user");
+    }
+    if (!/^CMD\s+\[/mu.test(dockerfile)) {
+      violations.push("Dockerfile CMD must use exec form");
+    }
   }
 
   for (const target of REQUIRED_MAKE_TARGETS) {
@@ -200,6 +237,18 @@ export async function validateRepository(root: string): Promise<string[]> {
   for (const packagePath of REQUIRED_WORKSPACES) {
     const manifest = await manifestAt(path.join(root, packagePath, "package.json"));
     if (manifest?.name) manifests.set(manifest.name, manifest);
+  }
+
+  for (const [label, manifest] of [
+    ["package.json", rootManifest],
+    ...[...manifests].map(([name, value]) => [name, value] as const),
+  ] as const) {
+    const dependencies = { ...manifest?.dependencies, ...manifest?.devDependencies };
+    for (const dependency of Object.keys(dependencies)) {
+      if (DEFERRED_DEPENDENCIES.has(dependency)) {
+        violations.push(`${label} uses deferred dependency ${dependency}`);
+      }
+    }
   }
 
   const graph = new Map<string, string[]>();

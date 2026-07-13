@@ -52,26 +52,26 @@ command. A green but narrower test does not complete a broader item.
 | T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, generated-contract drift checks, real subprocess boundaries, and production-build Playwright flow pass; full boundary matrix pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, confirmed tree exit, SIGINT/SIGTERM idempotence, and real SIGTERM production smoke pass locally; macOS, CI matrix, and documented WSL smoke pending |
-| T10 | Node distribution and non-root multi-stage container | In progress | Built Node entrypoint, safe runtime options, one-port API/UI, health/readiness, durable lifecycle, and production import smoke pass; container pending |
-| T11 | Exact dependency/toolchain pinning and update policy | In progress | Lockfile, toolchain file, Dependabot |
-| T12 | Deferred technologies remain absent | Not started | Dependency and architecture policy check |
+| T10 | Node distribution and non-root multi-stage container | In progress | Built Node entrypoint, safe runtime options, one-port API/UI, health/readiness, durable lifecycle, production-only deploy layout, digest-pinned multi-stage image definition, numeric non-root user, volumes, Tini, and healthcheck pass static checks; Docker build/run pending because Docker is unavailable locally |
+| T11 | Exact dependency/toolchain pinning and update policy | In progress | Exact manifests/lockfile/toolchain, digest- and commit-pinned delivery inputs, and separate pnpm/Actions/Docker Dependabot schedules pass; built-image dependency inventory proof pending |
+| T12 | Deferred technologies remain absent | Implemented | Repository policy rejects deferred application, server, queue, database, workflow, and transport dependencies |
 
 ## CI/CD coverage
 
 | ID | Requirement area | Status | Required proof |
 |---|---|---|---|
 | D01 | Protected `main`, squash policy, stable required checks | Not started | Repository ruleset inspection |
-| D02 | PR, merge-group, and `main` canonical verification | Not started | Pinned `ci.yml` and successful runs |
-| D03 | Least-privilege workflow permissions and untrusted-code isolation | Not started | actionlint, zizmor, workflow audit |
-| D04 | Policy, docs, lockfile, graph, and title gates | Not started | Stable `ci / required` aggregation |
-| D05 | Dependency, action, image, and secret review | Not started | Dependency review, pin checks, Gitleaks, Trivy |
-| D06 | Static, unit, contract, integration, build, E2E, and image jobs | In progress | Local static/unit/contract/build, emitted-runtime integration, and production-build Playwright targets pass; image job and canonical workflow graph pending |
+| D02 | PR, merge-group, and `main` canonical verification | In progress | Commit-pinned `ci.yml` covers all three events; first successful remote runs pending |
+| D03 | Least-privilege workflow permissions and untrusted-code isolation | Implemented | Read-only untrusted jobs, credential-free checkout, no trusted cache/publication path, pinned actionlint, and pinned pedantic offline zizmor with zero findings |
+| D04 | Policy, docs, lockfile, graph, and title gates | In progress | Stable `ci / required`, repository policy, generated drift, Markdown, lockfile, graph, and Conventional Commit PR-title gates exist; remote required-check proof pending |
+| D05 | Dependency, action, image, and secret review | In progress | Immutable action/base pins plus dependency review, Gitleaks, and Trivy jobs exist; first successful remote evidence pending |
+| D06 | Static, unit, contract, integration, build, E2E, and image jobs | In progress | Local static/unit/contract/build, emitted-runtime integration, and production-build Playwright targets pass; Linux/macOS and image jobs are authored; remote workflow proof pending |
 | D07 | Verified immutable artifacts, SBOM, provenance, and checksums | Not started | Successful trusted-main publication |
 | D08 | Tag promotion without rebuilding | Not started | Release workflow and artifact lookup test |
-| D09 | Dependabot for pnpm, Actions, and Docker | Not started | Valid updater configuration |
+| D09 | Dependabot for pnpm, Actions, and Docker | Implemented | Valid weekly npm, GitHub Actions, and Docker updater configuration with major toolchain updates kept visible |
 | D10 | Fast staged-file hooks and optional pre-push verification | Not started | Hook fixture tests |
-| D11 | Cache, artifact, retention, flake, and rollback policy | Not started | Workflow settings and operator documentation |
-| D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; remaining dev/image/conformance targets pending |
+| D11 | Cache, artifact, retention, flake, and rollback policy | In progress | No cross-trust dependency cache and 14-day failed Playwright artifact retention exist; publication, rollback, and operator documentation pending |
+| D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; image is real but cannot run without local Docker; dev/conformance pending |
 
 ## Core conformance matrix
 
@@ -173,3 +173,7 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | One-port static hosting boundary |
 | 2026-07-13 | working tree | `make verify-fast` | 279 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Production exports, runtime options, initialized startup/readiness, same-port ownership, and idempotent shutdown |
 | 2026-07-13 | working tree | `make test-integration` | Emitted Node server passed real loopback health/readiness/UI/SIGTERM/SQLite stop checks | Normal Node production distribution |
+| 2026-07-13 | working tree | `pnpm --filter @symphony/server --prod deploy --legacy /tmp/...` | Portable production layout contains the built server and compiled workspace dependencies | Container payload boundary |
+| 2026-07-13 | working tree | `actionlint 1.7.12` | Both commit-pinned workflows passed | Workflow syntax and expression validation |
+| 2026-07-13 | working tree | `zizmor 1.26.1 --persona pedantic --offline` | No findings | Workflow security audit |
+| 2026-07-13 | working tree | `make verify-fast` | 281 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Container policy, deferred-dependency enforcement, and delivery configuration |
