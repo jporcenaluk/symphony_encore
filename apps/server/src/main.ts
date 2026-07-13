@@ -51,11 +51,12 @@ export async function runProductionMain() {
       ...(bootstrap ? { bootstrap } : {}),
       logger,
       options,
-      schedulerFactory: ({ database, serviceRunId, snapshot }) =>
+      schedulerFactory: ({ database, prompt, serviceRunId, snapshot }) =>
         createProductionScheduler({
           database,
           environment: process.env,
           logger,
+          prompt,
           serviceRunId,
           snapshot,
         }),

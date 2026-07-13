@@ -1,20 +1,39 @@
 import { randomUUID } from "node:crypto";
 import {
+  type AgentAdapter,
+  createCodexAppServerAdapter,
   createGhCliApiClient,
   createGitHubProjectsTransport,
   createGitHubTrackerAdapter,
+  createGitHubWorkspaceRepositoryAdapter,
   createNodeGhCommandRunner,
+  createNodeWorkspaceCommandRunner,
+  discoverCodexAppServerManifest,
   type TrackerAdapter,
   terminateLinuxProcessGroup,
+  type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
-import { PersistenceSafetyController, SchedulerService } from "@symphony/orchestration";
+import { ImplementationOutcomeSchema, type Issue, PlanSchema } from "@symphony/contracts";
+import type { ComputeProfile } from "@symphony/domain";
+import {
+  evaluateIssueEligibility,
+  PersistenceSafetyController,
+  parseComputeRoutingPolicy,
+  SchedulerService,
+  sortIssueCandidates,
+} from "@symphony/orchestration";
 import {
   type ConfigurationSnapshot,
+  countRunningClaims,
+  isWorkClaimed,
+  loadIssue,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
 
 import { syncTrackerCandidates } from "./candidate-sync.js";
+import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
+import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -26,9 +45,12 @@ interface SchedulerLogger {
 }
 
 export function createProductionScheduler(input: {
+  agent?: AgentAdapter;
   database: OpenedDatabase["database"];
   environment: Readonly<Record<string, string | undefined>>;
   logger?: SchedulerLogger;
+  prompt: string;
+  repositoryAdapter?: WorkspaceRepositoryAdapter;
   serviceRunId: string;
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
@@ -56,6 +78,7 @@ export function createProductionScheduler(input: {
       { acceptanceCriteriaHeading: stringValue(values, "tracker.acceptance_criteria_heading") },
     );
   const running = new Map<string, RunningIssueRecord>();
+  const completions = new Set<Promise<void>>();
   const safety = new PersistenceSafetyController(async (failure) => {
     let stopError: unknown;
     for (const record of running.values()) {
@@ -103,7 +126,10 @@ export function createProductionScheduler(input: {
     tracker,
     workspaceRoot: stringValue(values, "workspace.root"),
   });
-  return new SchedulerService({
+  const agent = input.agent ?? createLazyProductionAgent(values, input.environment);
+  const repositoryAdapter =
+    input.repositoryAdapter ?? createLazyGitHubWorkspaceAdapter(values, input.environment);
+  const service = new SchedulerService({
     intervalMs: numberValue(values, "polling.interval_ms"),
     onError(error) {
       input.logger?.error(
@@ -114,8 +140,9 @@ export function createProductionScheduler(input: {
     async tick() {
       await reconcile();
       if (!safety.canDispatch()) return;
+      let candidates: Issue[];
       try {
-        await syncTrackerCandidates({
+        candidates = await syncTrackerCandidates({
           observeIssue: (issue, providerRevision) =>
             observeIssue(input.database, {
               issue,
@@ -132,9 +159,111 @@ export function createProductionScheduler(input: {
           { error, service_run_id: input.serviceRunId },
           "candidate fetch skipped scheduler tick",
         );
+        return;
+      }
+      if (candidates.length === 0 || !safety.canDispatch()) return;
+      let availableSlots = Math.max(
+        0,
+        numberValue(values, "agent.max_concurrent") - (await countRunningClaims(input.database)),
+      );
+      for (const candidate of sortIssueCandidates(candidates)) {
+        if (availableSlots < 1 || !safety.canDispatch()) break;
+        const claimed = await isWorkClaimed(input.database, { id: candidate.id, kind: "issue" });
+        const eligibility = evaluateIssueEligibility({
+          availableSlots,
+          configuredAssignee: nullableString(values, "tracker.assignee"),
+          issue: candidate,
+          preflightPassed: true,
+          requiredLabels: stringList(values, "tracker.required_labels"),
+          workClaimed: claimed,
+        });
+        if (!eligibility.eligible) continue;
+        const stored = await loadIssue(input.database, candidate.id);
+        if (!stored) throw new Error(`scheduler.candidate_not_observed:${candidate.id}`);
+        try {
+          const planned = await planInitialIssueAttempt({
+            adapter: agent,
+            configSnapshotId: input.snapshot.id,
+            configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+            database: input.database,
+            issue: stored.issue,
+            newId: randomUUID,
+            now: () => new Date().toISOString(),
+            providerRevision: stored.providerRevision,
+            routingFacts: issueRoutingFacts(stored.issue),
+            serviceRunId: input.serviceRunId,
+            submitPlanSchema: PlanSchema,
+            terminalResultSchema: ImplementationOutcomeSchema,
+          });
+          const started = await startPlannedInitialIssueAttemptLifecycle({
+            adapter: agent,
+            agentCommand: stringValue(values, "agent.command"),
+            afterCreateCommand: nullableString(values, "hooks.after_create"),
+            allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+            attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+            beforeRunCommand: nullableString(values, "hooks.before_run"),
+            database: input.database,
+            hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+            issue: stored.issue,
+            newId: randomUUID,
+            now: () => new Date().toISOString(),
+            planned,
+            repositoryAdapter,
+            safety,
+            serviceRunId: input.serviceRunId,
+            sourceEnvironment: input.environment,
+            tracker,
+            usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+            workspaceRoot: stringValue(values, "workspace.root"),
+          });
+          availableSlots -= 1;
+          running.set(planned.attemptId, {
+            attemptId: planned.attemptId,
+            attemptLane: "In Progress",
+            expectedExpiresAt: planned.record.dispatch.claim.expiresAt,
+            holder: input.serviceRunId,
+            issueId: stored.issue.id,
+            lastEventAt: started.bound.started.timestamp,
+            processGroupId: started.bound.session.processGroupId,
+            processId: started.bound.session.processId,
+            workspacePath: planned.record.dispatch.attempt.workspacePath,
+          });
+          trackCompletion(
+            completions,
+            started.completion,
+            () => running.delete(planned.attemptId),
+            (error) =>
+              input.logger?.error(
+                { attempt_id: planned.attemptId, error },
+                "issue attempt lifecycle failed",
+              ),
+          );
+        } catch (error) {
+          input.logger?.warn(
+            { error, issue_id: candidate.id },
+            "candidate dispatch skipped scheduler tick",
+          );
+          if (!safety.canDispatch()) throw error;
+        }
       }
     },
   });
+  return {
+    close: async () => {
+      await service.close();
+      for (const record of running.values()) {
+        await terminateLinuxProcessGroup({
+          killWaitMs: 5_000,
+          processGroupId: record.processGroupId,
+          processId: record.processId,
+          terminateWaitMs: 1_000,
+        }).catch(() => undefined);
+      }
+      await Promise.allSettled([...completions]);
+    },
+    start: () => service.start(),
+    trigger: () => service.trigger(),
+  };
 }
 
 function stringValue(values: Readonly<Record<string, unknown>>, key: string): string {
@@ -163,4 +292,178 @@ function stringList(values: Readonly<Record<string, unknown>>, key: string): str
     throw new Error(`scheduler.config:${key}`);
   }
   return value as string[];
+}
+
+function initialAttemptConfiguration(
+  values: Readonly<Record<string, unknown>>,
+  prompt: string,
+  environment: Readonly<Record<string, string | undefined>>,
+) {
+  const routing = parseComputeRoutingPolicy({
+    riskFloorRules: values["compute.risk_floor_rules"],
+    routeProfiles: values["compute.route_profiles"],
+  });
+  const estimates = profileMap(values, "budget.estimate_tokens_by_profile");
+  const home = environment.HOME;
+  return {
+    budgetLimits: {
+      attemptTokens: numberValue(values, "budget.per_attempt_tokens"),
+      attemptUsd: positiveNumberValue(values, "budget.per_attempt_usd"),
+      fleetTokens: numberValue(values, "budget.rolling_24h_tokens"),
+      fleetUsd: positiveNumberValue(values, "budget.rolling_24h_usd"),
+      issueTokens: numberValue(values, "budget.per_issue_tokens"),
+      issueUsd: positiveNumberValue(values, "budget.per_issue_usd"),
+    },
+    enabledProfiles: computeProfiles(values, "compute.enabled_profiles"),
+    estimateTokensByProfile: estimates,
+    historyMinSamples: numberValue(values, "budget.history_min_samples"),
+    historyWindowSamples: numberValue(values, "budget.history_window_samples"),
+    leaseTtlMs: numberValue(values, "persistence.lease_ttl_ms"),
+    prompt,
+    requiredSkills: stringList(values, "agent.required_skills"),
+    riskFloorRules: routing.riskFloorRules,
+    routeProfiles: routing.routeProfiles,
+    rules: rulesBlock(prompt),
+    skillRoots: [
+      pathFromRoot(process.cwd(), ".agents/skills"),
+      pathFromRoot(process.cwd(), ".codex/skills"),
+      ...(home ? [pathFromRoot(home, ".agents/skills"), pathFromRoot(home, ".codex/skills")] : []),
+    ],
+    workspaceRoot: stringValue(values, "workspace.root"),
+  };
+}
+
+function computeProfiles(values: Readonly<Record<string, unknown>>, key: string): ComputeProfile[] {
+  const profiles = stringList(values, key);
+  if (
+    profiles.some(
+      (profile) => profile !== "economy" && profile !== "standard" && profile !== "deep",
+    )
+  ) {
+    throw new Error(`scheduler.config:${key}`);
+  }
+  return profiles as ComputeProfile[];
+}
+
+function profileMap(
+  values: Readonly<Record<string, unknown>>,
+  key: string,
+): Record<ComputeProfile, number> {
+  const value = values[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`scheduler.config:${key}`);
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    deep: requiredPositiveNumber(record.deep, key),
+    economy: requiredPositiveNumber(record.economy, key),
+    standard: requiredPositiveNumber(record.standard, key),
+  };
+}
+
+function requiredPositiveNumber(value: unknown, key: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`scheduler.config:${key}`);
+  }
+  return value;
+}
+
+function positiveNumberValue(values: Readonly<Record<string, unknown>>, key: string): number {
+  return requiredPositiveNumber(values[key], key);
+}
+
+function issueRoutingFacts(issue: Issue): ReadonlySet<string> {
+  const facts = new Set(issue.labels.map((label) => `label:${label}`));
+  facts.add(
+    issue.acceptance_criteria.length > 0
+      ? "acceptance_criteria:present"
+      : "acceptance_criteria:missing",
+  );
+  for (const blocker of issue.blocked_by) {
+    facts.add(`dependency:${blocker.id}:${blocker.state}`);
+  }
+  const labels = new Set(issue.labels);
+  if (labels.has("security") || labels.has("auth")) facts.add("risk.security_auth");
+  if (labels.has("migration") || labels.has("data")) facts.add("risk.migration_data");
+  if (labels.has("concurrency")) facts.add("risk.concurrency");
+  if (labels.has("public-api")) facts.add("risk.public_api");
+  if (labels.has("architecture")) facts.add("risk.cross_package_architecture");
+  if (issue.acceptance_criteria.length === 0) facts.add("risk.ambiguous_criteria");
+  return facts;
+}
+
+function rulesBlock(prompt: string): string {
+  const match = /<!-- rules:start -->([\s\S]*?)<!-- rules:end -->/u.exec(prompt);
+  return match?.[1]?.trim() ?? "";
+}
+
+function pathFromRoot(root: string, suffix: string): string {
+  return `${root.replace(/\/+$/u, "")}/${suffix}`;
+}
+
+function createLazyProductionAgent(
+  values: Readonly<Record<string, unknown>>,
+  environment: Readonly<Record<string, string | undefined>>,
+): AgentAdapter {
+  let resolved: Promise<AgentAdapter> | undefined;
+  const load = () => {
+    resolved ??= discoverCodexAppServerManifest({
+      command: stringValue(values, "agent.command"),
+      environment,
+      readTimeoutMs: numberValue(values, "agent.read_timeout_ms"),
+    }).then((manifest) =>
+      createCodexAppServerAdapter({
+        manifest,
+        readTimeoutMs: numberValue(values, "agent.read_timeout_ms"),
+        stallTimeoutMs: numberValue(values, "agent.stall_timeout_ms"),
+        turnTimeoutMs: numberValue(values, "agent.turn_timeout_ms"),
+      }),
+    );
+    return resolved;
+  };
+  return {
+    launch: async (request) => (await load()).launch(request),
+    manifest: async () => (await load()).manifest(),
+    preflight: async (request) => (await load()).preflight(request),
+  };
+}
+
+function createLazyGitHubWorkspaceAdapter(
+  values: Readonly<Record<string, unknown>>,
+  environment: Readonly<Record<string, string | undefined>>,
+): WorkspaceRepositoryAdapter {
+  let resolved: WorkspaceRepositoryAdapter | undefined;
+  const load = () => {
+    resolved ??= createGitHubWorkspaceRepositoryAdapter({
+      api: createGhCliApiClient({
+        environment,
+        runner: createNodeGhCommandRunner(),
+        timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+      }),
+      commandRunner: createNodeWorkspaceCommandRunner(),
+      environment,
+      timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+    });
+    return resolved;
+  };
+  return {
+    populateIssueWorkspace: (request) => load().populateIssueWorkspace(request),
+  };
+}
+
+function trackCompletion(
+  completions: Set<Promise<void>>,
+  completion: Promise<unknown>,
+  onFinally: () => void,
+  onError: (error: unknown) => void,
+): void {
+  let tracked: Promise<void>;
+  tracked = completion
+    .then(() => undefined)
+    .catch(onError)
+    .finally(() => {
+      onFinally();
+      completions.delete(tracked);
+    });
+  completions.add(tracked);
 }

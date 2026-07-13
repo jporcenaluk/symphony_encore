@@ -55,6 +55,7 @@ describe("production service lifecycle", () => {
     const fixture = await initializedFixture();
     const listen = vi.fn(async () => "http://127.0.0.1:48080");
     const schedulerCalls: string[] = [];
+    let schedulerPrompt: string | undefined;
     let workflowMonitorInput: WorkflowFileMonitorInput | undefined;
     const service = await startProductionService({
       hostId: "host-1",
@@ -75,14 +76,17 @@ describe("production service lifecycle", () => {
         workspaceRoot: fixture.workspaceRoot,
       },
       output: () => undefined,
-      schedulerFactory: () => ({
-        async close() {
-          schedulerCalls.push("close");
-        },
-        async start() {
-          schedulerCalls.push("start");
-        },
-      }),
+      schedulerFactory: (schedulerInput) => {
+        schedulerPrompt = schedulerInput.prompt;
+        return {
+          async close() {
+            schedulerCalls.push("close");
+          },
+          async start() {
+            schedulerCalls.push("start");
+          },
+        };
+      },
       serviceRunId: () => "service-run-1",
       startupConfiguration: {
         environment: {},
@@ -127,6 +131,7 @@ describe("production service lifecycle", () => {
       status: "ready",
     });
     expect(schedulerCalls).toEqual(["start"]);
+    expect(schedulerPrompt).toBe("Complete {{ issue.title }}.");
     expect(
       (await service.server.inject({ headers: { accept: "text/html" }, url: "/operations" })).body,
     ).toContain("production UI");

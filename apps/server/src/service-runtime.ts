@@ -59,6 +59,7 @@ export interface ProductionServiceInput {
   output?: (line: string) => void;
   schedulerFactory?: (input: {
     database: OpenedDatabase["database"];
+    prompt: string;
     serviceRunId: string;
     snapshot: ConfigurationSnapshot;
   }) => { close(): Promise<void>; start(): Promise<void> };
@@ -250,11 +251,14 @@ export async function startProductionService(input: ProductionServiceInput) {
       });
       serviceRunId = nextServiceRunId;
       await startWorkflowMonitor(snapshot);
-      scheduler = input.schedulerFactory?.({
-        database: opened.database,
-        serviceRunId: nextServiceRunId,
-        snapshot,
-      });
+      scheduler = input.schedulerFactory
+        ? input.schedulerFactory({
+            database: opened.database,
+            prompt: requiredWorkflowPrompt(input.startupConfiguration),
+            serviceRunId: nextServiceRunId,
+            snapshot,
+          })
+        : undefined;
       await scheduler?.start();
     }
 
@@ -364,6 +368,16 @@ export async function startProductionService(input: ProductionServiceInput) {
     await opened.close().catch(() => undefined);
     throw error;
   }
+}
+
+function requiredWorkflowPrompt(
+  startupConfiguration: ProductionServiceInput["startupConfiguration"],
+): string {
+  const prompt = startupConfiguration?.workflow.prompt;
+  if (typeof prompt !== "string" || prompt.length === 0) {
+    throw new Error("runtime.workflow_prompt_required");
+  }
+  return prompt;
 }
 
 function bootstrapControlState(candidateHash: string) {
