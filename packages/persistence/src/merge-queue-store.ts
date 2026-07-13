@@ -538,6 +538,122 @@ export async function routePostMergeFailure(
   });
 }
 
+export async function commitPostMergeRepairCycle(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    acceptanceCriteria: readonly string[];
+    configSnapshotId: string;
+    goal: string;
+    now: string;
+    receipt: SideEffectReceipt;
+    repairJobId: string;
+    repository: string;
+    transitionId: string;
+    workRef: WorkRef;
+    workspacePath: string;
+  },
+): Promise<void> {
+  validateTimestamp(input.now);
+  if (
+    input.workRef.kind !== "issue" ||
+    !input.repairJobId ||
+    !input.transitionId ||
+    !input.repository ||
+    !input.workspacePath ||
+    !input.goal ||
+    input.acceptanceCriteria.length === 0 ||
+    input.acceptanceCriteria.some((criterion) => !criterion) ||
+    input.receipt.result_revision === null
+  ) {
+    throw new Error("merge_queue.repair_input_invalid");
+  }
+  await database.transaction().execute(async (transaction) => {
+    const currentClaim = await sql<{ holder: string }>`
+      select holder from claims
+      where work_ref_kind = 'issue' and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready' and reason = 'post_merge_verification_required'
+    `.execute(transaction);
+    const holder = currentClaim.rows[0]?.holder;
+    if (!holder) throw new Error("merge_queue.claim_not_post_merge");
+    await recordSideEffectReceiptInTransaction(transaction, input.receipt);
+    await transitionStageInTransaction(transaction, {
+      attemptId: null,
+      confirmedExternalRevision: input.receipt.result_revision,
+      enteredAt: input.now,
+      expectedFromStage: "Review",
+      id: input.transitionId,
+      reason: "merge_queue.post_merge_failed",
+      timestampSource: "receipt",
+      toStage: "In Progress",
+      workRef: input.workRef,
+    });
+    const issue = await sql`
+      update issues
+      set state = 'In Progress', provider_revision = ${input.receipt.result_revision},
+          updated_at = ${input.now}
+      where id = ${input.workRef.id} and state = 'Review'
+    `.execute(transaction);
+    if (issue.numAffectedRows !== 1n) throw new Error("merge_queue.issue_not_review");
+    const queue = await sql`
+      update repository_merge_queue_entries
+      set state = 'failed', updated_at = ${input.now}
+      where work_ref_kind = 'issue' and work_ref_id = ${input.workRef.id}
+        and state = 'post_merge'
+    `.execute(transaction);
+    if (queue.numAffectedRows !== 1n) throw new Error("merge_queue.entry_not_post_merge");
+    const originalClaim = await sql`
+      update claims
+      set mode = 'AwaitingHuman', reason = ${`repair_in_progress:${input.repairJobId}`},
+          retry_due_at = null, expires_at = null,
+          blocker_predicate = ${`system_job:${input.repairJobId}:not_terminal`},
+          updated_at = ${input.now}, question_id = null, approval_request_id = null
+      where work_ref_kind = 'issue' and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready' and reason = 'post_merge_verification_required'
+    `.execute(transaction);
+    if (originalClaim.numAffectedRows !== 1n) throw new Error("merge_queue.claim_not_post_merge");
+    await sql`
+      insert into parked_work (
+        work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+        question_id, parked_at, last_checked_at, resolved_at
+      ) values (
+        'issue', ${input.workRef.id}, 'In Progress',
+        ${`repair_in_progress:${input.repairJobId}`},
+        ${`system_job:${input.repairJobId}:not_terminal`}, null,
+        ${input.now}, ${input.now}, null
+      )
+      on conflict (work_ref_kind, work_ref_id) do update set
+        origin_stage = excluded.origin_stage, reason = excluded.reason,
+        blocker_predicate = excluded.blocker_predicate, question_id = null,
+        parked_at = excluded.parked_at, last_checked_at = excluded.last_checked_at,
+        resolved_at = null
+    `.execute(transaction);
+    await sql`
+      insert into system_jobs (
+        id, kind, parent_work_ref_kind, parent_work_ref_id, repository,
+        workspace_path, goal, acceptance_criteria_json, config_snapshot_id,
+        status, input_tokens, output_tokens, cost_usd, created_at, started_at,
+        ended_at, final_result_id
+      ) values (
+        ${input.repairJobId}, 'repair', 'issue', ${input.workRef.id},
+        ${input.repository}, ${input.workspacePath}, ${input.goal},
+        ${JSON.stringify(input.acceptanceCriteria)}, ${input.configSnapshotId},
+        'queued', 0, 0, null, ${input.now}, null, null, null
+      )
+    `.execute(transaction);
+    await sql`
+      insert into claims (
+        work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+        expires_at, origin_stage, reason, retry_due_at, blocker_predicate,
+        question_id, approval_request_id, last_comment_cursor
+      ) values (
+        'system_job', ${input.repairJobId}, ${holder}, 'Ready', ${input.now},
+        ${input.now}, null, 'queued', 'system_job_dispatch_required', null,
+        null, null, null, null
+      )
+    `.execute(transaction);
+  });
+}
+
 function validateTimestamp(value: string): void {
   if (!Number.isFinite(Date.parse(value))) throw new Error("merge_queue.time_invalid");
 }

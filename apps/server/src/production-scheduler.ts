@@ -409,6 +409,7 @@ export function createProductionScheduler(input: {
               expiresAt: new Date(
                 Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
+              issue: stored.issue,
               newId: randomUUID,
               now: () => new Date().toISOString(),
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
@@ -420,6 +421,7 @@ export function createProductionScheduler(input: {
               target,
               tracker,
               workRef: { id: issueId, kind: "issue" },
+              workspaceRoot: stringValue(values, "workspace.root"),
             });
             break;
           }

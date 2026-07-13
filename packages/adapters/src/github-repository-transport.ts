@@ -264,11 +264,52 @@ export function createGitHubRepositoryTransport(options: {
       evidence: readonly EvidenceRef[],
       idempotencyKey: string,
     ) {
-      void workRef;
-      void failedMergeSha;
-      void evidence;
-      void idempotencyKey;
-      throw new Error("github.create_repair_pull_request_not_implemented");
+      if (!("system_job_id" in workRef)) throw new Error("github.repair_work_ref_invalid");
+      if (!isSha(failedMergeSha)) throw new Error("github.merge_sha_invalid");
+      const branch = githubBranchForWorkRef(workRef);
+      const published = await fetchBranchReference(options.api, owner, name, branch);
+      const metadata = await options.api.rest<{ default_branch: string }>({
+        method: "GET",
+        path: `repos/${owner}/${name}`,
+      });
+      const baseRef = metadata.data.default_branch;
+      if (!baseRef) throw new Error("github.repository_response_invalid");
+      const existing = await findOpenPullRequest(options.api, owner, name, branch);
+      const body = repairPullRequestBody(workRef.system_job_id, failedMergeSha, evidence);
+      const title = `Symphony repair ${workRef.system_job_id}`;
+      const response = existing
+        ? await options.api.rest<PullRequestResponse>({
+            body: { base: baseRef, body, title },
+            method: "PATCH",
+            path: `repos/${owner}/${name}/pulls/${existing.number}`,
+          })
+        : await options.api.rest<PullRequestResponse>({
+            body: { base: baseRef, body, head: branch, title },
+            method: "POST",
+            path: `repos/${owner}/${name}/pulls`,
+          });
+      const pullRequest = response.data;
+      const headSha = published.data.object.sha;
+      if (
+        !Number.isSafeInteger(pullRequest.number) ||
+        pullRequest.number < 1 ||
+        !pullRequest.html_url ||
+        pullRequest.head.ref !== branch ||
+        pullRequest.head.sha !== headSha ||
+        pullRequest.base.ref !== baseRef
+      ) {
+        throw new Error("github.pull_request_response_invalid");
+      }
+      return {
+        mutation: mutation(response.requestId, existing ? "updated" : "created", headSha, {
+          failedMergeSha,
+          idempotencyKey,
+          number: pullRequest.number,
+          url: pullRequest.html_url,
+        }),
+        number: pullRequest.number,
+        url: pullRequest.html_url,
+      };
     },
 
     async ensurePullRequest(workRef, headSha, baseRef, bodyProjection, idempotencyKey) {
@@ -812,6 +853,24 @@ function pullRequestTitle(workRef: WorkRef): string {
   return "issue_id" in workRef
     ? `Symphony issue ${workRef.issue_id}`
     : `Symphony system job ${workRef.system_job_id}`;
+}
+
+function repairPullRequestBody(
+  systemJobId: string,
+  failedMergeSha: string,
+  evidence: readonly EvidenceRef[],
+): string {
+  const evidenceLines = evidence.map((reference) => `- ${JSON.stringify(reference)}`);
+  return [
+    "# Symphony post-merge repair",
+    "",
+    `System job: ${systemJobId}`,
+    `Failed merge: ${failedMergeSha}`,
+    "",
+    "## Failure evidence",
+    "",
+    ...(evidenceLines.length > 0 ? evidenceLines : ["- No evidence was recorded."]),
+  ].join("\n");
 }
 
 function parseRepository(repository: string): { name: string; owner: string } {

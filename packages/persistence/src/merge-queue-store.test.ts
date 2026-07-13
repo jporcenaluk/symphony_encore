@@ -9,6 +9,7 @@ import {
   beginMergeQueueLanding,
   beginRepositoryBranchUpdate,
   commitMergeQueueLanding,
+  commitPostMergeRepairCycle,
   commitPostMergeSuccess,
   commitRepositoryBranchUpdate,
   loadAuthorizedMergeLogins,
@@ -208,6 +209,88 @@ describe("merge queue persistence", () => {
     expect(
       opened.sqlite.prepare("select count(*) as count from repository_merge_queue_entries").get(),
     ).toEqual({ count: 0 });
+    await opened.close();
+  });
+
+  it("links a failed merge to a repair SystemJob and returns the issue to In Progress", async () => {
+    const opened = await fixture();
+    await beginMergeQueueLanding(opened.database, {
+      baseSha: "abc1234",
+      headSha: "def5678",
+      now: "2026-07-13T10:10:00Z",
+      repository: "owner/repo",
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    await createAuthorizedIntent(opened.database, authorizedIntent("merge-intent"));
+    await commitMergeQueueLanding(opened.database, {
+      mergeSha: "fedcba9",
+      now: "2026-07-13T10:11:00Z",
+      receipt: {
+        applied_at: "2026-07-13T10:11:00Z",
+        intent_id: "merge-intent",
+        provider_request_id: "REQ-MERGE",
+        response_payload_hash: "sha256:merge-response",
+        result: "merged",
+        result_revision: "fedcba9",
+      },
+      retryDueAt: "2026-07-13T10:11:30Z",
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    opened.sqlite.prepare("update claims set mode = 'Ready', retry_due_at = null").run();
+    await createAuthorizedIntent(opened.database, trackerInProgressIntent("repair-lane-intent"));
+    await commitPostMergeRepairCycle(opened.database, {
+      acceptanceCriteria: ["Restore passing post-merge checks"],
+      configSnapshotId: "config-1",
+      goal: "Repair failed merge fedcba9",
+      now: "2026-07-13T10:12:00Z",
+      receipt: {
+        applied_at: "2026-07-13T10:12:00Z",
+        intent_id: "repair-lane-intent",
+        provider_request_id: "REQ-IN-PROGRESS",
+        response_payload_hash: "sha256:repair-lane-response",
+        result: "updated",
+        result_revision: "provider-revision-2",
+      },
+      repairJobId: "repair-job-1",
+      repository: "owner/repo",
+      transitionId: "transition-repair",
+      workRef: { id: "issue-1", kind: "issue" },
+      workspacePath: "/work/_system/repair-repair-job-1",
+    });
+    expect(opened.sqlite.prepare("select state, provider_revision from issues").get()).toEqual({
+      provider_revision: "provider-revision-2",
+      state: "In Progress",
+    });
+    expect(
+      opened.sqlite
+        .prepare("select kind, parent_work_ref_kind, parent_work_ref_id, status from system_jobs")
+        .get(),
+    ).toEqual({
+      kind: "repair",
+      parent_work_ref_id: "issue-1",
+      parent_work_ref_kind: "issue",
+      status: "queued",
+    });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select work_ref_kind, work_ref_id, mode, reason from claims order by work_ref_kind",
+        )
+        .all(),
+    ).toEqual([
+      {
+        mode: "AwaitingHuman",
+        reason: "repair_in_progress:repair-job-1",
+        work_ref_id: "issue-1",
+        work_ref_kind: "issue",
+      },
+      {
+        mode: "Ready",
+        reason: "system_job_dispatch_required",
+        work_ref_id: "repair-job-1",
+        work_ref_kind: "system_job",
+      },
+    ]);
     await opened.close();
   });
 });
@@ -450,4 +533,13 @@ function updateIntent(id: string) {
       work_ref: { issue_id: "issue-1" },
     },
   };
+}
+
+function trackerInProgressIntent(id: string) {
+  const candidate = trackerIntent(id);
+  candidate.authorization.id = "repair-lane-authorization";
+  candidate.authorization.decision_rule_ids = ["merge_queue.post_merge_failed"];
+  candidate.intent.authorization_id = candidate.authorization.id;
+  candidate.intent.request_payload_hash = "sha256:repair-lane-payload";
+  return candidate;
 }

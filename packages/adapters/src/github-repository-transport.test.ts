@@ -117,6 +117,68 @@ describe("GitHub repository transport", () => {
     });
   });
 
+  it("creates a linked repair pull request from the published repair SystemJob branch", async () => {
+    const repairRef = { system_job_id: "repair-job-1" } as const;
+    const branch = githubBranchForWorkRef(repairRef);
+    const rest = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(
+          { object: { sha: "def5678", type: "commit" }, ref: `refs/heads/${branch}` },
+          "REQ-REF",
+        ),
+      )
+      .mockResolvedValueOnce(response({ default_branch: "main" }, "REQ-REPO"))
+      .mockResolvedValueOnce(response([], "REQ-LIST"))
+      .mockResolvedValueOnce(
+        response(
+          {
+            base: { ref: "main" },
+            head: { ref: branch, sha: "def5678" },
+            html_url: "https://github.com/owner/repo/pull/43",
+            number: 43,
+          },
+          "REQ-REPAIR",
+        ),
+      );
+    const transport = createGitHubRepositoryTransport({
+      api: api(rest),
+      commandRunner: { run: vi.fn() },
+      environment: {},
+      repository: "owner/repo",
+      timeoutMs: 5_000,
+    });
+
+    await expect(
+      transport.createRepairPullRequest(
+        repairRef,
+        "fedcba9",
+        [
+          {
+            conclusion: "failed",
+            kind: "check",
+            name: "deploy / staging",
+            url: "https://ci.example.test/2",
+          },
+        ],
+        "intent-repair",
+      ),
+    ).resolves.toMatchObject({
+      mutation: { result: "created", resultRevision: "def5678" },
+      number: 43,
+    });
+    expect(rest).toHaveBeenNthCalledWith(4, {
+      body: {
+        base: "main",
+        body: expect.stringContaining("Failed merge: fedcba9"),
+        head: branch,
+        title: "Symphony repair repair-job-1",
+      },
+      method: "POST",
+      path: "repos/owner/repo/pulls",
+    });
+  });
+
   it("updates an exact pull request head against the observed base revision", async () => {
     const branch = githubBranchForWorkRef(workRef);
     const graphql = vi.fn().mockResolvedValue({

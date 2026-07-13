@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import type {
   ProviderMutationAuthority,
@@ -6,6 +7,7 @@ import type {
   TrackerAdapter,
 } from "@symphony/adapters";
 import type {
+  Issue,
   MutationAuthorization,
   PullRequestSnapshot,
   SideEffectIntent,
@@ -17,6 +19,7 @@ import {
   beginMergeQueueLanding,
   beginRepositoryBranchUpdate,
   commitMergeQueueLanding,
+  commitPostMergeRepairCycle,
   commitPostMergeSuccess,
   commitRepositoryBranchUpdate,
   createAuthorizedIntent,
@@ -27,7 +30,6 @@ import {
   type PendingPostMerge,
   routeMergeQueuePrecondition,
   routeMergeQueueRetry,
-  routePostMergeFailure,
   routePostMergeRetry,
 } from "@symphony/persistence";
 
@@ -141,6 +143,7 @@ export async function executePostMergeVerification(input: {
   acceptedCheckConclusions: readonly string[];
   database: OpenedDatabase["database"];
   expiresAt: string;
+  issue: Pick<Issue, "acceptance_criteria" | "id" | "title">;
   newId(): string;
   now(): string;
   pollIntervalMs: number;
@@ -152,6 +155,7 @@ export async function executePostMergeVerification(input: {
   target: PendingPostMerge;
   tracker: TrackerAdapter;
   workRef: { id: string; kind: "issue" };
+  workspaceRoot: string;
 }): Promise<{ reason?: string; result: "completed" | "failed" | "waiting" }> {
   if (
     !Number.isSafeInteger(input.pollIntervalMs) ||
@@ -177,13 +181,7 @@ export async function executePostMergeVerification(input: {
   const observedAt = input.now();
   if (decision.decision === "wait") {
     if (Date.parse(observedAt) - Date.parse(input.target.startedAt) >= input.settleTimeoutMs) {
-      await durable(input.safety, () =>
-        routePostMergeFailure(input.database, {
-          now: observedAt,
-          reason: `post_merge.timeout:${decision.reason}`,
-          workRef: input.workRef,
-        }),
-      );
+      await createRepairCycle(input, `post_merge.timeout:${decision.reason}`, observedAt);
       return { reason: decision.reason, result: "failed" };
     }
     await durable(input.safety, () =>
@@ -196,13 +194,7 @@ export async function executePostMergeVerification(input: {
     return { reason: decision.reason, result: "waiting" };
   }
   if (decision.decision === "fail") {
-    await durable(input.safety, () =>
-      routePostMergeFailure(input.database, {
-        now: observedAt,
-        reason: decision.reason,
-        workRef: input.workRef,
-      }),
-    );
+    await createRepairCycle(input, decision.reason, observedAt);
     return { reason: decision.reason, result: "failed" };
   }
 
@@ -233,6 +225,65 @@ export async function executePostMergeVerification(input: {
     }),
   );
   return { result: "completed" };
+}
+
+async function createRepairCycle(
+  input: {
+    database: OpenedDatabase["database"];
+    expiresAt: string;
+    issue: Pick<Issue, "acceptance_criteria" | "id" | "title">;
+    newId(): string;
+    now(): string;
+    safety: PersistenceSafetyController;
+    serviceRunId: string;
+    target: PendingPostMerge;
+    tracker: TrackerAdapter;
+    workRef: { id: string; kind: "issue" };
+    workspaceRoot: string;
+  },
+  reason: string,
+  authorizedAt: string,
+): Promise<void> {
+  const mutation = composeRepairLaneMutation(input, reason, authorizedAt);
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: mutation.authority.authorization,
+      intent: mutation.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, mutation.intent.id, input.now()),
+  );
+  const lane = await input.tracker.updateIssueLane(
+    input.workRef.id,
+    "In Progress",
+    "merge_queue.post_merge_failed",
+    mutation.authority,
+  );
+  if (lane.resultRevision === null) throw new Error("merge_queue.tracker_revision_missing");
+  const repairJobId = requiredId(input.newId());
+  const appliedAt = input.now();
+  await durable(input.safety, () =>
+    commitPostMergeRepairCycle(input.database, {
+      acceptanceCriteria: [
+        `Restore passing post-merge checks for ${input.target.mergeSha}`,
+        ...input.issue.acceptance_criteria,
+      ],
+      configSnapshotId: input.target.configSnapshotId,
+      goal: `Repair ${input.issue.title}: ${reason}`,
+      now: appliedAt,
+      receipt: receipt(mutation.intent.id, lane, appliedAt),
+      repairJobId,
+      repository: input.target.repository,
+      transitionId: requiredId(input.newId()),
+      workRef: input.workRef,
+      workspacePath: path.join(
+        input.workspaceRoot,
+        "_system",
+        `repair-${repairJobId.replace(/[^A-Za-z0-9._-]+/gu, "_")}`,
+      ),
+    }),
+  );
 }
 
 export async function executeBaseUpdate(input: {
@@ -654,6 +705,87 @@ function composeBranchUpdateMutation(
       status: "pending",
       target,
       target_revision: snapshot.head_sha,
+      updated_at: authorizedAt,
+      work_ref: workRef,
+    },
+  };
+}
+
+function composeRepairLaneMutation(
+  input: {
+    expiresAt: string;
+    newId(): string;
+    serviceRunId: string;
+    target: PendingPostMerge;
+    workRef: { id: string; kind: "issue" };
+  },
+  reason: string,
+  authorizedAt: string,
+): {
+  authority: ProviderMutationAuthority & { authorization: MutationAuthorization };
+  intent: SideEffectIntent;
+} {
+  if (!Number.isFinite(Date.parse(authorizedAt)) || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error("merge_queue.authorization_time_invalid");
+  }
+  const authorizationId = requiredId(input.newId());
+  const intentId = requiredId(input.newId());
+  const workRef = { issue_id: input.workRef.id } as const;
+  const authorization: MutationAuthorization = {
+    action: "tracker.update_lane",
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy",
+    attempt_role: "implementation",
+    authorized_at: authorizedAt,
+    config_snapshot_id: input.target.configSnapshotId,
+    decision_rule_ids: ["merge_queue.post_merge_failed", reason],
+    expires_at: input.expiresAt,
+    id: authorizationId,
+    idempotency_key: intentId,
+    intent_id: intentId,
+    observed_state_ref: `tracker:${input.workRef.id}:${input.target.providerRevision}`,
+    operator_capability: null,
+    scope: "work",
+    service_run_id: input.serviceRunId,
+    target: input.workRef.id,
+    target_revision: input.target.providerRevision,
+    work_ref: workRef,
+  };
+  return {
+    authority: {
+      authorization,
+      expectation: {
+        action: authorization.action,
+        actorId: authorization.actor_id,
+        actorKind: authorization.actor_kind,
+        attemptRole: authorization.attempt_role,
+        configSnapshotId: authorization.config_snapshot_id,
+        idempotencyKey: authorization.idempotency_key,
+        intentId: authorization.intent_id,
+        observedStateRef: authorization.observed_state_ref,
+        operatorCapability: authorization.operator_capability,
+        scope: authorization.scope,
+        serviceRunId: authorization.service_run_id,
+        target: authorization.target,
+        targetRevision: authorization.target_revision,
+        workRef: `issue:${input.workRef.id}`,
+      },
+    },
+    intent: {
+      action: authorization.action,
+      attempt_id: input.target.attemptId,
+      authorization_id: authorization.id,
+      created_at: authorizedAt,
+      id: intentId,
+      idempotency_key: intentId,
+      request_payload_hash: sha256(
+        JSON.stringify({ lane: "In Progress", merge_sha: input.target.mergeSha, reason }),
+      ),
+      scope: "work",
+      service_run_id: input.serviceRunId,
+      status: "pending",
+      target: input.workRef.id,
+      target_revision: input.target.providerRevision,
       updated_at: authorizedAt,
       work_ref: workRef,
     },
