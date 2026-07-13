@@ -24,14 +24,14 @@ command. A green but narrower test does not complete a broader item.
 | S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
-| S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, sandbox, process timeout, non-login hooks, independent durable verification, stable claim ownership, and startup quarantine pass; macOS/population/cleanup pending |
+| S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, full process-group termination, non-login hooks, durable verification, stable ownership, and startup quarantine pass; macOS/population/cleanup pending |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated capability-gated Control API read foundation passes; mutations and remaining resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted-attempt closure, and fail-closed process/workspace recovery gating pass; process termination adapter pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted closure, recovery gates, and verified Linux process-group termination pass; full startup integration pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -51,7 +51,7 @@ command. A green but narrower test does not complete a broader item.
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Seven checksummed migrations cover durable entities, evidence, and append-only events; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
-| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox integration passes locally; macOS, CI matrix, signal, and documented WSL smoke test pending |
+| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, and confirmed tree exit pass locally; macOS, CI matrix, and documented WSL smoke pending |
 | T10 | Node distribution and non-root multi-stage container | Not started | Runtime, health, filesystem, and scan jobs |
 | T11 | Exact dependency/toolchain pinning and update policy | In progress | Lockfile, toolchain file, Dependabot |
 | T12 | Deferred technologies remain absent | Not started | Dependency and architecture policy check |
@@ -152,3 +152,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Authenticated event paging, generated cursor client, structured 422 validation |
 | 2026-07-13 | working tree | `make verify-fast` | 214 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Abortable live event following, safe SSE framing, resume cursor, generated EventSource request |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Abortable live event following, safe SSE framing, resume cursor, generated EventSource request |
+| 2026-07-13 | working tree | `make verify-fast` | 217 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Linux ownership inspection, TERM/KILL group escalation, and confirmed tree exit |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Linux ownership inspection, TERM/KILL group escalation, and confirmed tree exit |
