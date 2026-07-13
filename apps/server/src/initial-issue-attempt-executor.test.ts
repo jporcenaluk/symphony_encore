@@ -131,7 +131,11 @@ afterEach(async () => {
   await rm(directory, { force: true, recursive: true });
 });
 
-function createAgent(order: string[], terminalResult?: unknown): AgentAdapter {
+function createAgent(
+  order: string[],
+  terminalResult?: unknown,
+  streamFailure?: Error,
+): AgentAdapter {
   return {
     launch: vi.fn(async (request: AgentLaunchRequest) => {
       order.push("launch");
@@ -183,6 +187,7 @@ function createAgent(order: string[], terminalResult?: unknown): AgentAdapter {
                 timestamp: "2026-07-13T10:00:03.500Z",
               };
             }
+            if (streamFailure) throw streamFailure;
             if (terminalResult !== undefined) {
               yield {
                 attempt_id: request.attemptId,
@@ -498,6 +503,91 @@ describe("planned initial issue attempt execution", () => {
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
       reason: "implementation_rework",
+    });
+    expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
+      status: "settled",
+    });
+  });
+
+  it("closes and settles a bound attempt when the adapter stream throws", async () => {
+    const order: string[] = [];
+    const agent = createAgent(order, undefined, new Error("adapter stream disconnected"));
+    let sequence = 0;
+    const planned = await planInitialIssueAttempt({
+      adapter: agent,
+      configSnapshotId: "config-1",
+      configuration: planningConfiguration(),
+      database: opened.database,
+      issue,
+      newId: () => `stream-${++sequence}`,
+      now: () => "2026-07-13T10:00:00.000Z",
+      providerRevision: "revision-7",
+      routingFacts: new Set(),
+      serviceRunId: "run-1",
+      submitPlanSchema: PlanSchema,
+      terminalResultSchema: ImplementationOutcomeSchema,
+    });
+    const tracker = {
+      updateIssueLane: vi.fn(async () => {
+        order.push("lane");
+        return {
+          providerRequestId: "request-1",
+          responsePayloadHash: "sha256:receipt",
+          result: "updated",
+          resultRevision: "revision-8",
+        };
+      }),
+    } as unknown as TrackerAdapter;
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      async populateIssueWorkspace(input) {
+        order.push("populate");
+        const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
+        await mkdir(workspacePath);
+        return {
+          baseSha: "abc1234",
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt: "2026-07-13T10:00:01.000Z",
+          localBranch: "symphony/org-8",
+          repository: input.repository,
+          workspacePath,
+        };
+      },
+    };
+
+    await expect(
+      runPlannedInitialIssueAttemptLifecycle({
+        adapter: agent,
+        agentCommand: "codex app-server",
+        afterCreateCommand: null,
+        allowlistedEnvironmentNames: [],
+        attemptTokenCap: 400_000,
+        beforeRunCommand: null,
+        database: opened.database,
+        hookTimeoutMs: 60_000,
+        issue,
+        newId: () => "stream-result-1",
+        now: () => "2026-07-13T10:01:00.000Z",
+        planned,
+        repositoryAdapter,
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        serviceRunId: "run-1",
+        sourceEnvironment: {},
+        tracker,
+        usdCap: 5,
+        workspaceRoot,
+      }),
+    ).resolves.toEqual({
+      errorCode: "process_exit",
+      kind: "failure",
+      providerReason: "adapter stream disconnected",
+    });
+    expect(opened.sqlite.prepare("select status, failure_class from attempts").get()).toEqual({
+      failure_class: "agent_process",
+      status: "closed",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "process_exit",
     });
     expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
       status: "settled",
