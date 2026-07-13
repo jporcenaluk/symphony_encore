@@ -46,6 +46,7 @@ export interface DatabaseSchema {
   side_effect_intents: Record<string, unknown>;
   side_effect_receipts: Record<string, unknown>;
   stage_transitions: Record<string, unknown>;
+  startup_failures: Record<string, unknown>;
   system_jobs: Record<string, unknown>;
   terminal_results: Record<string, unknown>;
   usage_samples: Record<string, unknown>;
@@ -813,6 +814,22 @@ const operatorIdentityMigration: RepositoryMigration = {
   version: 8,
 };
 
+const startupFailureMigration: RepositoryMigration = {
+  checksum: "sha256:6b42a49bdba3bcda6e96ab6f83b13b7d573ca5c28949e53b2d768afc36c31233",
+  name: "startup_failure_records",
+  async up(database) {
+    await sql`
+      create table startup_failures (
+        id text primary key,
+        occurred_at text not null,
+        reason_code text not null,
+        details_json text not null check (json_valid(details_json))
+      ) strict
+    `.execute(database);
+  },
+  version: 9,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -822,6 +839,7 @@ export const CORE_MIGRATIONS = [
   verificationEvidenceMigration,
   appendOnlyEventRecordsMigration,
   operatorIdentityMigration,
+  startupFailureMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

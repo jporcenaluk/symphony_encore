@@ -71,6 +71,26 @@ export async function listInterruptedAttempts(
   }));
 }
 
+export async function markLiveSessionOwnershipVerified(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    attemptId: string;
+    processGroupId: number;
+    processId: number;
+    verifiedAt: string;
+  },
+): Promise<void> {
+  const result = await sql`
+    update live_sessions set ownership_verified_at = ${input.verifiedAt}
+    where attempt_id = ${input.attemptId}
+      and process_id = ${input.processId}
+      and process_group_id = ${input.processGroupId}
+  `.execute(database);
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`recovery.process_identity_mismatch:${input.attemptId}`);
+  }
+}
+
 export async function recoverInterruptedAttempt(
   database: Kysely<DatabaseSchema>,
   input: RecoverInterruptedAttemptInput,

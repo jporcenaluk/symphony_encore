@@ -43,6 +43,7 @@ describe("production migrations", () => {
       { name: "verification_evidence_blobs", version: 6 },
       { name: "append_only_event_records", version: 7 },
       { name: "operator_identity_and_sessions", version: 8 },
+      { name: "startup_failure_records", version: 9 },
     ]);
   });
 
@@ -80,6 +81,7 @@ describe("production migrations", () => {
         "rules",
         "side_effect_intents",
         "side_effect_receipts",
+        "startup_failures",
         "system_jobs",
         "usage_samples",
         "verification_records",

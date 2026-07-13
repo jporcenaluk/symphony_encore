@@ -242,6 +242,40 @@ describe("production service lifecycle", () => {
       }),
     ).rejects.toThrow("runtime.non_loopback_ack_required");
   });
+
+  it("records operator-store corruption before failing closed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "symphony-corrupt-runtime-"));
+    const databasePath = path.join(root, "symphony.sqlite3");
+    const opened = openDatabase(databasePath);
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    await opened.close();
+
+    await expect(
+      startProductionService({
+        now: () => "2026-07-13T10:00:00Z",
+        options: {
+          allowNonLoopback: false,
+          databasePath,
+          host: "127.0.0.1",
+          port: 8080,
+          secureCookies: false,
+          sessionTtlMs: 60_000,
+          uiRoot: path.join(root, "ui"),
+          workflowPath: path.join(root, "WORKFLOW.md"),
+          workspaceRoot: path.join(root, "workspaces"),
+        },
+      }),
+    ).rejects.toThrow("runtime.operator_store_missing_nonpristine");
+
+    const reopened = openDatabase(databasePath);
+    expect(reopened.sqlite.prepare("select reason_code from startup_failures").get()).toEqual({
+      reason_code: "operator_store_missing_nonpristine",
+    });
+    await reopened.close();
+  });
 });
 
 function rootHome(root: string): string {

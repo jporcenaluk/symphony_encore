@@ -22,7 +22,7 @@ command. A green but narrower test does not complete a broader item.
 |---|---|---|---|
 | S01 | Design principles and authority boundaries | Not started | Architecture tests and package-boundary gate |
 | S02 | Components and provider-independent interfaces | In progress | Inward workspace graph plus tracker, repository-hosting, and agent adapter interfaces pass; provider implementations pending |
-| S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
+| S03 | Complete durable domain model | In progress | Strict schemas and nine checksummed SQLite migrations cover every Section 3 record plus durable startup failures; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
 | S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, full process-group termination, non-login hooks, durable verification, stable ownership, and startup quarantine pass; macOS/population/cleanup pending |
@@ -32,9 +32,9 @@ command. A green but narrower test does not complete a broader item.
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated reads plus a recovery-gated, CSRF-bound, capability/version/idempotency/audit protected configuration mutation pass; remaining mutation resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, production recovering-to-ready startup, and orderly durable stop pass; timer/cursor reconstruction pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, production recovering-to-ready startup, operator-store corruption shutdown, and orderly durable stop pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
-| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Loopback-only exact-hash bootstrap now validates and snapshots the full workflow candidate, atomically creates matching local authority, disables dispatch and mutations until completion, and joins salted credentials, hash-only sessions, same-origin CSRF, bootstrap-key rejection, credential scrubbing, and Linux/WSL Bubblewrap isolation; full corruption recovery and macOS posture pending |
+| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Loopback-only exact-hash bootstrap validates and snapshots the full workflow candidate, atomically creates matching local authority, and disables dispatch and mutations until completion; operator-empty non-pristine stores now terminate recorded processes, accept only provider-observed receipts, record a durable startup failure, and exit without replacing authority; concrete provider reconciliation wiring and macOS posture remain pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Authenticated bounded `gh api` GraphQL transport, GitHub tracker normalization, checklist extraction, complete-page enforcement, revision recheck, authorization matrix, provider-independent contracts, and normalized PR snapshot schema pass; Projects queries and repository-hosting implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
 | S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, immutable snapshots, trusted workflow-path loading, and ordinary startup snapshot integration pass; live change detection and full API/UI candidate integration pending |
@@ -83,7 +83,7 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 - [ ] `C-WF-03` Bootstrap keys are read-only and cannot be overridden.
 - [ ] `C-WF-04` Bootstrap keys are rejected in repository configuration.
 - [ ] `C-WF-05` Exact-candidate acknowledgment and reload-boundary behavior.
-- [x] `C-WF-06` Pristine bootstrap and non-pristine fail-closed recovery.
+- [ ] `C-WF-06` Pristine bootstrap and non-pristine fail-closed recovery; concrete provider receipt lookup wiring remains pending.
 - [ ] `C-WF-07` Skill and adapter preflight before charging an attempt.
 - [ ] `C-DUR-01` Atomic claim, attempt, reservation, and receipt-confirmed stage transition.
 - [ ] `C-DUR-02` Lease modes and complete restart reconstruction.
@@ -190,3 +190,4 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `actionlint 1.7.12` and `zizmor 1.26.1 --persona pedantic --offline` | Publication and release workflows passed syntax; no unsuppressed security findings | Protected-main artifact publication and digest-only tag promotion |
 | 2026-07-13 | working tree | `pnpm exec vitest run packages/adapters/src/linux-process-ownership.test.ts` (five consecutive runs) | All four process-ownership tests passed each run | `/proc` ENOENT/ESRCH process-exit race tolerance |
 | 2026-07-13 | working tree | `make verify-fast` | 307 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Publication/release policy plus process-exit race regression |
+| 2026-07-13 | working tree | `make verify-fast` | 311 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Operator-store corruption terminates owned processes, records observed receipts and durable failure, and exits fail closed |

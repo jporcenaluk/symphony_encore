@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { SideEffectIntent, SideEffectReceipt } from "@symphony/contracts";
 import {
   CONFIGURATION_CATALOG,
   CONFIGURATION_KEYS,
@@ -23,6 +24,7 @@ import {
 } from "@symphony/persistence";
 import type { FastifyBaseLogger } from "fastify";
 
+import { recoverCorruptOperatorStore } from "./corrupt-store-recovery.js";
 import { startHttpRuntime } from "./http-runtime.js";
 import { createLocalBootstrap } from "./local-bootstrap.js";
 import { createLocalSessionAuth } from "./local-session-auth.js";
@@ -42,6 +44,7 @@ export interface ProductionServiceInput {
   hostId?: string;
   listen?: (options: { host: string; port: number }) => Promise<string>;
   logger?: FastifyBaseLogger;
+  lookupReceiptByIdempotencyKey?: (intent: SideEffectIntent) => Promise<SideEffectReceipt | null>;
   now?: () => string;
   options: RuntimeOptions;
   output?: (line: string) => void;
@@ -63,6 +66,19 @@ export async function startProductionService(input: ProductionServiceInput) {
     await applyMigrations(opened.database);
     const eligibility = await inspectBootstrapEligibility(opened.database);
     if (eligibility.kind === "operator_store_missing_nonpristine") {
+      const recovery = await recoverCorruptOperatorStore({
+        database: opened.database,
+        failureId: randomUUID(),
+        ...(input.lookupReceiptByIdempotencyKey
+          ? { lookupReceiptByIdempotencyKey: input.lookupReceiptByIdempotencyKey }
+          : {}),
+        occurredAt: now(),
+        populatedTables: eligibility.populatedTables,
+      });
+      input.logger?.error(
+        { reason_code: "operator_store_missing_nonpristine", recovery },
+        "operator store corruption",
+      );
       throw new Error("runtime.operator_store_missing_nonpristine");
     }
     let initialSnapshot =
