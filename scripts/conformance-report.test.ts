@@ -43,7 +43,7 @@ describe("Core conformance report", () => {
     ).toMatchObject({
       adapters: [
         { kind: "tracker", name: "github", status: "partial", version: "0.0.0" },
-        { kind: "repository_host", name: "github", status: "interface_only", version: "0.0.0" },
+        { kind: "repository_host", name: "github", status: "partial", version: "0.0.0" },
         { kind: "agent", name: "codex_app_server", status: "contract_only", version: "0.0.0" },
         { kind: "authentication", name: "local", status: "implemented", version: "0.0.0" },
       ],

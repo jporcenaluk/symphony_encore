@@ -340,3 +340,13 @@ export const PullRequestSnapshotSchema = Type.Object(
   { additionalProperties: false },
 );
 export type PullRequestSnapshot = Static<typeof PullRequestSnapshotSchema>;
+
+export type PullRequestSnapshotValidation =
+  | { ok: true; snapshot: PullRequestSnapshot }
+  | { ok: false; reason: "repository.invalid_pull_request_snapshot" };
+
+export function validatePullRequestSnapshot(value: unknown): PullRequestSnapshotValidation {
+  return Value.Check(PullRequestSnapshotSchema, value)
+    ? { ok: true, snapshot: value }
+    : { ok: false, reason: "repository.invalid_pull_request_snapshot" };
+}

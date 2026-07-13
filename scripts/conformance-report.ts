@@ -43,7 +43,7 @@ export function buildConformanceReport(input: {
       {
         kind: "repository_host",
         name: "github",
-        status: "interface_only",
+        status: "partial",
         version: "0.0.0",
       },
       {

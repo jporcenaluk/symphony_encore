@@ -8,6 +8,7 @@ import {
   PullRequestSnapshotSchema,
   TrackerIssuePageSchema,
   validateCompletePage,
+  validatePullRequestSnapshot,
 } from "./adapter-contracts.js";
 
 describe("normalized agent adapter contracts", () => {
@@ -86,7 +87,12 @@ describe("tracker and repository-hosting contracts", () => {
       unresolved_threads: [],
     };
     expect(Value.Check(PullRequestSnapshotSchema, snapshot)).toBe(true);
+    expect(validatePullRequestSnapshot(snapshot)).toEqual({ ok: true, snapshot });
     const { unresolved_threads: _, ...partial } = snapshot;
     expect(Value.Check(PullRequestSnapshotSchema, partial)).toBe(false);
+    expect(validatePullRequestSnapshot(partial)).toEqual({
+      ok: false,
+      reason: "repository.invalid_pull_request_snapshot",
+    });
   });
 });
