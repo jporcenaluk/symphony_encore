@@ -45,8 +45,8 @@ command. A green but narrower test does not complete a broader item.
 |---|---|---|---|
 | T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck |
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
-| T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | In progress | Authenticated responsive React/Vite console, TanStack Router/Query/Table operations and settings slice, production build, and Chromium flow pass; durable history/live-log/API breadth and component-system completion pending |
-| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
+| T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | In progress | Authenticated responsive React/Vite console, TanStack Router/Query/Table operations and settings slice, production build, Chromium flow, and Fastify static delivery pass; durable history/live-log/API breadth and component-system completion pending |
+| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, EventSource requests, SPA fallback isolation, and restrictive response headers pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
@@ -169,3 +169,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make verify-fast` | 269 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Authenticated responsive console, URL routing, Control API queries, committed settings mutations, and structured error states |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Operator console vertical slice |
 | 2026-07-13 | working tree | `make test-e2e` | Chromium passed against the production Vite build | Login, operations, hostile-content escaping, committed settings mutation, and mobile navigation |
+| 2026-07-13 | working tree | `make verify-fast` | 271 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Fastify production asset caching, SPA fallback isolation, structured API 404s, and restrictive response headers |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | One-port static hosting boundary |
