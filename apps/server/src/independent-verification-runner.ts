@@ -72,7 +72,8 @@ export async function runPendingIndependentVerification(input: {
       execution,
       expectedReadyReason: "independent_verification_required",
       id,
-      nextReadyReason: execution.result === "passed" ? "review_required" : "verification_rework",
+      nextReadyReason:
+        execution.result === "passed" ? "pull_request_required" : "verification_rework",
       targetRevision,
       workRef: input.workRef,
     });

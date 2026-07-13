@@ -5,6 +5,7 @@ import { type Kysely, sql } from "kysely";
 import type { DatabaseSchema } from "./database.js";
 
 export interface WorkspaceCheckout {
+  baseRef: string;
   baseSha: string;
   checkoutMethod: "operator_managed_mirror" | "trusted_repository_adapter";
   createdAt: string;
@@ -15,6 +16,7 @@ export interface WorkspaceCheckout {
 }
 
 interface WorkspaceCheckoutRow {
+  base_ref: string | null;
   base_sha: string;
   checkout_method: WorkspaceCheckout["checkoutMethod"];
   created_at: string;
@@ -61,11 +63,11 @@ export async function recordWorkspaceCheckout(
     }
     await sql`
       insert into workspace_checkouts (
-        work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
+        work_ref_kind, work_ref_id, workspace_path, repository, base_ref, base_sha,
         checkout_method, local_branch, created_at
       ) values (
         ${checkout.workRef.kind}, ${checkout.workRef.id}, ${checkout.workspacePath},
-        ${checkout.repository}, ${checkout.baseSha}, ${checkout.checkoutMethod},
+        ${checkout.repository}, ${checkout.baseRef}, ${checkout.baseSha}, ${checkout.checkoutMethod},
         ${checkout.localBranch}, ${checkout.createdAt}
       )
     `.execute(transaction);
@@ -86,7 +88,9 @@ export async function loadWorkspaceCheckout(
 }
 
 function fromRow(row: WorkspaceCheckoutRow): WorkspaceCheckout {
+  if (!row.base_ref) throw new Error("workspace.base_ref_missing");
   return {
+    baseRef: row.base_ref,
     baseSha: row.base_sha,
     checkoutMethod: row.checkout_method,
     createdAt: row.created_at,
@@ -101,6 +105,7 @@ function validateWorkspaceCheckout(checkout: WorkspaceCheckout): void {
   if (!/^[A-Fa-f0-9]{7,64}$/u.test(checkout.baseSha)) {
     throw new Error("workspace.base_sha_invalid");
   }
+  if (!checkout.baseRef.trim()) throw new Error("workspace.base_ref_invalid");
   if (!/^[^/\s]+\/[^/\s]+$/u.test(checkout.repository)) {
     throw new Error("workspace.repository_invalid");
   }

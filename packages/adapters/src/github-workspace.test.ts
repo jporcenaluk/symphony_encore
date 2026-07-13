@@ -66,6 +66,7 @@ describe("GitHub trusted workspace population", () => {
         workspaceRoot: root,
       }),
     ).resolves.toEqual({
+      baseRef: "main",
       baseSha,
       checkoutMethod: "trusted_repository_adapter",
       createdAt: "2026-07-13T10:00:02Z",

@@ -45,6 +45,7 @@ export async function prepareIssueWorkspace(input: {
   let population: WorkspacePopulation;
   if (existing) {
     population = {
+      baseRef: existing.baseRef,
       baseSha: existing.baseSha,
       checkoutMethod: existing.checkoutMethod,
       createdAt: existing.createdAt,

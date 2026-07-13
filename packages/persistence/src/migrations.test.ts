@@ -46,6 +46,7 @@ describe("production migrations", () => {
       { name: "startup_failure_records", version: 9 },
       { name: "active_synthesis_job_guard", version: 10 },
       { name: "workspace_checkout_provenance", version: 11 },
+      { name: "workspace_checkout_base_ref", version: 12 },
     ]);
   });
 

@@ -525,10 +525,10 @@ async function fixture(): Promise<OpenedDatabase> {
     .prepare(
       `insert into workspace_checkouts (
         work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
-        checkout_method, local_branch, created_at
+        checkout_method, local_branch, created_at, base_ref
       ) values (
         'issue', 'issue-1', '/work/issue-1', 'owner/repo', 'abc1234',
-        'trusted_repository_adapter', 'symphony/issue-1', 't0'
+        'trusted_repository_adapter', 'symphony/issue-1', 't0', 'main'
       )`,
     )
     .run();

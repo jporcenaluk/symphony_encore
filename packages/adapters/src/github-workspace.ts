@@ -132,6 +132,7 @@ export function createGitHubWorkspaceRepositoryAdapter(options: {
         const createdAt = now();
         if (!Number.isFinite(Date.parse(createdAt))) throw new Error("workspace.timestamp_invalid");
         return {
+          baseRef: defaultBranch.name,
           baseSha,
           checkoutMethod: "trusted_repository_adapter",
           createdAt,

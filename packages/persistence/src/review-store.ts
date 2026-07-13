@@ -756,7 +756,7 @@ function reviewSetRoute(decision: ReviewRecord["decision"]): {
 } {
   switch (decision) {
     case "approve":
-      return { mode: "Ready", reason: "pull_request_required" };
+      return { mode: "Ready", reason: "merge_queue_required" };
     case "needs_rework":
       return { mode: "Ready", reason: "review_rework" };
     case "needs_human":

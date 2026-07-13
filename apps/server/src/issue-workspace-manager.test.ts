@@ -71,6 +71,7 @@ function repositoryAdapter(): WorkspaceRepositoryAdapter {
       const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
       await mkdir(workspacePath);
       return {
+        baseRef: "main",
         baseSha: "0123456789abcdef0123456789abcdef01234567",
         checkoutMethod: "trusted_repository_adapter" as const,
         createdAt: "2026-07-13T10:00:01Z",

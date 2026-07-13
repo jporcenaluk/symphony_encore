@@ -62,11 +62,11 @@ async function fixture(): Promise<{
     .prepare(`
       insert into workspace_checkouts (
         work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
-        checkout_method, local_branch, created_at
+        checkout_method, local_branch, created_at, base_ref
       ) values (
         'issue', 'issue-1', ?, 'owner/repo',
         '0123456789abcdef0123456789abcdef01234567',
-        'trusted_repository_adapter', 'symphony/issue-1', '2026-07-13T10:00:01Z'
+        'trusted_repository_adapter', 'symphony/issue-1', '2026-07-13T10:00:01Z', 'main'
       )
     `)
     .run(owned);

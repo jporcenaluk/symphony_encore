@@ -869,6 +869,15 @@ const workspaceCheckoutMigration: RepositoryMigration = {
   version: 11,
 };
 
+const workspaceCheckoutBaseRefMigration: RepositoryMigration = {
+  checksum: "sha256:8c8db7921dd152ce821001d78a3cbe70e759ca41c3a624866230bcdfdefa453e",
+  name: "workspace_checkout_base_ref",
+  async up(database) {
+    await sql`alter table workspace_checkouts add column base_ref text`.execute(database);
+  },
+  version: 12,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -881,6 +890,7 @@ export const CORE_MIGRATIONS = [
   startupFailureMigration,
   activeSynthesisJobMigration,
   workspaceCheckoutMigration,
+  workspaceCheckoutBaseRefMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

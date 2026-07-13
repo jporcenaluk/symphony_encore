@@ -311,6 +311,7 @@ describe("production reconciliation scheduler", () => {
         const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
         await mkdir(workspacePath);
         return {
+          baseRef: "main",
           baseSha: "abc1234",
           checkoutMethod: "trusted_repository_adapter",
           createdAt: "2026-07-13T10:00:01.000Z",
@@ -394,29 +395,13 @@ describe("production reconciliation scheduler", () => {
     await vi.waitFor(() =>
       expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
         mode: "Ready",
-        reason: "review_required",
-      }),
-    );
-    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2));
-    await scheduler.trigger();
-    await vi.waitFor(() =>
-      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-        mode: "Ready",
-        reason: "review_coordination_required",
-      }),
-    );
-    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(3));
-    await scheduler.trigger();
-    await vi.waitFor(() =>
-      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-        mode: "Ready",
         reason: "pull_request_required",
       }),
     );
     await scheduler.close();
 
     expect(logger.warn).not.toHaveBeenCalled();
-    expect(agent.launch).toHaveBeenCalledTimes(2);
+    expect(agent.launch).toHaveBeenCalledOnce();
     expect(tracker.updateIssueLane).toHaveBeenCalledWith(
       candidate.id,
       "In Progress",
@@ -425,10 +410,7 @@ describe("production reconciliation scheduler", () => {
     );
     expect(
       opened.sqlite.prepare("select role, status from attempts order by attempt_number").all(),
-    ).toEqual([
-      { role: "implementation", status: "closed" },
-      { role: "integrative_review", status: "closed" },
-    ]);
+    ).toEqual([{ role: "implementation", status: "closed" }]);
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
       reason: "pull_request_required",
@@ -439,22 +421,8 @@ describe("production reconciliation scheduler", () => {
       result: "passed",
       target_revision: "abc1234",
     });
-    expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
-      status: "settled",
-    });
-    expect(
-      opened.sqlite.prepare("select reviewer_role, target_sha, decision from review_records").get(),
-    ).toEqual({ decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" });
-    expect(
-      opened.sqlite
-        .prepare(
-          "select decision, required_reviewer_roles_json, review_record_ids_json from review_sets",
-        )
-        .get(),
-    ).toEqual({
-      decision: "approve",
-      required_reviewer_roles_json: '["integrative_review"]',
-      review_record_ids_json: expect.stringMatching(/^\[".+"\]$/u),
+    expect(opened.sqlite.prepare("select count(*) as count from review_records").get()).toEqual({
+      count: 0,
     });
     expect(opened.sqlite.prepare("select status from plans").get()).toEqual({
       status: "validated",
@@ -638,6 +606,7 @@ describe("production reconciliation scheduler", () => {
         const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
         await mkdir(workspacePath);
         return {
+          baseRef: "main",
           baseSha: "abc1234",
           checkoutMethod: "trusted_repository_adapter",
           createdAt: "2026-07-13T10:00:00Z",
@@ -797,10 +766,10 @@ describe("production reconciliation scheduler", () => {
       .prepare(
         `insert into workspace_checkouts (
           work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
-          checkout_method, local_branch, created_at
+          checkout_method, local_branch, created_at, base_ref
         ) values (
           'issue', 'issue-1', ?, 'owner/repo', 'abc1234',
-          'trusted_repository_adapter', 'symphony/org-9', 't0'
+          'trusted_repository_adapter', 'symphony/org-9', 't0', 'main'
         )`,
       )
       .run(workspacePath);
@@ -881,7 +850,7 @@ describe("production reconciliation scheduler", () => {
     await vi.waitFor(() =>
       expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
         mode: "Ready",
-        reason: "pull_request_required",
+        reason: "merge_queue_required",
       }),
     );
     await scheduler.close();

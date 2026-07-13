@@ -23,7 +23,7 @@ afterEach(async () => {
 
 describe("pending independent verification", () => {
   it.each([
-    { expectedReason: "review_required", result: "passed" as const },
+    { expectedReason: "pull_request_required", result: "passed" as const },
     { expectedReason: "verification_rework", result: "failed" as const },
   ])("records and routes a $result sandbox result", async ({ expectedReason, result }) => {
     const directory = await mkdtemp(path.join(tmpdir(), "symphony-independent-verification-"));

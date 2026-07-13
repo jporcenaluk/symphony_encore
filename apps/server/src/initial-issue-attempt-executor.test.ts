@@ -261,6 +261,7 @@ describe("planned initial issue attempt execution", () => {
         const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
         await mkdir(workspacePath);
         return {
+          baseRef: "main",
           baseSha: "abc1234",
           checkoutMethod: "trusted_repository_adapter",
           createdAt: "2026-07-13T10:00:01.000Z",
@@ -447,6 +448,7 @@ describe("planned initial issue attempt execution", () => {
         const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
         await mkdir(workspacePath);
         return {
+          baseRef: "main",
           baseSha: "abc1234",
           checkoutMethod: "trusted_repository_adapter",
           createdAt: "2026-07-13T10:00:01.000Z",
@@ -548,6 +550,7 @@ describe("planned initial issue attempt execution", () => {
         const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
         await mkdir(workspacePath);
         return {
+          baseRef: "main",
           baseSha: "abc1234",
           checkoutMethod: "trusted_repository_adapter",
           createdAt: "2026-07-13T10:00:01.000Z",

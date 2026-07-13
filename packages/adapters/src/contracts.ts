@@ -165,6 +165,7 @@ export interface AgentAdapter {
 }
 
 export interface WorkspacePopulation {
+  baseRef: string;
   baseSha: string;
   checkoutMethod: "operator_managed_mirror" | "trusted_repository_adapter";
   createdAt: string;
