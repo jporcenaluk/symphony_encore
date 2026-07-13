@@ -1,3 +1,5 @@
+import type { TSchema } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type { AgentAdapterManifest, AgentErrorCode, AgentEvent } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
@@ -83,6 +85,11 @@ export async function consumeAgentSession(input: {
       }),
     );
     if (isTerminalResult(event)) {
+      if (!terminalResultIsValid(input.bound.preflight.terminalResultSchema, event.result)) {
+        await input.bound.session.cancel("result_invalid");
+        await input.bound.session.waitForExit();
+        return failure("result_invalid", "terminal result violated the negotiated role schema");
+      }
       terminalResult = event.result;
       terminalResultReported = true;
       continue;
@@ -114,6 +121,17 @@ export async function consumeAgentSession(input: {
   }
   await input.bound.session.waitForExit();
   return failure("process_exit", "agent event stream ended before turn completion");
+}
+
+function terminalResultIsValid(
+  schema: Readonly<Record<string, unknown>>,
+  result: unknown,
+): boolean {
+  try {
+    return Value.Check(schema as TSchema, result);
+  } catch {
+    return false;
+  }
 }
 
 function isTokenUsage(event: AgentEvent): event is AgentEvent & {

@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { Type } from "@sinclair/typebox";
 import type { AgentSession } from "@symphony/adapters";
 import type { AgentAdapterManifest, AgentEvent } from "@symphony/contracts";
 import { PersistenceSafetyController } from "@symphony/orchestration";
@@ -99,6 +100,18 @@ function bound(
         yield* events;
       },
     },
+    preflight: {
+      adapterVersion: manifest.adapter_version,
+      manifest,
+      protocolSchemaHash: manifest.protocol.schema_hash,
+      resolvedSkills: [],
+      role: "implementation",
+      submitPlanSchema: null,
+      terminalResultSchema: Type.Object(
+        { status: Type.String(), summary: Type.String() },
+        { additionalProperties: false },
+      ),
+    },
     session,
     started: {
       attempt_id: "attempt-1",
@@ -188,6 +201,38 @@ describe("agent event consumption", () => {
     expect(opened.sqlite.prepare("select total_tokens from attempts").get()).toEqual({
       total_tokens: 100,
     });
+  });
+
+  it("rejects a terminal result that violates the negotiated role schema", async () => {
+    const cancel = vi.fn(async () => undefined);
+    await expect(
+      consumeAgentSession({
+        attemptTokenCap: 1_000,
+        bound: bound(
+          [
+            {
+              attempt_id: "attempt-1",
+              event: "terminal_result_reported",
+              result: { status: "completed" },
+              session_id: "thread-1-turn-1",
+              timestamp: "2026-07-13T10:00:03Z",
+            },
+          ],
+          cancel,
+        ),
+        database: opened.database,
+        manifest,
+        newId: () => "usage-1",
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        serviceRunId: "run-1",
+        usdCap: 5,
+      }),
+    ).resolves.toEqual({
+      errorCode: "result_invalid",
+      kind: "failure",
+      providerReason: "terminal result violated the negotiated role schema",
+    });
+    expect(cancel).toHaveBeenCalledWith("result_invalid");
   });
 
   it("derives priced cached-input cost and enforces the USD cap", async () => {

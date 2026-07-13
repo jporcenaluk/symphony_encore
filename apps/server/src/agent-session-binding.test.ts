@@ -117,16 +117,18 @@ describe("agent session binding", () => {
       session_id: "thread-1-turn-1",
       timestamp: "2026-07-13T10:00:04Z",
     };
+    const launchRequest = request();
     const bound = await launchAndBindAgentSession({
       adapter: adapter([started(), notification]),
       database: opened.database,
-      request: request(),
+      request: launchRequest,
       safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
     });
 
     const remaining: AgentEvent[] = [];
     for await (const event of bound.events) remaining.push(event);
     expect(remaining).toEqual([notification]);
+    expect(bound.preflight).toBe(launchRequest.preflight);
     expect(opened.sqlite.prepare("select status from attempts").get()).toEqual({
       status: "running",
     });

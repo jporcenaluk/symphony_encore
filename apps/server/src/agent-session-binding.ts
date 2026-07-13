@@ -1,4 +1,9 @@
-import type { AgentAdapter, AgentLaunchRequest, AgentSession } from "@symphony/adapters";
+import type {
+  AgentAdapter,
+  AgentLaunchRequest,
+  AgentPreflightResult,
+  AgentSession,
+} from "@symphony/adapters";
 import type { AgentErrorCode, AgentEvent } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import { type OpenedDatabase, startLiveAttemptSession } from "@symphony/persistence";
@@ -13,6 +18,7 @@ type SessionStartedEvent = AgentEvent & {
 
 export interface BoundAgentSession {
   events: AsyncIterable<AgentEvent>;
+  preflight: AgentPreflightResult;
   session: AgentSession;
   started: SessionStartedEvent;
 }
@@ -79,6 +85,7 @@ export async function launchAndBindAgentSession(input: {
         return iterator;
       },
     },
+    preflight: input.request.preflight,
     session,
     started: event,
   };
