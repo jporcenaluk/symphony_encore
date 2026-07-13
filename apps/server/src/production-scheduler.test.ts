@@ -10,7 +10,7 @@ import {
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
 import type { AgentAdapterManifest, Issue } from "@symphony/contracts";
-import { applyMigrations, openDatabase } from "@symphony/persistence";
+import { applyMigrations, observeIssue, openDatabase } from "@symphony/persistence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createProductionScheduler } from "./production-scheduler.js";
@@ -26,6 +26,7 @@ afterEach(async () => {
 const effectiveConfig = {
   "agent.command": "codex app-server",
   "agent.max_concurrent": 1,
+  "agent.max_plan_revisions": 2,
   "agent.max_retry_backoff_ms": 30_000,
   "agent.required_skills": [],
   "agent.stall_timeout_ms": 300_000,
@@ -340,6 +341,195 @@ describe("production reconciliation scheduler", () => {
     await expect(readFile(path.join(workspaceRoot, "ORG-9", "PLAN.md"), "utf8")).resolves.toContain(
       "Status: validated",
     );
+    await opened.close();
+  });
+
+  it("dispatches a durable Plan-review Ready claim without a tracker candidate", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-production-plan-review-"));
+    directories.push(directory);
+    const workspaceRoot = path.join(directory, "workspaces");
+    await mkdir(workspaceRoot);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into service_runs (
+          id, service_version, host_id, started_at, status,
+          startup_config_snapshot_id, start_reason
+        ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
+      )
+      .run();
+    const reviewIssue: Issue = { ...candidate, id: "review-issue", state: "In Progress" };
+    await observeIssue(opened.database, {
+      issue: reviewIssue,
+      observedAt: "2026-07-13T10:00:00Z",
+      providerRevision: "revision-8",
+      transitionId: "baseline-review",
+    });
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values (
+          'builder-attempt', 'issue', 'review-issue', 'implementation', 1, ?,
+          'config-1', 'deep', 'gpt-test', 'high', '[]', 'high_risk',
+          't0', 't1', 'closed', 'builder-result'
+        )`,
+      )
+      .run(issueWorkspacePath(workspaceRoot, reviewIssue.identifier));
+    opened.sqlite
+      .prepare(
+        `insert into plans (
+          id, work_ref_kind, work_ref_id, revision, status, approach,
+          acceptance_criteria_json, proposed_paths_json, verification_commands_json,
+          estimated_files, estimated_changed_lines, risk_facts_json,
+          created_by_attempt_id, created_at, validated_at, approved_by_attempt_id
+        ) values (
+          'review-plan', 'issue', 'review-issue', 1, 'validated', 'Review the change',
+          ?, '["apps/server/src/production-scheduler.ts"]', '["make verify-fast"]',
+          1, 20, '["risk.security_auth"]', 'builder-attempt', 't0', 't1', null
+        )`,
+      )
+      .run(
+        JSON.stringify([
+          {
+            criterion_id: "criterion-1",
+            criterion_text: reviewIssue.acceptance_criteria[0],
+            planned_evidence: "Production scheduler Plan-review coverage",
+          },
+        ]),
+      );
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values (
+          'issue', 'review-issue', 'run-1', 'Ready', 't0', 't1', null,
+          'In Progress', 'plan_review_required'
+        )`,
+      )
+      .run();
+    const agent: AgentAdapter = {
+      launch: vi.fn(async (request: AgentLaunchRequest) => {
+        const session: AgentSession = {
+          cancel: vi.fn(async () => undefined),
+          events: {
+            async *[Symbol.asyncIterator]() {
+              yield {
+                attempt_id: request.attemptId,
+                event: "session_started" as const,
+                model: "gpt-test",
+                reasoning_effort: "low",
+                session_id: "review-session",
+                thread_id: "review-thread",
+                timestamp: "2026-07-13T10:00:01Z",
+                turn_id: "review-turn",
+              };
+              yield {
+                attempt_id: request.attemptId,
+                event: "terminal_result_reported" as const,
+                result: {
+                  decision: "approve",
+                  evidence: [{ kind: "file", path: "PLAN.md" }],
+                  findings: [],
+                  handoff: {
+                    acceptance_criteria: reviewIssue.acceptance_criteria,
+                    commands: [],
+                    decisions_fixed: [],
+                    files_changed: [],
+                    goal: reviewIssue.title,
+                    open_items: [],
+                    revision: "abc1234",
+                  },
+                  plan_revision: 1,
+                },
+                session_id: "review-session",
+                timestamp: "2026-07-13T10:00:02Z",
+              };
+              yield {
+                attempt_id: request.attemptId,
+                event: "turn_completed" as const,
+                provider_reason: "completed",
+                session_id: "review-session",
+                timestamp: "2026-07-13T10:00:03Z",
+              };
+            },
+          },
+          processGroupId: 6320,
+          processId: 6321,
+          waitForExit: vi.fn(async () => ({ code: 0, signal: null })),
+        };
+        return session;
+      }),
+      manifest: vi.fn(async () => manifest),
+      preflight: vi.fn(async (request: AgentPreflightRequest) => ({
+        adapterVersion: manifest.adapter_version,
+        manifest,
+        protocolSchemaHash: manifest.protocol.schema_hash,
+        resolvedSkills: request.requiredSkills,
+        role: request.role,
+        submitPlanSchema: null,
+        terminalResultSchema: request.terminalResultSchema,
+      })),
+    };
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      async populateIssueWorkspace(input) {
+        const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
+        await mkdir(workspacePath);
+        return {
+          baseSha: "abc1234",
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt: "2026-07-13T10:00:00Z",
+          localBranch: "symphony/org-9",
+          repository: input.repository,
+          workspacePath,
+        };
+      },
+    };
+    const tracker = {
+      createOrUpdateComment: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
+      fetchCommentsSince: vi.fn(),
+      fetchIssuesByStates: vi.fn(),
+      fetchStatesByIds: vi.fn(),
+      updateIssueLane: vi.fn(),
+    };
+    const scheduler = createProductionScheduler({
+      agent,
+      database: opened.database,
+      environment: {},
+      prompt: "Implement {{ issue.title }}.",
+      repositoryAdapter,
+      serviceRunId: "run-1",
+      snapshot: {
+        effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
+        id: "config-1",
+      } as never,
+      tracker,
+    });
+
+    await scheduler.start();
+    await scheduler.close();
+
+    expect(tracker.fetchCandidates).toHaveBeenCalledOnce();
+    expect(agent.preflight).toHaveBeenCalledWith(expect.objectContaining({ role: "plan_review" }));
+    expect(agent.launch).toHaveBeenCalledOnce();
+    expect(opened.sqlite.prepare("select status, approved_by_attempt_id from plans").get()).toEqual(
+      {
+        approved_by_attempt_id: expect.any(String),
+        status: "approved",
+      },
+    );
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "implementation_after_plan_approval",
+    });
     await opened.close();
   });
 });

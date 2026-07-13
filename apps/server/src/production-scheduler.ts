@@ -13,7 +13,12 @@ import {
   terminateLinuxProcessGroup,
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
-import { ImplementationOutcomeSchema, type Issue, PlanSchema } from "@symphony/contracts";
+import {
+  ImplementationOutcomeSchema,
+  type Issue,
+  PlanReviewResultSchema,
+  PlanSchema,
+} from "@symphony/contracts";
 import type { ComputeProfile, ProvisionalClassification } from "@symphony/domain";
 import {
   evaluateIssueEligibility,
@@ -26,7 +31,9 @@ import {
   type ConfigurationSnapshot,
   countRunningClaims,
   isWorkClaimed,
+  loadClaimRecoveryState,
   loadIssue,
+  loadLatestValidatedPlan,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
@@ -35,6 +42,8 @@ import { syncTrackerCandidates } from "./candidate-sync.js";
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
+import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
+import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
 import {
   createPersistentRunningIssueReconciler,
   type RunningIssueRecord,
@@ -141,6 +150,87 @@ export function createProductionScheduler(input: {
     async tick() {
       await reconcile();
       if (!safety.canDispatch()) return;
+      let availableSlots = Math.max(
+        0,
+        numberValue(values, "agent.max_concurrent") - (await countRunningClaims(input.database)),
+      );
+      const recoveryState = await loadClaimRecoveryState(input.database, new Date().toISOString());
+      for (const claim of recoveryState.ready) {
+        if (availableSlots < 1 || !safety.canDispatch()) break;
+        if (claim.reason !== "plan_review_required" || !("issue_id" in claim.work_ref)) continue;
+        const issueId = claim.work_ref.issue_id;
+        try {
+          const stored = await loadIssue(input.database, issueId);
+          if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
+          const plan = await loadLatestValidatedPlan(input.database, {
+            id: issueId,
+            kind: "issue",
+          });
+          if (!plan) throw new Error(`scheduler.ready_plan_missing:${issueId}`);
+          const planned = await planHighRiskPlanReviewAttempt({
+            adapter: agent,
+            configSnapshotId: input.snapshot.id,
+            configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+            database: input.database,
+            issue: stored.issue,
+            newId: randomUUID,
+            now: () => new Date().toISOString(),
+            plan,
+            serviceRunId: input.serviceRunId,
+            terminalResultSchema: PlanReviewResultSchema,
+          });
+          const started = await startPlannedPlanReviewAttemptLifecycle({
+            adapter: agent,
+            agentCommand: stringValue(values, "agent.command"),
+            afterCreateCommand: nullableString(values, "hooks.after_create"),
+            allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+            attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+            beforeRunCommand: nullableString(values, "hooks.before_run"),
+            database: input.database,
+            hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+            issue: stored.issue,
+            maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
+            newId: randomUUID,
+            now: () => new Date().toISOString(),
+            plan,
+            planned,
+            repositoryAdapter,
+            safety,
+            serviceRunId: input.serviceRunId,
+            sourceEnvironment: input.environment,
+            usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+            workspaceRoot: stringValue(values, "workspace.root"),
+          });
+          availableSlots -= 1;
+          running.set(planned.attemptId, {
+            attemptId: planned.attemptId,
+            attemptLane: "In Progress",
+            expectedExpiresAt: planned.dispatch.claim.expiresAt,
+            holder: input.serviceRunId,
+            issueId,
+            lastEventAt: started.bound.started.timestamp,
+            processGroupId: started.bound.session.processGroupId,
+            processId: started.bound.session.processId,
+            workspacePath: planned.dispatch.attempt.workspacePath,
+          });
+          trackCompletion(
+            completions,
+            started.completion,
+            () => running.delete(planned.attemptId),
+            (error) =>
+              input.logger?.error(
+                { attempt_id: planned.attemptId, error },
+                "Plan-review attempt lifecycle failed",
+              ),
+          );
+        } catch (error) {
+          input.logger?.warn(
+            { error, issue_id: issueId },
+            "Ready Plan-review dispatch skipped scheduler tick",
+          );
+          if (!safety.canDispatch()) throw error;
+        }
+      }
       let candidates: Issue[];
       try {
         candidates = await syncTrackerCandidates({
@@ -163,10 +253,6 @@ export function createProductionScheduler(input: {
         return;
       }
       if (candidates.length === 0 || !safety.canDispatch()) return;
-      let availableSlots = Math.max(
-        0,
-        numberValue(values, "agent.max_concurrent") - (await countRunningClaims(input.database)),
-      );
       for (const candidate of sortIssueCandidates(candidates)) {
         if (availableSlots < 1 || !safety.canDispatch()) break;
         const claimed = await isWorkClaimed(input.database, { id: candidate.id, kind: "issue" });

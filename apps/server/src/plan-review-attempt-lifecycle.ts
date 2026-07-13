@@ -13,10 +13,29 @@ type LifecycleInput = ExecutePlannedPlanReviewAttemptInput & {
   usdCap: number;
 };
 
+export interface StartedPlanReviewAttemptLifecycle {
+  bound: Awaited<ReturnType<typeof executePlannedPlanReviewAttempt>>["bound"];
+  completion: Promise<AgentConsumptionResult>;
+}
+
+export async function startPlannedPlanReviewAttemptLifecycle(
+  input: LifecycleInput,
+): Promise<StartedPlanReviewAttemptLifecycle> {
+  const started = await executePlannedPlanReviewAttempt(input);
+  return { bound: started.bound, completion: consumeAndClose(input, started) };
+}
+
 export async function runPlannedPlanReviewAttemptLifecycle(
   input: LifecycleInput,
 ): Promise<AgentConsumptionResult> {
-  const started = await executePlannedPlanReviewAttempt(input);
+  const started = await startPlannedPlanReviewAttemptLifecycle(input);
+  return started.completion;
+}
+
+async function consumeAndClose(
+  input: LifecycleInput,
+  started: Awaited<ReturnType<typeof executePlannedPlanReviewAttempt>>,
+): Promise<AgentConsumptionResult> {
   let consumption: AgentConsumptionResult;
   try {
     consumption = await consumeAgentSession({
