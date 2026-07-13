@@ -113,3 +113,94 @@ jobs:
           test "$VERIFY_RESULT" = success
           test "$SUPPLY_CHAIN_RESULT" = success
           test "$IMAGE_RESULT" = success
+
+  publish:
+    name: publish main artifacts
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [required]
+    permissions:
+      artifact-metadata: write # Required to register artifact metadata for attestations.
+      attestations: write # Required to persist signed provenance.
+      contents: read
+      id-token: write # Required to obtain the short-lived Sigstore signing identity.
+      packages: write # Required to publish the commit-addressed image to GHCR.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # zizmor: ignore[cache-poisoning] Protected main; cache disabled.
+        with:
+          cache: ""
+          node-version-file: .node-version
+      - run: corepack pnpm install --frozen-lockfile
+      - run: make build
+      - name: Package the Node distribution
+        run: |
+          mkdir -p artifacts/layout/ui
+          corepack pnpm --filter @symphony/server --prod deploy --legacy artifacts/layout/server
+          cp -R apps/web/dist/. artifacts/layout/ui/
+          tar -C artifacts/layout -czf "artifacts/symphony-encore-${SHA}.tar.gz" server ui
+          rm -rf artifacts/layout
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          provenance: mode=max
+          push: true
+          sbom: true
+          tags: ${{ env.IMAGE }}:sha-${{ env.SHA }}
+      - name: Generate image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          format: cyclonedx
+          image-ref: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}
+          output: artifacts/image.cdx.json
+          scan-type: image
+      - name: Generate distribution SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          format: cyclonedx
+          output: artifacts/distribution.cdx.json
+          scan-ref: artifacts
+          scan-type: fs
+      - name: Record immutable build evidence
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync("artifacts/build-manifest.json", JSON.stringify({
+              commit: process.env.SHA,
+              image: `${process.env.IMAGE}@${process.env.DIGEST}`,
+              publication_run: `${process.env.SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.RUN_ID}`,
+            }, null, 2) + "\n");
+          '
+          cd artifacts
+          sha256sum "symphony-encore-${SHA}.tar.gz" *.cdx.json build-manifest.json > checksums.txt
+      - id: provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-checksums: artifacts/checksums.txt
+      - name: Preserve the signed provenance bundle
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" artifacts/provenance.sigstore.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: symphony-main-${{ env.SHA }}
+          path: artifacts/
+          retention-days: 90

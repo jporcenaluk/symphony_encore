@@ -13,6 +13,17 @@ builds the production server and UI, exercises the built browser application, an
 Record the commit, lockfile hash, workflow run, and immutable image digest. A green Linux job does
 not prove Windows-host-to-WSL networking.
 
+On a protected `main` push, the successful `ci` run publishes `ghcr.io/<owner>/<repo>:sha-<commit>`
+with BuildKit SBOM and provenance attestations. The same job uploads the production Node archive,
+CycloneDX image and distribution SBOMs, SHA-256 checksums, build manifest, and signed Sigstore
+provenance bundle as `symphony-main-<commit>`.
+
+A `vMAJOR.MINOR.PATCH` tag must point to that `main` commit. The release workflow downloads and
+verifies the protected-main evidence, verifies its GitHub attestation, rescans the existing image,
+and adds the semantic image tag with `docker buildx imagetools create`. It never rebuilds the tag.
+The release assets retain the archive, checksums, SBOMs, manifest, and provenance beyond the ordinary
+workflow-artifact lifetime.
+
 ## WSL release smoke
 
 Run this check on a supported WSL 2 distribution for every release until a trustworthy hosted WSL
