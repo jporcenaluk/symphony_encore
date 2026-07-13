@@ -1,6 +1,7 @@
 export const componentName = "adapters" as const;
 
 export * from "./contracts.js";
+export * from "./gh-cli-api.js";
 export * from "./github-tracker.js";
 export * from "./linux-hook-runner.js";
 export * from "./linux-process-ownership.js";
