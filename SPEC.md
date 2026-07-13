@@ -1166,6 +1166,49 @@ session tokens never appear in URLs, logs, events, configuration snapshots, or A
 When an effective operator record or capability changes, the service MUST re-evaluate active
 sessions before their next request and revoke access that is no longer granted.
 
+### 15.6 First-Run Setup
+
+An implementation SHOULD ship a guided command-line setup that prepares a deployment before the
+service first starts. Setup is RECOMMENDED tooling, not a Core requirement; when provided it MUST
+follow this contract.
+
+Setup runs before bootstrap (Section 15.3), so no authenticated operator or durable state exists
+yet. Its only outputs are `WORKFLOW.md`, host-environment values, and operator-confirmed
+tracker-side changes made with the operator's own interactively supplied credentials. It MUST NOT
+create durable-store records (preserving the pristine-database bootstrap invariant), MUST NOT bind
+a network listener, and MUST NOT store its own state outside the outputs above.
+
+The guided flow covers, in order:
+
+1. **Tracker selection** — choose `tracker.kind` and its identifying configuration
+   (Section 18.1 `tracker.*` keys).
+2. **Credentials** — verify host authentication for the selected tracker and agent adapter using
+   each provider's native flow (for the GitHub reference profile, `gh` device-flow login; for
+   API-key trackers, an interactive prompt). Secret values are written only to the host
+   environment or an operator-chosen environment file and referenced from configuration as `$VAR`
+   (Section 15.2). Setup MUST NOT write a literal credential into `WORKFLOW.md`.
+3. **Project selection or creation** — list existing candidate projects/boards to choose from, or
+   create a new one through the Section 16.1 schema operation.
+4. **Schema check and remediation** — verify the configured status field exposes every
+   Section 5.1 lane, the priority field exists, and write authority works: the same checks as
+   Section 18.2 validation. Each missing item is offered as an explicit fix; setup MUST NOT
+   mutate the tracker without a per-change operator confirmation.
+5. **Workflow generation** — write `WORKFLOW.md` with the selected tracker keys, prompting for
+   required values that have no default (at minimum `workspace.verify_command`) and leaving
+   documented defaults for everything else.
+6. **Validation and handoff** — run the full Section 18.2 startup validation and report the
+   result. On success, direct the operator to start the service, which enters bootstrap.
+
+Setup MUST be idempotent: re-running it detects already-completed steps (valid credentials, an
+existing conforming project, a parseable `WORKFLOW.md`) and prompts only for the gaps, so an
+interrupted setup is resumed by running it again.
+
+After bootstrap, the authenticated UI and API are the channel for runtime settings (Section 18.3);
+setup exists for the identity-defining and secret-bearing values the UI intentionally cannot
+manage: bootstrap keys, credential material, and tracker identity. Post-setup schema drift is
+surfaced by per-tick validation (Section 18.2) in logs, events, and the UI; the remedy is a UI
+override for runtime keys, or re-running setup for identity and credential keys.
+
 ## 16. Tracker and Repository-Hosting Adapter Contracts
 
 ### 16.1 Tracker Adapter
@@ -1194,6 +1237,14 @@ states).
 Acceptance criteria are normalized only from structured tracker fields or checklist items under the
 configured `tracker.acceptance_criteria_heading`; adapters MUST NOT invent them from prose. Missing
 criteria produce an empty list and route through the plan-stage readiness rule.
+
+`ensure_project_schema(project, status_field, lanes, priority_field)` is an OPTIONAL operation that
+creates or repairs the tracker project so the configured status field exposes every Section 5.1
+lane, the priority field exists, and write authority is confirmed. It exists for Section 15.6
+first-run setup, runs with the operator's interactive credentials and per-change confirmation, and
+takes no MutationAuthorization because it precedes the durable store; the running service MUST NOT
+invoke it. An implementation advertising it declares Extension Conformance (Section 19.1) and MUST
+test idempotent re-runs and partial-schema repair.
 
 ### 16.2 Repository-Hosting Adapter
 
@@ -1681,8 +1732,8 @@ Added: typed plans and role results; staged classification; required verificatio
 adapter; revision-pinned merge queue; repair PRs and reproducible audits; graduated autonomy;
 structured questions and notifications; learning synthesis and saturation; escaped-defect metrics;
 required authenticated UI/API; durable logs, stage timing, usage, prior-run history, and indefinite
-default retention; editable versioned operator overrides; Core, Extension, and Real Integration
-conformance profiles.
+default retention; editable versioned operator overrides; a guided first-run setup contract with
+optional tracker schema remediation; Core, Extension, and Real Integration conformance profiles.
 
 ## Appendix B. Normalized Agent Events and the Codex Reference Adapter
 
