@@ -9,7 +9,7 @@ command. A green but narrower test does not complete a broader item.
 ## Current state
 
 - Branch target: `feat/symphony-encore-core`.
-- Current milestone: transactional external effects and restart reconciliation.
+- Current milestone: workspace isolation and process safety.
 - Canonical gate: not implemented yet.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
@@ -24,7 +24,7 @@ command. A green but narrower test does not complete a broader item.
 | S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
-| S06 | Workspace isolation, hooks, and independent verification | Not started | Filesystem and process boundary integration tests |
+| S06 | Workspace isolation, hooks, and independent verification | In progress | Realpath/symlink containment, isolated writable state, environment scrubbing, and real Linux/WSL mount-boundary test pass; macOS/hooks/process tree pending |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
@@ -33,7 +33,7 @@ command. A green but narrower test does not complete a broader item.
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, and atomic interrupted-attempt closure with exact ownership evidence pass; process termination adapter pending |
 | S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
-| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope and bootstrap-key boundary pass; auth/sandbox pending |
+| S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
 | S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, and immutable snapshots pass; startup/API integration pending |
@@ -51,7 +51,7 @@ command. A green but narrower test does not complete a broader item.
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Five checksummed migrations cover all durable entities; WAL, atomic core transactions, configuration history, and issue restart round-trip pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
-| T09 | Linux, macOS, WSL development commands and signal handling | Not started | CI matrix and documented WSL smoke test |
+| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox integration passes locally; macOS, CI matrix, signal, and documented WSL smoke test pending |
 | T10 | Node distribution and non-root multi-stage container | Not started | Runtime, health, filesystem, and scan jobs |
 | T11 | Exact dependency/toolchain pinning and update policy | In progress | Lockfile, toolchain file, Dependabot |
 | T12 | Deferred technologies remain absent | Not started | Dependency and architecture policy check |
@@ -136,3 +136,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Failure classification, bounded retries, backoff, and fail-closed routes |
 | 2026-07-13 | working tree | `make verify-fast` | 158 tests; lint, generated-contract drift, and typecheck passed | Interrupted attempt closure, ownership evidence, settlement, and requeue |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Interrupted attempt closure, ownership evidence, settlement, and requeue |
+| 2026-07-13 | working tree | `make verify-fast` | 166 tests; lint, generated-contract drift, and typecheck passed | Workspace containment, credential scrubbing, Linux/WSL write boundary |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Workspace containment, credential scrubbing, Linux/WSL write boundary |
