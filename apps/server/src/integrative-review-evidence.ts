@@ -52,6 +52,11 @@ export async function collectIntegrativeReviewContext(input: {
   );
   const changedFiles = changed.stdout.split(/\r?\n/u).filter(Boolean);
   if (changedFiles.length === 0) throw new Error("review.empty_patch");
+  const numstat = await runRequired(
+    input.commandRunner,
+    request(["diff", "--numstat", "--no-renames", input.baseSha, input.targetSha, "--"]),
+  );
+  const changedLines = changedLineCount(numstat.stdout);
   const patchArguments = [
     "diff",
     "--binary",
@@ -98,12 +103,31 @@ export async function collectIntegrativeReviewContext(input: {
     baseSha: input.baseSha,
     changeClass: input.changeClass,
     changedFiles,
+    changedLines,
     diff: patch.stdout,
     patchIdentity: `sha256:${createHash("sha256").update(patch.stdout).digest("hex")}`,
     repositoryDocs,
     targetSha: input.targetSha,
     verificationRecordId: input.verificationRecordId,
   };
+}
+
+function changedLineCount(numstat: string): number {
+  let total = 0;
+  for (const row of numstat.split(/\r?\n/u).filter(Boolean)) {
+    const [added, removed, file, extra] = row.split("\t");
+    if (!added || !removed || !file || extra !== undefined)
+      throw new Error("review.numstat_invalid");
+    if (added === "-" || removed === "-") return Number.MAX_SAFE_INTEGER;
+    const addedCount = Number(added);
+    const removedCount = Number(removed);
+    if (!Number.isSafeInteger(addedCount) || !Number.isSafeInteger(removedCount)) {
+      throw new Error("review.numstat_invalid");
+    }
+    total += addedCount + removedCount;
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
 }
 
 function assertInput(input: Parameters<typeof collectIntegrativeReviewContext>[0]): void {

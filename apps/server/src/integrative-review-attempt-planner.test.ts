@@ -89,6 +89,7 @@ describe("integrative review planning", () => {
         baseSha: "abc1234",
         changeClass: "standard",
         changedFiles: ["src/worker.ts"],
+        changedLines: 12,
         diff: "diff --git a/src/worker.ts b/src/worker.ts",
         patchIdentity: "sha256:patch",
         repositoryDocs: [{ content: "# Repository rules", path: "AGENTS.md" }],

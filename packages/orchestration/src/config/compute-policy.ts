@@ -107,7 +107,7 @@ function parseRouteProfiles(value: unknown): ComputeRouteProfiles {
   };
 }
 
-function isDeterministicPredicate(value: string): boolean {
+export function isDeterministicPredicate(value: string): boolean {
   return (
     BUILT_IN_FACTS.has(value) ||
     /^(?:label|dependency|change_fact):[^:\s][^\s]*$/u.test(value) ||

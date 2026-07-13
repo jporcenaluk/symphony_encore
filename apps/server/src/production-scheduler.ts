@@ -25,7 +25,9 @@ import {
   evaluateIssueEligibility,
   PersistenceSafetyController,
   parseComputeRoutingPolicy,
+  parseReviewSpecialists,
   SchedulerService,
+  selectRequiredSpecialists,
   sortIssueCandidates,
 } from "@symphony/orchestration";
 import {
@@ -43,6 +45,7 @@ import {
   loadPendingReviewCoordination,
   type OpenedDatabase,
   observeIssue,
+  routeNextReviewSpecialist,
 } from "@symphony/persistence";
 
 import { syncTrackerCandidates } from "./candidate-sync.js";
@@ -204,13 +207,44 @@ export function createProductionScheduler(input: {
               kind: "issue",
             });
             if (!pending) throw new Error(`scheduler.review_coordination_missing:${issueId}`);
+            let requiredSpecialistNames: readonly string[] = [];
             if (pending.changeClass === "high_risk") {
-              throw new Error(`scheduler.specialist_coordination_pending:${issueId}`);
+              const context = await (
+                input.review?.collectEvidence ?? collectIntegrativeReviewContext
+              )({
+                baseSha: pending.targetBaseSha,
+                changeClass: pending.changeClass,
+                commandRunner: createNodeWorkspaceCommandRunner(),
+                sourceEnvironment: input.environment,
+                targetSha: pending.targetSha,
+                timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+                verificationRecordId: pending.verificationRecordId,
+                workspace: pending.workspacePath,
+                workspaceRoot: stringValue(values, "workspace.root"),
+              });
+              const facts = new Set(pending.riskFacts);
+              for (const label of stored.issue.labels) facts.add(`label:${label}`);
+              requiredSpecialistNames = selectRequiredSpecialists(
+                parseReviewSpecialists(values["review.specialists"]),
+                {
+                  acceptanceCriteriaPresent: stored.issue.acceptance_criteria.length > 0,
+                  changedLines: context.changedLines,
+                  changedPaths: context.changedFiles,
+                  facts,
+                  proposedPaths: pending.proposedPaths,
+                },
+              ).map((required) => required.specialist.name);
+              const routed = await routeNextReviewSpecialist(input.database, {
+                requiredSpecialistNames,
+                updatedAt: new Date().toISOString(),
+                workRef: { id: issueId, kind: "issue" },
+              });
+              if (routed) continue;
             }
             await commitOrdinaryReviewSet(input.database, {
               createdAt: new Date().toISOString(),
               id: randomUUID(),
-              requiredSpecialistNames: [],
+              requiredSpecialistNames,
               workRef: { id: issueId, kind: "issue" },
             });
             continue;

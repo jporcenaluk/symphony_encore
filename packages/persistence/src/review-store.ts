@@ -35,6 +35,7 @@ export interface PendingIntegrativeReview {
 export interface PendingReviewCoordination {
   changeClass: "standard" | "high_risk";
   patchIdentity: string;
+  proposedPaths: readonly string[];
   records: readonly {
     decision: ReviewRecord["decision"];
     findings: ReviewRecord["findings"];
@@ -43,17 +44,22 @@ export interface PendingReviewCoordination {
     reviewerRole: ReviewRecord["reviewer_role"];
     targetSha: string;
   }[];
+  riskFacts: readonly string[];
   targetBaseSha: string;
   targetSha: string;
   verificationRecordId: string;
+  workspacePath: string;
 }
 
 interface CoordinationTargetRow {
   change_class: PendingReviewCoordination["changeClass"];
   patch_identity: string;
+  proposed_paths_json: string;
+  risk_facts_json: string;
   target_base_sha: string;
   target_sha: string;
   verification_record_id: string;
+  workspace_path: string;
 }
 
 interface CoordinationRecordRow {
@@ -75,7 +81,9 @@ export async function loadPendingReviewCoordination(
 ): Promise<PendingReviewCoordination | null> {
   const targets = await sql<CoordinationTargetRow>`
     select attempt.change_class, record.patch_identity, record.target_base_sha,
-           record.target_sha, verification.id as verification_record_id
+           record.target_sha, verification.id as verification_record_id,
+           implementation.routing_reasons_json as risk_facts_json,
+           plan.proposed_paths_json, attempt.workspace_path
     from claims claim
     join review_records record
       on record.work_ref_kind = claim.work_ref_kind
@@ -88,6 +96,18 @@ export async function loadPendingReviewCoordination(
       and verification.target_revision = record.target_sha
       and verification.result = 'passed'
       and verification.exit_code = 0
+    join attempts implementation
+      on implementation.id = verification.attempt_id
+      and implementation.role = 'implementation'
+      and implementation.status = 'closed'
+    join plans plan
+      on plan.work_ref_kind = claim.work_ref_kind
+      and plan.work_ref_id = claim.work_ref_id
+      and plan.revision = (
+        select max(latest.revision) from plans latest
+        where latest.work_ref_kind = claim.work_ref_kind
+          and latest.work_ref_id = claim.work_ref_id
+      )
     where claim.work_ref_kind = ${workRef.kind}
       and claim.work_ref_id = ${workRef.id}
       and claim.mode = 'Ready'
@@ -97,6 +117,11 @@ export async function loadPendingReviewCoordination(
   `.execute(database);
   const target = targets.rows[0];
   if (!target) return null;
+  const riskFacts = parseStringList(target.risk_facts_json, "review.persisted_risk_facts_invalid");
+  const proposedPaths = parseStringList(
+    target.proposed_paths_json,
+    "review.persisted_proposed_paths_invalid",
+  );
   const records = await sql<CoordinationRecordRow>`
     select record.*, attempt.routing_reasons_json
     from review_records record
@@ -111,10 +136,13 @@ export async function loadPendingReviewCoordination(
   return {
     changeClass: target.change_class,
     patchIdentity: target.patch_identity,
+    proposedPaths,
     records: records.rows.map((row) => coordinationRecord(row, workRef)),
     targetBaseSha: target.target_base_sha,
     targetSha: target.target_sha,
+    riskFacts,
     verificationRecordId: target.verification_record_id,
+    workspacePath: target.workspace_path,
   };
 }
 
@@ -339,6 +367,42 @@ export async function commitOrdinaryReviewSet(
   });
 }
 
+export async function routeNextReviewSpecialist(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    requiredSpecialistNames: readonly string[];
+    updatedAt: string;
+    workRef: WorkRef;
+  },
+): Promise<{ name: string } | null> {
+  if (
+    !Number.isFinite(Date.parse(input.updatedAt)) ||
+    input.requiredSpecialistNames.some((name) => !name) ||
+    new Set(input.requiredSpecialistNames).size !== input.requiredSpecialistNames.length
+  ) {
+    throw new Error("review.specialist_route_input_invalid");
+  }
+  return database.transaction().execute(async (transaction) => {
+    const pending = await loadPendingReviewCoordination(transaction, input.workRef);
+    if (!pending) throw new Error("review_set.coordination_missing");
+    const name = input.requiredSpecialistNames.find(
+      (candidate) => !pending.records.some((record) => record.reviewer === candidate),
+    );
+    if (!name) return null;
+    const claim = await sql`
+      update claims
+      set reason = ${`specialist_review_required:${encodeURIComponent(name)}`},
+          updated_at = ${input.updatedAt}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = 'review_coordination_required'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("review.specialist_claim_not_ready");
+    return { name };
+  });
+}
+
 function validateFinishInput(input: FinishReviewAttemptInput): void {
   if (
     !input.attemptId ||
@@ -388,6 +452,18 @@ function coordinationRecord(row: CoordinationRecordRow, workRef: WorkRef) {
     reviewerRole: record.reviewer_role,
     targetSha: record.target_sha,
   };
+}
+
+function parseStringList(value: string, message: string): string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some((entry) => typeof entry !== "string") ||
+    new Set(parsed).size !== parsed.length
+  ) {
+    throw new Error(message);
+  }
+  return parsed as string[];
 }
 
 function validateReviewSetInput(input: {

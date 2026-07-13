@@ -65,6 +65,16 @@ const effectiveConfig = {
   "persistence.lease_ttl_ms": 120_000,
   "polling.interval_ms": 30_000,
   "review.snapshot_timeout_ms": 30_000,
+  "review.specialists": [
+    {
+      concerns: ["security"],
+      excluded_context: ["builder_narrative"],
+      name: "systems_security",
+      profile: "deep",
+      required_evidence: ["diff", "checks", "acceptance_criteria"],
+      trigger_rules: ["risk.security_auth"],
+    },
+  ],
   "tracker.acceptance_criteria_heading": "Acceptance Criteria",
   "tracker.assignee": null,
   "tracker.owner": "owner",
@@ -342,6 +352,7 @@ describe("production reconciliation scheduler", () => {
           baseSha: request.baseSha,
           changeClass: request.changeClass,
           changedFiles: ["apps/server/src/production-scheduler.ts"],
+          changedLines: 12,
           diff: "diff --git a/apps/server/src/production-scheduler.ts b/apps/server/src/production-scheduler.ts",
           patchIdentity: "sha256:patch",
           repositoryDocs: [],
@@ -681,6 +692,156 @@ describe("production reconciliation scheduler", () => {
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
       reason: "implementation_rework",
+    });
+    await opened.close();
+  });
+
+  it("routes a high-risk complete integrative record to its first triggered specialist", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-production-specialist-route-"));
+    directories.push(directory);
+    const workspaceRoot = path.join(directory, "workspaces");
+    const workspacePath = path.join(workspaceRoot, "ORG-9");
+    await mkdir(workspacePath, { recursive: true });
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into service_runs (
+          id, service_version, host_id, started_at, status,
+          startup_config_snapshot_id, start_reason
+        ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
+      )
+      .run();
+    const highRiskIssue: Issue = {
+      ...candidate,
+      labels: ["security"],
+      state: "In Progress",
+    };
+    await observeIssue(opened.database, {
+      issue: highRiskIssue,
+      observedAt: "2026-07-13T10:00:00Z",
+      providerRevision: "revision-8",
+      transitionId: "baseline-specialist",
+    });
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values
+          ('implementation-1', 'issue', 'issue-1', 'implementation', 1, ?,
+           'config-1', 'deep', 'gpt-test', 'high', '["risk.security_auth"]', 'high_risk',
+           't0', 't1', 'closed', 'implementation-result-1'),
+          ('integrative-1', 'issue', 'issue-1', 'integrative_review', 2, ?,
+           'config-1', 'standard', 'gpt-test', 'medium', '[]', 'high_risk',
+           't2', 't3', 'closed', 'integrative-result-1')`,
+      )
+      .run(workspacePath, workspacePath);
+    opened.sqlite
+      .prepare(
+        `insert into plans (
+          id, work_ref_kind, work_ref_id, revision, status, approach,
+          acceptance_criteria_json, proposed_paths_json, verification_commands_json,
+          estimated_files, estimated_changed_lines, risk_facts_json,
+          created_by_attempt_id, created_at, validated_at, approved_by_attempt_id
+        ) values (
+          'plan-1', 'issue', 'issue-1', 1, 'approved', 'Secure the boundary',
+          '[]', '["src/auth.ts"]', '["make verify-fast"]', 1, 12,
+          '["risk.security_auth"]', 'implementation-1', 't0', 't1', 'implementation-1'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into verification_records (
+          id, work_ref_kind, work_ref_id, attempt_id, config_snapshot_id, target_revision,
+          command_hash, started_at, ended_at, exit_code, result, environment_policy_hash
+        ) values (
+          'verification-1', 'issue', 'issue-1', 'implementation-1', 'config-1', 'def5678',
+          'sha256:command', 't1', 't2', 0, 'passed', 'sha256:environment'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into workspace_checkouts (
+          work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
+          checkout_method, local_branch, created_at
+        ) values (
+          'issue', 'issue-1', ?, 'owner/repo', 'abc1234',
+          'trusted_repository_adapter', 'symphony/org-9', 't0'
+        )`,
+      )
+      .run(workspacePath);
+    opened.sqlite
+      .prepare(
+        `insert into review_records (
+          id, work_ref_kind, work_ref_id, attempt_id, reviewer_role, target_sha,
+          target_base_sha, patch_identity, decision, findings_json, created_at
+        ) values (
+          'review-record-1', 'issue', 'issue-1', 'integrative-1', 'integrative_review',
+          'def5678', 'abc1234', 'sha256:patch', 'approve', '[]', 't3'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values (
+          'issue', 'issue-1', 'run-1', 'Ready', 't0', 't3', null,
+          'In Progress', 'review_coordination_required'
+        )`,
+      )
+      .run();
+    const tracker = {
+      createOrUpdateComment: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
+      fetchCommentsSince: vi.fn(),
+      fetchIssuesByStates: vi.fn(),
+      fetchStatesByIds: vi.fn(),
+      updateIssueLane: vi.fn(),
+    };
+    const scheduler = createProductionScheduler({
+      database: opened.database,
+      environment: {},
+      prompt: "Implement {{ issue.title }}.",
+      review: {
+        collectEvidence: vi.fn(async (request) => ({
+          baseSha: request.baseSha,
+          changeClass: request.changeClass,
+          changedFiles: ["src/auth.ts"],
+          changedLines: 12,
+          diff: "diff --git a/src/auth.ts b/src/auth.ts",
+          patchIdentity: "sha256:patch",
+          repositoryDocs: [],
+          targetSha: request.targetSha,
+          verificationRecordId: request.verificationRecordId,
+        })),
+      },
+      serviceRunId: "run-1",
+      snapshot: {
+        effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
+        id: "config-1",
+      } as never,
+      tracker,
+    });
+
+    await scheduler.start();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "specialist_review_required:systems_security",
+      }),
+    );
+    await scheduler.close();
+    expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
+      count: 0,
     });
     await opened.close();
   });

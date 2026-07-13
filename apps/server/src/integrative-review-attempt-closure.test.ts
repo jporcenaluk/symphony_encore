@@ -52,6 +52,7 @@ describe("integrative review closure", () => {
         baseSha: "abc1234",
         changeClass: "standard",
         changedFiles: ["src/worker.ts"],
+        changedLines: 12,
         diff: "diff",
         patchIdentity: "sha256:patch",
         repositoryDocs: [],

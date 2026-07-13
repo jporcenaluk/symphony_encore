@@ -11,6 +11,7 @@ import {
   finishReviewAttempt,
   loadPendingIntegrativeReview,
   loadPendingReviewCoordination,
+  routeNextReviewSpecialist,
 } from "./review-store.js";
 
 const directories: string[] = [];
@@ -177,6 +178,17 @@ describe("integrative review repository", () => {
       mode: "Ready",
       reason: "review_coordination_required",
     });
+    await expect(
+      routeNextReviewSpecialist(opened.database, {
+        requiredSpecialistNames: ["systems_security", "architecture product"],
+        updatedAt: "2026-07-13T10:07:00Z",
+        workRef: { id: "issue-1", kind: "issue" },
+      }),
+    ).resolves.toEqual({ name: "systems_security" });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "specialist_review_required:systems_security",
+    });
     await opened.close();
   });
 
@@ -246,6 +258,20 @@ async function fixture(): Promise<OpenedDatabase> {
       `insert into terminal_results (id, attempt_id, role, result_kind, payload_json, created_at)
        values ('implementation-result-1', 'implementation-1', 'implementation',
          'implementation_outcome', '{}', 't1')`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into plans (
+        id, work_ref_kind, work_ref_id, revision, status, approach,
+        acceptance_criteria_json, proposed_paths_json, verification_commands_json,
+        estimated_files, estimated_changed_lines, risk_facts_json,
+        created_by_attempt_id, created_at, validated_at, approved_by_attempt_id
+      ) values (
+        'plan-1', 'issue', 'issue-1', 1, 'validated', 'Implement safely',
+        '[]', '["src/worker.ts"]', '["make verify-fast"]', 1, 12, '[]',
+        'implementation-1', 't0', 't1', null
+      )`,
     )
     .run();
   sqlite

@@ -26,6 +26,7 @@ export interface IntegrativeReviewContext {
   baseSha: string;
   changeClass: "standard" | "high_risk";
   changedFiles: readonly string[];
+  changedLines: number;
   diff: string;
   patchIdentity: string;
   repositoryDocs: readonly { content: string; path: string }[];

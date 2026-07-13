@@ -25,6 +25,7 @@ describe("integrative review evidence", () => {
       { exitCode: 0, stderr: "", stdout: "" },
       { exitCode: 0, stderr: "", stdout: "" },
       { exitCode: 0, stderr: "", stdout: "src/worker.ts\n" },
+      { exitCode: 0, stderr: "", stdout: "10\t2\tsrc/worker.ts\n" },
       { exitCode: 0, stderr: "", stdout: diff },
       { exitCode: 0, stderr: "", stdout: "AGENTS.md\nREADME.md\n" },
       { exitCode: 0, stderr: "", stdout: "# Agent rules\n" },
@@ -54,6 +55,7 @@ describe("integrative review evidence", () => {
       baseSha: "abc1234",
       changeClass: "standard",
       changedFiles: ["src/worker.ts"],
+      changedLines: 12,
       diff,
       repositoryDocs: [
         { content: "# Agent rules\n", path: "AGENTS.md" },
@@ -63,9 +65,9 @@ describe("integrative review evidence", () => {
       verificationRecordId: "verification-1",
     });
     expect(context.patchIdentity).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    expect(runner.run).toHaveBeenCalledTimes(8);
+    expect(runner.run).toHaveBeenCalledTimes(9);
     expect(vi.mocked(runner.run).mock.calls[0]?.[0].environment).toEqual({ PATH: "/usr/bin" });
-    expect(vi.mocked(runner.run).mock.calls[4]?.[0].arguments).toEqual([
+    expect(vi.mocked(runner.run).mock.calls[5]?.[0].arguments).toEqual([
       "-C",
       workspace,
       "diff",
