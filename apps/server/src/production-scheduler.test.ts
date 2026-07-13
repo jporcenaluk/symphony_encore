@@ -27,6 +27,7 @@ const effectiveConfig = {
   "agent.command": "codex app-server",
   "agent.max_concurrent": 1,
   "agent.max_plan_revisions": 2,
+  "agent.max_rework_cycles": 2,
   "agent.max_turns": 8,
   "agent.max_retry_backoff_ms": 30_000,
   "agent.required_skills": [],

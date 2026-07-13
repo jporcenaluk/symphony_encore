@@ -1,3 +1,4 @@
+import { isImplementationOutcome } from "@symphony/contracts";
 import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -25,6 +26,7 @@ export interface FinishAttemptInput {
   endedAt: string;
   failureClass: string | null;
   nextClaim: NextClaim;
+  parkedOriginStage?: string;
   reservationId: string;
   settledLedgers: readonly SettlementInput[];
   terminalResult: {
@@ -46,6 +48,39 @@ interface AttemptSettlementRow {
   cost_usd: number | null;
   input_tokens: number;
   output_tokens: number;
+}
+
+interface ImplementationOutcomeRow {
+  payload_json: string;
+}
+
+export async function loadImplementationOutcomeCounts(
+  database: Kysely<DatabaseSchema>,
+  workRef: { id: string; kind: "issue" | "system_job" },
+): Promise<{ noProgress: number; rework: number }> {
+  const query = await sql<ImplementationOutcomeRow>`
+    select result.payload_json
+    from terminal_results result
+    join attempts attempt on attempt.id = result.attempt_id
+    where attempt.work_ref_kind = ${workRef.kind}
+      and attempt.work_ref_id = ${workRef.id}
+      and attempt.role = 'implementation'
+      and attempt.status = 'closed'
+      and result.role = 'implementation'
+      and result.result_kind = 'implementation_outcome'
+    order by attempt.attempt_number
+  `.execute(database);
+  let noProgress = 0;
+  let rework = 0;
+  for (const row of query.rows) {
+    const outcome: unknown = JSON.parse(row.payload_json);
+    if (!isImplementationOutcome(outcome)) {
+      throw new Error("attempt.persisted_implementation_outcome_invalid");
+    }
+    if (outcome.status === "no_progress") noProgress += 1;
+    if (outcome.status === "needs_rework") rework += 1;
+  }
+  return { noProgress, rework };
 }
 
 interface SettlementLedgerRow {
@@ -207,5 +242,22 @@ export async function finishAttemptInTransaction(
         `.execute(transaction);
   if (claim.numAffectedRows !== 1n) {
     throw new Error(`Running claim for ${input.workRef.kind}:${input.workRef.id} is missing`);
+  }
+  if (input.nextClaim.mode === "AwaitingHuman" && input.parkedOriginStage) {
+    await sql`
+      insert into parked_work (
+        work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+        question_id, parked_at, last_checked_at, resolved_at
+      ) values (
+        ${input.workRef.kind}, ${input.workRef.id}, ${input.parkedOriginStage},
+        ${input.nextClaim.reason}, ${input.nextClaim.blockerPredicate},
+        ${input.nextClaim.questionId}, ${input.endedAt}, ${input.endedAt}, null
+      )
+      on conflict (work_ref_kind, work_ref_id) do update set
+        origin_stage = excluded.origin_stage, reason = excluded.reason,
+        blocker_predicate = excluded.blocker_predicate, question_id = excluded.question_id,
+        parked_at = excluded.parked_at, last_checked_at = excluded.last_checked_at,
+        resolved_at = null
+    `.execute(transaction);
   }
 }

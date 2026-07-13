@@ -693,6 +693,7 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
+              maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
               newId: randomUUID,
               now: () => new Date().toISOString(),
               onPlanSubmitted: createInitialPlanSubmissionHandler({
@@ -816,6 +817,7 @@ export function createProductionScheduler(input: {
             database: input.database,
             hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
             issue: stored.issue,
+            maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
             newId: randomUUID,
             now: () => new Date().toISOString(),
             onPlanSubmitted: createInitialPlanSubmissionHandler({

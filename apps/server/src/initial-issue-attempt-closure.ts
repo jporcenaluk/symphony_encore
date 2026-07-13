@@ -6,10 +6,14 @@ import {
   isImplementationOutcome,
 } from "@symphony/contracts";
 import type { FailureClass } from "@symphony/domain";
-import type { PersistenceSafetyController } from "@symphony/orchestration";
+import {
+  type PersistenceSafetyController,
+  routeImplementationOutcome,
+} from "@symphony/orchestration";
 import {
   finishAttempt,
   loadAttemptSettlementState,
+  loadImplementationOutcomeCounts,
   type OpenedDatabase,
 } from "@symphony/persistence";
 
@@ -21,19 +25,29 @@ export async function closeInitialIssueAttempt(input: {
   database: OpenedDatabase["database"];
   endedAt: string;
   issue: Issue;
+  maxReworkCycles: number;
   newId(): string;
   providerRevision: string;
   reservationId: string;
   safety: PersistenceSafetyController;
 }): Promise<void> {
   const terminalResultId = input.newId();
-  if (!terminalResultId || !input.providerRevision) {
+  if (
+    !terminalResultId ||
+    !input.providerRevision ||
+    !Number.isSafeInteger(input.maxReworkCycles) ||
+    input.maxReworkCycles < 0
+  ) {
     throw new Error("attempt_closure.identity_invalid");
   }
   try {
     const settlement = await loadAttemptSettlementState(input.database, {
       attemptId: input.attemptId,
       reservationId: input.reservationId,
+    });
+    const outcomeCounts = await loadImplementationOutcomeCounts(input.database, {
+      id: input.issue.id,
+      kind: "issue",
     });
     const consumption = normalizeConsumption(input.consumption);
     const failureClass =
@@ -43,7 +57,8 @@ export async function closeInitialIssueAttempt(input: {
       costUsd: settlement.costUsd,
       endedAt: input.endedAt,
       failureClass,
-      nextClaim: nextClaim(consumption),
+      nextClaim: nextClaim(consumption, input.maxReworkCycles, outcomeCounts),
+      parkedOriginStage: "In Progress",
       reservationId: input.reservationId,
       settledLedgers: settlement.ledgers.map((ledger) => ({
         actualAmount:
@@ -109,7 +124,11 @@ function normalizeConsumption(
   return consumption;
 }
 
-function nextClaim(consumption: ReturnType<typeof normalizeConsumption>):
+function nextClaim(
+  consumption: ReturnType<typeof normalizeConsumption>,
+  maxReworkCycles: number,
+  outcomeCounts: { noProgress: number; rework: number },
+):
   | { mode: "Ready"; reason: string }
   | {
       approvalRequestId: null;
@@ -136,10 +155,32 @@ function nextClaim(consumption: ReturnType<typeof normalizeConsumption>):
       return { mode: "Ready", reason: "independent_verification_required" };
     case "plan_ready":
       return { mode: "Ready", reason: "plan_review_required" };
-    case "needs_rework":
-      return { mode: "Ready", reason: "implementation_rework" };
-    case "no_progress":
-      return { mode: "Ready", reason: "no_progress_retry" };
+    case "needs_rework": {
+      const route = routeImplementationOutcome({
+        agentVerificationPassed: null,
+        maxReworkCycles,
+        noProgressCount: outcomeCounts.noProgress,
+        reworkCycle: outcomeCounts.rework + 1,
+        status: "needs_rework",
+        workKind: "issue",
+      });
+      return route.route === "issue_lane" && route.claimMode === "AwaitingHuman"
+        ? awaitingHuman("human_review")
+        : { mode: "Ready", reason: "implementation_rework" };
+    }
+    case "no_progress": {
+      const route = routeImplementationOutcome({
+        agentVerificationPassed: null,
+        maxReworkCycles,
+        noProgressCount: outcomeCounts.noProgress,
+        reworkCycle: outcomeCounts.rework,
+        status: "no_progress",
+        workKind: "issue",
+      });
+      return route.route === "retry_fresh"
+        ? { mode: "Ready", reason: "no_progress_retry" }
+        : awaitingHuman("no_progress");
+    }
     case "failed":
       return { mode: "Ready", reason: "implementation_failed" };
   }

@@ -163,6 +163,7 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
@@ -195,6 +196,7 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",
@@ -217,6 +219,71 @@ describe("initial issue attempt closure", () => {
     });
   });
 
+  it("parks a second no-progress outcome instead of retrying indefinitely", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values (
+          'attempt-prior', 'issue', 'issue-1', 'implementation', 2, '/tmp/work/issue-1',
+          'config-1', 'standard', 'model', 'medium', '[]', 'standard', 't0', 't1', 'closed',
+          'result-prior'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into terminal_results (
+          id, attempt_id, role, result_kind, payload_json, created_at
+        ) values ('result-prior', 'attempt-prior', 'implementation',
+          'implementation_outcome', ?, 't1')`,
+      )
+      .run(
+        JSON.stringify({
+          actions_requested: [],
+          confusions: [],
+          evidence: [],
+          handoff,
+          status: "no_progress",
+          summary: "The first fresh attempt made no progress.",
+        }),
+      );
+
+    await closeInitialIssueAttempt({
+      attemptId: "attempt-1",
+      consumption: {
+        kind: "terminal_result",
+        result: {
+          actions_requested: [],
+          confusions: [],
+          evidence: [],
+          handoff,
+          status: "no_progress",
+          summary: "A second fresh attempt also made no progress.",
+        },
+      },
+      database: opened.database,
+      endedAt: "2026-07-13T10:01:00Z",
+      issue,
+      maxReworkCycles: 2,
+      newId: () => "result-1",
+      providerRevision: "revision-8",
+      reservationId: "reservation-1",
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+    });
+
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "AwaitingHuman",
+      reason: "no_progress",
+    });
+    expect(opened.sqlite.prepare("select origin_stage, reason from parked_work").get()).toEqual({
+      origin_stage: "In Progress",
+      reason: "no_progress",
+    });
+  });
+
   it("rejects completed outcomes without passing agent verification", async () => {
     await closeInitialIssueAttempt({
       attemptId: "attempt-1",
@@ -235,6 +302,7 @@ describe("initial issue attempt closure", () => {
       database: opened.database,
       endedAt: "2026-07-13T10:01:00Z",
       issue,
+      maxReworkCycles: 2,
       newId: () => "result-1",
       providerRevision: "revision-8",
       reservationId: "reservation-1",

@@ -14,6 +14,7 @@ export interface StartedInitialIssueAttemptLifecycle {
 
 type LifecycleInput = ExecutePlannedInitialIssueAttemptInput & {
   attemptTokenCap: number;
+  maxReworkCycles: number;
   serviceRunId: string;
   usdCap: number;
 };
@@ -35,6 +36,7 @@ export async function runPlannedInitialIssueAttemptLifecycle(
 async function consumeAndClose(
   input: ExecutePlannedInitialIssueAttemptInput & {
     attemptTokenCap: number;
+    maxReworkCycles: number;
     serviceRunId: string;
     usdCap: number;
   },
@@ -77,6 +79,7 @@ async function consumeAndClose(
     database: input.database,
     endedAt: input.now(),
     issue: input.issue,
+    maxReworkCycles: input.maxReworkCycles,
     newId: input.newId,
     providerRevision,
     reservationId: input.planned.record.dispatch.reservation.id,

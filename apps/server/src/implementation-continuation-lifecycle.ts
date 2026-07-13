@@ -9,6 +9,7 @@ import { closeInitialIssueAttempt } from "./initial-issue-attempt-closure.js";
 
 type LifecycleInput = ExecuteImplementationContinuationInput & {
   attemptTokenCap: number;
+  maxReworkCycles: number;
   serviceRunId: string;
   usdCap: number;
 };
@@ -71,6 +72,7 @@ async function consumeAndClose(
     database: input.database,
     endedAt: input.now(),
     issue: input.issue,
+    maxReworkCycles: input.maxReworkCycles,
     newId: input.newId,
     providerRevision: started.repositoryRevision,
     reservationId: input.planned.dispatch.reservation.id,
