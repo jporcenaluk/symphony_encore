@@ -9,7 +9,7 @@ command. A green but narrower test does not complete a broader item.
 ## Current state
 
 - Branch target: `feat/symphony-encore-core`.
-- Current milestone: normalized SQLite records and repository boundaries.
+- Current milestone: transactional external effects and restart reconciliation.
 - Canonical gate: not implemented yet.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
@@ -28,10 +28,10 @@ command. A green but narrower test does not complete a broader item.
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
-| S10 | Git, pull requests, and serialized merge queues | Not started | Repository adapter and multi-queue integration tests |
+| S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | Not started | API capability and durable routing tests |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | Not started | Deterministic clock and restart integration tests |
+| S13 | Failure classification, retry, and restart recovery | In progress | Receipt-less side-effect intents reconstruct deterministically; lease/process recovery pending |
 | S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope and bootstrap-key boundary pass; auth/sandbox pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -47,7 +47,7 @@ command. A green but narrower test does not complete a broader item.
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | Not started | Contract drift and reconnect tests |
-| T05 | Pure domain transitions and transactional orchestration | In progress | Classification/lifecycle/plan/budget/review/authority policies pass |
+| T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Five checksummed migrations cover all durable entities; WAL, atomic core transactions, configuration history, and issue restart round-trip pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
@@ -128,3 +128,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Durable schemas, normalized adapter contracts, pagination |
 | 2026-07-13 | working tree | `make verify-fast` | 142 tests; lint, generated-contract drift, and typecheck passed | Complete entity tables and issue restart repository |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Complete entity tables and issue restart repository |
+| 2026-07-13 | working tree | `make verify-fast` | 147 tests; lint, generated-contract drift, and typecheck passed | Authorized intents, idempotency, reconciliation, receipt-confirmed stages |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Authorized intents, idempotency, reconciliation, receipt-confirmed stages |

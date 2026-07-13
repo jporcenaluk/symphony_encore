@@ -1,4 +1,4 @@
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 
@@ -48,31 +48,39 @@ export async function transitionStage(
   input: StageTransitionInput,
 ): Promise<void> {
   await database.transaction().execute(async (transaction) => {
-    if (input.attemptId !== null) {
-      const attempt = await sql<{ id: string }>`
+    await transitionStageInTransaction(transaction, input);
+  });
+}
+
+export async function transitionStageInTransaction(
+  transaction: Transaction<DatabaseSchema>,
+  input: StageTransitionInput,
+): Promise<void> {
+  if (input.attemptId !== null) {
+    const attempt = await sql<{ id: string }>`
         select id from attempts
         where id = ${input.attemptId}
           and work_ref_kind = ${input.workRef.kind}
           and work_ref_id = ${input.workRef.id}
       `.execute(transaction);
-      if (attempt.rows.length !== 1) {
-        throw new Error(`Attempt ${input.attemptId} does not belong to the stage work reference`);
-      }
+    if (attempt.rows.length !== 1) {
+      throw new Error(`Attempt ${input.attemptId} does not belong to the stage work reference`);
     }
+  }
 
-    const open = await sql<{ entered_at: string }>`
+  const open = await sql<{ entered_at: string }>`
       select entered_at from stage_transitions
       where work_ref_kind = ${input.workRef.kind}
         and work_ref_id = ${input.workRef.id}
         and to_stage = ${input.expectedFromStage}
         and exited_at is null
     `.execute(transaction);
-    const current = open.rows[0];
-    if (!current) {
-      throw new Error(`Open stage does not match expected stage ${input.expectedFromStage}`);
-    }
-    const durationMs = durationBetween(current.entered_at, input.enteredAt);
-    const close = await sql`
+  const current = open.rows[0];
+  if (!current) {
+    throw new Error(`Open stage does not match expected stage ${input.expectedFromStage}`);
+  }
+  const durationMs = durationBetween(current.entered_at, input.enteredAt);
+  const close = await sql`
       update stage_transitions
       set exited_at = ${input.enteredAt}, duration_ms = ${durationMs}
       where work_ref_kind = ${input.workRef.kind}
@@ -80,10 +88,10 @@ export async function transitionStage(
         and to_stage = ${input.expectedFromStage}
         and exited_at is null
     `.execute(transaction);
-    if (close.numAffectedRows !== 1n) {
-      throw new Error(`Open stage does not match expected stage ${input.expectedFromStage}`);
-    }
-    await sql`
+  if (close.numAffectedRows !== 1n) {
+    throw new Error(`Open stage does not match expected stage ${input.expectedFromStage}`);
+  }
+  await sql`
       insert into stage_transitions (
         id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, attempt_id,
         confirmed_external_revision, entered_at, exited_at, duration_ms, timestamp_source
@@ -94,5 +102,4 @@ export async function transitionStage(
         ${input.timestampSource}
       )
     `.execute(transaction);
-  });
 }
