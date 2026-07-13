@@ -1,8 +1,10 @@
 import {
+  type AdjudicationResult,
   isReviewRecord,
   isReviewResult,
   type ReviewRecord,
   type ReviewResult,
+  validateAdjudicationResult,
 } from "@symphony/contracts";
 import {
   decideReviewSet,
@@ -41,6 +43,7 @@ export interface PendingReviewCoordination {
   changeClass: "standard" | "high_risk";
   patchIdentity: string;
   proposedPaths: readonly string[];
+  rejectedFindingIds: readonly string[];
   records: readonly {
     decision: ReviewRecord["decision"];
     findings: ReviewRecord["findings"];
@@ -80,6 +83,10 @@ interface CoordinationRecordRow {
   target_sha: string;
 }
 
+interface AdjudicationResultRow {
+  payload_json: string;
+}
+
 export async function loadPendingReviewCoordination(
   database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
   workRef: WorkRef,
@@ -115,10 +122,13 @@ export async function loadPendingReviewCoordination(
       )
     where claim.work_ref_kind = ${workRef.kind}
       and claim.work_ref_id = ${workRef.id}
-      and claim.mode = 'Ready'
       and (
-        claim.reason = 'review_coordination_required'
-        or claim.reason like 'specialist_review_required:%'
+        (claim.mode = 'Ready' and (
+          claim.reason = 'review_coordination_required'
+          or claim.reason like 'specialist_review_required:%'
+          or claim.reason = 'adjudication_required'
+        ))
+        or (claim.mode = 'Running' and claim.reason = 'adjudication')
       )
     order by attempt.attempt_number desc, verification.ended_at desc
     limit 1
@@ -141,10 +151,12 @@ export async function loadPendingReviewCoordination(
       and record.patch_identity = ${target.patch_identity}
     order by attempt.attempt_number
   `.execute(database);
+  const rejectedFindingIds = await loadRejectedFindingIds(database, workRef, target.target_sha);
   return {
     changeClass: target.change_class,
     patchIdentity: target.patch_identity,
     proposedPaths,
+    rejectedFindingIds,
     records: records.rows.map((row) => coordinationRecord(row, workRef)),
     targetBaseSha: target.target_base_sha,
     targetSha: target.target_sha,
@@ -433,6 +445,131 @@ export async function routeReviewAdjudication(
   });
 }
 
+export async function finishAdjudicationAttempt(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    attemptId: string;
+    costUsd: number | null;
+    endedAt: string;
+    questionId: string | null;
+    reservationId: string;
+    result: AdjudicationResult;
+    reviewRecordId: string;
+    settledLedgers: readonly { actualAmount: number; id: string }[];
+    terminalResultId: string;
+    usage: { inputTokens: number; outputTokens: number };
+    workRef: WorkRef;
+  },
+): Promise<void> {
+  const validation = validateAdjudicationResult(input.result);
+  if (!validation.ok) throw new Error(validation.reason);
+  if (
+    !input.attemptId ||
+    !input.reviewRecordId ||
+    !input.terminalResultId ||
+    (input.result.decision === "needs_human") !== Boolean(input.questionId)
+  ) {
+    throw new Error("adjudication.finish_input_invalid");
+  }
+  await database.transaction().execute(async (transaction) => {
+    const pending = await loadPendingReviewCoordination(transaction, input.workRef);
+    if (!pending || pending.targetSha !== input.result.target_sha) {
+      throw new Error("adjudication.target_missing");
+    }
+    const conflicts = findContraryReviewFindings(reviewRecordSummaries(pending));
+    const expectedConflictIds = conflicts.map((conflict) => conflict.conflictId).sort();
+    const actualConflictIds = [...input.result.conflict_ids].sort();
+    if (!stringListsEqual(expectedConflictIds, actualConflictIds)) {
+      throw new Error("adjudication.conflict_set_mismatch");
+    }
+    if (input.result.decision === "resolve") {
+      for (const resolution of input.result.resolutions) {
+        const conflict = conflicts.find(
+          (candidate) => candidate.conflictId === resolution.conflict_id,
+        );
+        if (!conflict) throw new Error("adjudication.conflict_missing");
+        const upheld = new Set(resolution.upheld_finding_ids);
+        const rejected = new Set(resolution.rejected_finding_ids);
+        if (
+          rejected.size === 0 ||
+          [...upheld].some((id) => rejected.has(id)) ||
+          !stringListsEqual(
+            [...new Set([...upheld, ...rejected])].sort(),
+            [...conflict.findingIds].sort(),
+          )
+        ) {
+          throw new Error("adjudication.finding_partition_invalid");
+        }
+      }
+    }
+    await sql`
+      insert into review_records (
+        id, work_ref_kind, work_ref_id, attempt_id, reviewer_role, target_sha,
+        target_base_sha, patch_identity, decision, findings_json, created_at
+      ) values (
+        ${input.reviewRecordId}, ${input.workRef.kind}, ${input.workRef.id}, ${input.attemptId},
+        'adjudication', ${pending.targetSha}, ${pending.targetBaseSha}, ${pending.patchIdentity},
+        ${input.result.decision === "resolve" ? "approve" : "needs_human"}, '[]', ${input.endedAt}
+      )
+    `.execute(transaction);
+    if (input.result.decision === "needs_human") {
+      const questionId = input.questionId as string;
+      await sql`
+        insert into operator_questions (
+          id, work_ref_kind, work_ref_id, attempt_id, text, options_json,
+          default_answer, comment_marker, comment_cursor, asked_at,
+          reminded_at, answered_at, answer, answered_by
+        ) values (
+          ${questionId}, ${input.workRef.kind}, ${input.workRef.id}, ${input.attemptId},
+          ${input.result.question.text}, ${JSON.stringify(input.result.question.options)},
+          ${input.result.question.default}, ${`symphony-question:${questionId}`}, null,
+          ${input.endedAt}, null, null, null, null
+        )
+      `.execute(transaction);
+      await sql`
+        insert into parked_work (
+          work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+          question_id, parked_at, last_checked_at, resolved_at
+        ) values (
+          ${input.workRef.kind}, ${input.workRef.id}, 'Review', 'human_review', null,
+          ${questionId}, ${input.endedAt}, ${input.endedAt}, null
+        )
+        on conflict (work_ref_kind, work_ref_id) do update set
+          origin_stage = excluded.origin_stage, reason = excluded.reason,
+          blocker_predicate = null, question_id = excluded.question_id,
+          parked_at = excluded.parked_at, last_checked_at = excluded.last_checked_at,
+          resolved_at = null
+      `.execute(transaction);
+    }
+    await finishAttemptInTransaction(transaction, {
+      attemptId: input.attemptId,
+      costUsd: input.costUsd,
+      endedAt: input.endedAt,
+      failureClass: null,
+      nextClaim:
+        input.result.decision === "resolve"
+          ? { mode: "Ready", reason: "review_coordination_required" }
+          : {
+              approvalRequestId: null,
+              blockerPredicate: null,
+              mode: "AwaitingHuman",
+              questionId: input.questionId,
+              reason: "human_review",
+            },
+      reservationId: input.reservationId,
+      settledLedgers: input.settledLedgers,
+      terminalResult: {
+        id: input.terminalResultId,
+        kind: "adjudication_result",
+        payload: input.result,
+        role: "adjudication",
+      },
+      usage: input.usage,
+      workRef: input.workRef,
+    });
+  });
+}
+
 function validateFinishInput(input: FinishReviewAttemptInput): void {
   if (
     !input.attemptId ||
@@ -510,18 +647,54 @@ function stableJson(value: unknown): string {
 }
 
 function reviewRecordSummaries(pending: PendingReviewCoordination): ReviewRecordSummary[] {
+  const rejected = new Set(pending.rejectedFindingIds);
   return pending.records.map((record) => ({
     decision: record.decision,
-    findings: record.findings.map((finding) => ({
-      behavior: finding.behavior,
-      blocking: finding.blocking,
-      disposition: finding.disposition,
-      evidenceKey: stableJson(finding.evidence),
-      id: finding.id,
-    })),
+    findings: record.findings
+      .filter((finding) => !rejected.has(finding.id))
+      .map((finding) => ({
+        behavior: finding.behavior,
+        blocking: finding.blocking,
+        disposition: finding.disposition,
+        evidenceKey: stableJson(finding.evidence),
+        id: finding.id,
+      })),
     reviewer: record.reviewer,
     targetSha: record.targetSha,
   }));
+}
+
+async function loadRejectedFindingIds(
+  database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
+  workRef: WorkRef,
+  targetSha: string,
+): Promise<string[]> {
+  const query = await sql<AdjudicationResultRow>`
+    select result.payload_json
+    from terminal_results result
+    join attempts attempt on attempt.id = result.attempt_id
+    where attempt.work_ref_kind = ${workRef.kind}
+      and attempt.work_ref_id = ${workRef.id}
+      and attempt.role = 'adjudication'
+      and attempt.status = 'closed'
+      and result.role = 'adjudication'
+      and result.result_kind = 'adjudication_result'
+    order by attempt.attempt_number
+  `.execute(database);
+  const rejectedFindingIds = new Set<string>();
+  for (const row of query.rows) {
+    const result: unknown = JSON.parse(row.payload_json);
+    const validation = validateAdjudicationResult(result);
+    if (!validation.ok) throw new Error(`review.persisted_${validation.reason}`);
+    const adjudication = result as AdjudicationResult;
+    if (adjudication.decision !== "resolve" || adjudication.target_sha !== targetSha) continue;
+    for (const resolution of adjudication.resolutions) {
+      for (const findingId of resolution.rejected_finding_ids) {
+        rejectedFindingIds.add(findingId);
+      }
+    }
+  }
+  return [...rejectedFindingIds];
 }
 
 function validateReviewSetInput(input: {
@@ -553,4 +726,8 @@ function reviewSetRoute(decision: ReviewRecord["decision"]): {
     case "blocked":
       return { mode: "AwaitingHuman", reason: "blocked" };
   }
+}
+
+function stringListsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }

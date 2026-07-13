@@ -8,6 +8,7 @@ import { applyMigrations, openDatabase } from "@symphony/persistence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  planAdjudicationAttempt,
   planIntegrativeReviewAttempt,
   planSpecialistReviewAttempt,
 } from "./integrative-review-attempt-planner.js";
@@ -162,6 +163,49 @@ describe("integrative review planning", () => {
       routingReasons: expect.arrayContaining([
         "specialist.name:systems_security",
         "specialist.trigger:risk.security_auth",
+      ]),
+    });
+    const adjudication = await planAdjudicationAttempt({
+      adapter,
+      configSnapshotId: "config-1",
+      configuration: configuration(),
+      conflicts: [
+        {
+          conflictId: "conflict:finding-1+finding-2",
+          findings: [
+            {
+              behavior: "Retry can duplicate a charge",
+              disposition: "Make the insert idempotent",
+              evidence: [{ kind: "file", path: "src/billing.ts" }],
+              id: "finding-1",
+              reviewer: "integrative_review",
+              severity: "high",
+            },
+            {
+              behavior: "Retry can duplicate a charge",
+              disposition: "Remove automatic retries",
+              evidence: [{ kind: "file", path: "src/worker.ts" }],
+              id: "finding-2",
+              reviewer: "systems_security",
+              severity: "high",
+            },
+          ],
+        },
+      ],
+      context: planned.context,
+      database: opened.database,
+      issue,
+      newId: () => `review-${++sequence}`,
+      now: () => "2026-07-13T10:05:00Z",
+      serviceRunId: "run-1",
+      terminalResultSchema: ReviewResultSchema,
+    });
+    expect(adjudication.route.profile).toBe("deep");
+    expect(adjudication.prompt).toContain("conflict:finding-1+finding-2");
+    expect(adjudication.dispatch.attempt).toMatchObject({
+      role: "adjudication",
+      routingReasons: expect.arrayContaining([
+        "adjudication.conflict:conflict:finding-1+finding-2",
       ]),
     });
     await opened.close();

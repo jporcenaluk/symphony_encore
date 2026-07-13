@@ -61,6 +61,7 @@ export interface PlannedIntegrativeReviewAttempt {
 }
 
 export type PlannedSpecialistReviewAttempt = PlannedIntegrativeReviewAttempt;
+export type PlannedAdjudicationAttempt = PlannedIntegrativeReviewAttempt;
 
 interface ReviewPlanningInput {
   adapter: AgentAdapter;
@@ -84,6 +85,18 @@ interface SpecialistSelection {
     requiredEvidence: readonly string[];
   };
   triggeringRules: readonly string[];
+}
+
+export interface AdjudicationConflictInput {
+  conflictId: string;
+  findings: readonly {
+    behavior: string;
+    disposition: string;
+    evidence: readonly unknown[];
+    id: string;
+    reviewer: string;
+    severity: string;
+  }[];
 }
 
 export async function planIntegrativeReviewAttempt(
@@ -114,11 +127,25 @@ export async function planSpecialistReviewAttempt(
   });
 }
 
+export async function planAdjudicationAttempt(
+  input: ReviewPlanningInput & { conflicts: readonly AdjudicationConflictInput[] },
+): Promise<PlannedAdjudicationAttempt> {
+  if (input.conflicts.length === 0) throw new Error("adjudication.conflicts_missing");
+  return planReviewAttempt(input, {
+    prompt: renderAdjudicationPrompt(input.issue, input.context, input.conflicts),
+    role: "adjudication",
+    routeProfiles: input.configuration.routeProfiles,
+    routingReasons: input.conflicts.map(
+      (conflict) => `adjudication.conflict:${conflict.conflictId}`,
+    ),
+  });
+}
+
 async function planReviewAttempt(
   input: ReviewPlanningInput,
   mode: {
     prompt: string;
-    role: "integrative_review" | "specialist_review";
+    role: "integrative_review" | "specialist_review" | "adjudication";
     routeProfiles: ComputeRouteProfiles;
     routingReasons: readonly string[];
   },
@@ -275,6 +302,29 @@ function renderSpecialistPrompt(
       ? [`Repository docs: ${JSON.stringify(context.repositoryDocs)}`]
       : []),
     ...(required.has("diff") ? [`Full diff:\n${context.diff}`] : []),
+  ].join("\n");
+}
+
+function renderAdjudicationPrompt(
+  issue: Issue,
+  context: IntegrativeReviewContext,
+  conflicts: readonly AdjudicationConflictInput[],
+): string {
+  return [
+    "You are the fresh-context adjudicator for explicitly contrary blocking review findings.",
+    "Resolve only the named conflicts from repository evidence.",
+    "Do not erase any uncontested blocking finding.",
+    "Report exactly one typed AdjudicationResult targeting the supplied target SHA.",
+    "",
+    `Issue and acceptance criteria: ${JSON.stringify(issue)}`,
+    `Review target: ${JSON.stringify({
+      base_sha: context.baseSha,
+      patch_identity: context.patchIdentity,
+      target_sha: context.targetSha,
+      verification_record_id: context.verificationRecordId,
+    })}`,
+    `Conflicts: ${JSON.stringify(conflicts)}`,
+    `Full diff:\n${context.diff}`,
   ].join("\n");
 }
 

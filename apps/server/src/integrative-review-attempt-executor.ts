@@ -56,12 +56,23 @@ export async function executePlannedSpecialistReviewAttempt(
   });
 }
 
+export async function executePlannedAdjudicationAttempt(
+  input: ExecutePlannedIntegrativeReviewAttemptInput,
+): Promise<BoundIntegrativeReviewAttempt> {
+  return executePlannedReviewAttempt(input, {
+    expectedReadyReason: "adjudication_required",
+    launchFailureReason: "adjudication_launch_failed",
+    role: "adjudication",
+    title: `adjudication:${input.issue.id}: ${input.issue.title}`,
+  });
+}
+
 async function executePlannedReviewAttempt(
   input: ExecutePlannedIntegrativeReviewAttemptInput,
   mode: {
     expectedReadyReason: string;
     launchFailureReason: string;
-    role: "integrative_review" | "specialist_review";
+    role: "integrative_review" | "specialist_review" | "adjudication";
     title: string;
   },
 ): Promise<BoundIntegrativeReviewAttempt> {
@@ -113,7 +124,10 @@ async function executePlannedReviewAttempt(
 async function closeLaunchFailure(
   input: ExecutePlannedIntegrativeReviewAttemptInput,
   error: unknown,
-  mode: { launchFailureReason: string; role: "integrative_review" | "specialist_review" },
+  mode: {
+    launchFailureReason: string;
+    role: "integrative_review" | "specialist_review" | "adjudication";
+  },
 ): Promise<void> {
   const resultId = input.newId();
   if (!resultId) throw new Error("review.launch_failure_identity_invalid");

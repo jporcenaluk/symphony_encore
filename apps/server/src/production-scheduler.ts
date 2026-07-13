@@ -14,13 +14,18 @@ import {
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
 import {
+  AdjudicationResultSchema,
   ImplementationOutcomeSchema,
   type Issue,
   PlanReviewResultSchema,
   PlanSchema,
   ReviewResultSchema,
 } from "@symphony/contracts";
-import type { ComputeProfile, ProvisionalClassification } from "@symphony/domain";
+import {
+  type ComputeProfile,
+  findContraryReviewFindings,
+  type ProvisionalClassification,
+} from "@symphony/domain";
 import {
   evaluateIssueEligibility,
   PersistenceSafetyController,
@@ -61,10 +66,12 @@ import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attemp
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
 import {
+  startPlannedAdjudicationAttemptLifecycle,
   startPlannedIntegrativeReviewAttemptLifecycle,
   startPlannedSpecialistReviewAttemptLifecycle,
 } from "./integrative-review-attempt-lifecycle.js";
 import {
+  planAdjudicationAttempt,
   planIntegrativeReviewAttempt,
   planSpecialistReviewAttempt,
 } from "./integrative-review-attempt-planner.js";
@@ -191,6 +198,7 @@ export function createProductionScheduler(input: {
         const isPlanReview = claim.reason === "plan_review_required";
         const isIndependentVerification = claim.reason === "independent_verification_required";
         const isIntegrativeReview = claim.reason === "review_required";
+        const isAdjudication = claim.reason === "adjudication_required";
         const isSpecialistReview = claim.reason.startsWith("specialist_review_required:");
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
@@ -199,6 +207,7 @@ export function createProductionScheduler(input: {
           (!isPlanReview &&
             !isIndependentVerification &&
             !isIntegrativeReview &&
+            !isAdjudication &&
             !isReviewCoordination &&
             !isSpecialistReview &&
             !isImplementationContinuation) ||
@@ -452,6 +461,116 @@ export function createProductionScheduler(input: {
                 input.logger?.error(
                   { attempt_id: specialistPlanned.attemptId, error },
                   "specialist review lifecycle failed",
+                ),
+            );
+            continue;
+          }
+          if (isAdjudication) {
+            const pending = await loadPendingReviewCoordination(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!pending) throw new Error(`scheduler.adjudication_target_missing:${issueId}`);
+            const context = await (
+              input.review?.collectEvidence ?? collectIntegrativeReviewContext
+            )({
+              baseSha: pending.targetBaseSha,
+              changeClass: pending.changeClass,
+              commandRunner: createNodeWorkspaceCommandRunner(),
+              sourceEnvironment: input.environment,
+              targetSha: pending.targetSha,
+              timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+              verificationRecordId: pending.verificationRecordId,
+              workspace: pending.workspacePath,
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            const rejectedFindingIds = new Set(pending.rejectedFindingIds);
+            const summaries = pending.records.map((record) => ({
+              decision: record.decision,
+              findings: record.findings
+                .filter((finding) => !rejectedFindingIds.has(finding.id))
+                .map((finding) => ({
+                  behavior: finding.behavior,
+                  blocking: finding.blocking,
+                  disposition: finding.disposition,
+                  evidenceKey: JSON.stringify(finding.evidence),
+                  id: finding.id,
+                })),
+              reviewer: record.reviewer,
+              targetSha: record.targetSha,
+            }));
+            const conflicts = findContraryReviewFindings(summaries).map((conflict) => ({
+              conflictId: conflict.conflictId,
+              findings: pending.records.flatMap((record) =>
+                record.findings
+                  .filter(
+                    (finding) =>
+                      !rejectedFindingIds.has(finding.id) &&
+                      conflict.findingIds.includes(finding.id),
+                  )
+                  .map((finding) => ({
+                    behavior: finding.behavior,
+                    disposition: finding.disposition,
+                    evidence: finding.evidence,
+                    id: finding.id,
+                    reviewer: record.reviewer,
+                    severity: finding.severity,
+                  })),
+              ),
+            }));
+            const adjudicationPlanned = await planAdjudicationAttempt({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              conflicts,
+              context,
+              database: input.database,
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              serviceRunId: input.serviceRunId,
+              terminalResultSchema: AdjudicationResultSchema,
+            });
+            const adjudicationStarted = await startPlannedAdjudicationAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              planned: adjudicationPlanned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            availableSlots -= 1;
+            running.set(adjudicationPlanned.attemptId, {
+              attemptId: adjudicationPlanned.attemptId,
+              attemptLane: "In Progress",
+              expectedExpiresAt: adjudicationPlanned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId,
+              lastEventAt: adjudicationStarted.bound.started.timestamp,
+              processGroupId: adjudicationStarted.bound.session.processGroupId,
+              processId: adjudicationStarted.bound.session.processId,
+              workspacePath: adjudicationPlanned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              adjudicationStarted.completion,
+              () => running.delete(adjudicationPlanned.attemptId),
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: adjudicationPlanned.attemptId, error },
+                  "adjudication lifecycle failed",
                 ),
             );
             continue;

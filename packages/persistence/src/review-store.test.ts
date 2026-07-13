@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import {
   commitOrdinaryReviewSet,
+  finishAdjudicationAttempt,
   finishReviewAttempt,
   loadPendingIntegrativeReview,
   loadPendingReviewCoordination,
@@ -321,6 +322,134 @@ describe("integrative review repository", () => {
     });
     expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
       count: 0,
+    });
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values (
+          'adjudication-old', 'issue', 'issue-1', 'adjudication', 5, '/work/issue-1',
+          'config-1', 'deep', 'model', 'high', '[]', 'high_risk', 't0', 't0', 'closed',
+          'result-adjudication-old'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into terminal_results (
+          id, attempt_id, role, result_kind, payload_json, created_at
+        ) values (
+          'result-adjudication-old', 'adjudication-old', 'adjudication',
+          'adjudication_result', ?, 't0'
+        )`,
+      )
+      .run(
+        JSON.stringify({
+          conflict_ids: ["conflict:old-1+old-2"],
+          decision: "resolve",
+          evidence: [{ kind: "file", path: "src/old.ts" }],
+          resolutions: [
+            {
+              conflict_id: "conflict:old-1+old-2",
+              evidence: [{ kind: "file", path: "src/old.ts" }],
+              rationale: "Historical resolution for a different immutable target.",
+              rejected_finding_ids: ["finding-1"],
+              upheld_finding_ids: ["old-1"],
+            },
+          ],
+          target_sha: "aaa1111",
+        }),
+      );
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, status
+        ) values (
+          'adjudication-1', 'issue', 'issue-1', 'adjudication', 4, '/work/issue-1',
+          'config-1', 'deep', 'model', 'high', '[]', 'high_risk', 't6', 'running'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `update claims set mode = 'Running', reason = 'adjudication', expires_at = 't9'
+         where work_ref_kind = 'issue' and work_ref_id = 'issue-1'`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into budget_ledgers (
+          id, scope, scope_id, unit, base_limit, adjustment, effective_limit,
+          reserved, consumed, overrun, version, updated_at
+        ) values ('ledger-adjudication', 'attempt', 'adjudication-1', 'tokens',
+          100, 0, 100, 0, 0, 0, 1, 't6')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into budget_reservations (
+          id, work_ref_kind, work_ref_id, attempt_id, estimated_amounts_json,
+          actual_amounts_json, status, created_at, updated_at
+        ) values (
+          'reservation-adjudication', 'issue', 'issue-1', 'adjudication-1',
+          '{"ledger-adjudication":0}', '{}', 'reserved', 't6', 't6'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into budget_reservation_ledgers (reservation_id, ledger_id, reserved_amount)
+         values ('reservation-adjudication', 'ledger-adjudication', 0)`,
+      )
+      .run();
+    await finishAdjudicationAttempt(opened.database, {
+      attemptId: "adjudication-1",
+      costUsd: null,
+      endedAt: "2026-07-13T10:07:00Z",
+      questionId: null,
+      reservationId: "reservation-adjudication",
+      result: {
+        conflict_ids: ["conflict:finding-1+finding-2"],
+        decision: "resolve",
+        evidence: [{ kind: "file", path: "src/billing.ts" }],
+        resolutions: [
+          {
+            conflict_id: "conflict:finding-1+finding-2",
+            evidence: [{ kind: "file", path: "src/billing.ts" }],
+            rationale: "The idempotency finding is supported by the transaction path.",
+            rejected_finding_ids: ["finding-2"],
+            upheld_finding_ids: ["finding-1"],
+          },
+        ],
+        target_sha: "def5678",
+      },
+      reviewRecordId: "review-record-adjudication",
+      settledLedgers: [{ actualAmount: 0, id: "ledger-adjudication" }],
+      terminalResultId: "result-adjudication",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    await commitOrdinaryReviewSet(opened.database, {
+      createdAt: "2026-07-13T10:08:00Z",
+      id: "review-set-1",
+      requiredSpecialistNames: ["systems_security"],
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    expect(
+      opened.sqlite
+        .prepare(
+          `select decision, required_reviewer_roles_json,
+             unresolved_blocking_finding_ids_json from review_sets`,
+        )
+        .get(),
+    ).toEqual({
+      decision: "needs_rework",
+      required_reviewer_roles_json: '["integrative_review","specialist_review","adjudication"]',
+      unresolved_blocking_finding_ids_json: '["finding-1"]',
     });
     await opened.close();
   });

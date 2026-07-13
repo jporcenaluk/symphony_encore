@@ -1,3 +1,4 @@
+import { closeAdjudicationAttempt } from "./adjudication-attempt-closure.js";
 import type { AgentConsumptionResult } from "./agent-event-consumer.js";
 import { consumeAgentSession } from "./agent-event-consumer.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./integrative-review-attempt-closure.js";
 import {
   type ExecutePlannedIntegrativeReviewAttemptInput,
+  executePlannedAdjudicationAttempt,
   executePlannedIntegrativeReviewAttempt,
   executePlannedSpecialistReviewAttempt,
 } from "./integrative-review-attempt-executor.js";
@@ -38,6 +40,16 @@ export async function startPlannedSpecialistReviewAttemptLifecycle(
   return {
     bound: started.bound,
     completion: consumeAndClose(input, started, closeSpecialistReviewAttempt),
+  };
+}
+
+export async function startPlannedAdjudicationAttemptLifecycle(
+  input: LifecycleInput,
+): Promise<StartedIntegrativeReviewAttemptLifecycle> {
+  const started = await executePlannedAdjudicationAttempt(input);
+  return {
+    bound: started.bound,
+    completion: consumeAndClose(input, started, closeAdjudicationAttempt),
   };
 }
 
