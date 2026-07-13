@@ -131,4 +131,18 @@ describe("attempt closure transaction", () => {
       { id: "result-1" },
     ]);
   });
+
+  it("releases terminal work by deleting its active claim in the closure transaction", async () => {
+    await finishAttempt(opened.database, {
+      ...finish,
+      nextClaim: { mode: "Released", reason: "tracker_terminal" },
+    });
+
+    expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+      count: 0,
+    });
+    expect(opened.sqlite.prepare("select status from attempts").get()).toEqual({
+      status: "closed",
+    });
+  });
 });

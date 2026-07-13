@@ -8,6 +8,7 @@ interface SettlementInput {
 }
 
 type NextClaim =
+  | { mode: "Released"; reason: string }
   | { mode: "Ready"; reason: string }
   | { dueAt: string; mode: "RetryQueued"; reason: string }
   | {
@@ -125,22 +126,34 @@ export async function finishAttemptInTransaction(
     throw new Error(`Reservation ${input.reservationId} is already settled or missing`);
   }
 
-  const retryDueAt = input.nextClaim.mode === "RetryQueued" ? input.nextClaim.dueAt : null;
-  const questionId = input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.questionId : null;
-  const approvalRequestId =
-    input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.approvalRequestId : null;
-  const blockerPredicate =
-    input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.blockerPredicate : null;
-  const claim = await sql`
-      update claims
-      set mode = ${input.nextClaim.mode}, updated_at = ${input.endedAt}, expires_at = null,
-          reason = ${input.nextClaim.reason}, retry_due_at = ${retryDueAt},
-          question_id = ${questionId}, approval_request_id = ${approvalRequestId},
-          blocker_predicate = ${blockerPredicate}
-      where work_ref_kind = ${input.workRef.kind}
-        and work_ref_id = ${input.workRef.id}
-        and mode = 'Running'
-    `.execute(transaction);
+  const claim =
+    input.nextClaim.mode === "Released"
+      ? await sql`
+          delete from claims
+          where work_ref_kind = ${input.workRef.kind}
+            and work_ref_id = ${input.workRef.id}
+            and mode = 'Running'
+        `.execute(transaction)
+      : await sql`
+          update claims
+          set mode = ${input.nextClaim.mode}, updated_at = ${input.endedAt}, expires_at = null,
+              reason = ${input.nextClaim.reason},
+              retry_due_at = ${
+                input.nextClaim.mode === "RetryQueued" ? input.nextClaim.dueAt : null
+              },
+              question_id = ${
+                input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.questionId : null
+              },
+              approval_request_id = ${
+                input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.approvalRequestId : null
+              },
+              blocker_predicate = ${
+                input.nextClaim.mode === "AwaitingHuman" ? input.nextClaim.blockerPredicate : null
+              }
+          where work_ref_kind = ${input.workRef.kind}
+            and work_ref_id = ${input.workRef.id}
+            and mode = 'Running'
+        `.execute(transaction);
   if (claim.numAffectedRows !== 1n) {
     throw new Error(`Running claim for ${input.workRef.kind}:${input.workRef.id} is missing`);
   }
