@@ -90,7 +90,7 @@ jobs:
           load: true
           push: false
           tags: symphony-encore:verify
-      - run: test "$(docker image inspect --format '{{.Config.User}}' symphony-encore:verify)" = 10001
+      - run: bash scripts/verify-container.sh symphony-encore:verify
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           exit-code: "1"
