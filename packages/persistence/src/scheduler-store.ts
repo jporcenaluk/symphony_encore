@@ -1,6 +1,8 @@
 import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import { finishAttempt } from "./finish-attempt.js";
+import { loadLatestHandoffForAttempt } from "./interrupted-attempt-recovery.js";
 
 export interface RunningIssueAttemptRecord {
   attemptId: string;
@@ -24,6 +26,21 @@ interface RunningIssueAttemptRow {
   stage: string;
   work_ref_id: string;
   workspace_path: string;
+}
+
+interface ReconciliationAttemptRow {
+  cost_usd: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  role: string;
+  work_ref_id: string;
+  work_ref_kind: "issue" | "system_job";
+}
+
+interface ReconciliationLedgerRow {
+  ledger_id: string;
+  reservation_id: string;
+  unit: "tokens" | "usd";
 }
 
 export async function countRunningClaims(database: Kysely<DatabaseSchema>): Promise<number> {
@@ -86,5 +103,75 @@ export async function listRunningIssueAttempts(
       processId: row.process_id,
       workspacePath: row.workspace_path,
     }));
+  });
+}
+
+export async function closeRunningAttemptForReconciliation(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    attemptId: string;
+    endedAt: string;
+    failureClass: "agent_process" | "auth" | "configuration" | "infrastructure" | "policy" | "task";
+    nextClaim:
+      | { mode: "Ready"; reason: string }
+      | { mode: "Released"; reason: string }
+      | { dueAt: string; mode: "RetryQueued"; reason: string };
+    summary: string;
+    terminalResultId: string;
+  },
+): Promise<void> {
+  if (!input.summary) throw new Error("scheduler.reconciliation_summary_missing");
+  const attempts = await sql<ReconciliationAttemptRow>`
+    select role, work_ref_kind, work_ref_id, input_tokens, output_tokens, cost_usd
+    from attempts where id = ${input.attemptId} and status = 'running'
+  `.execute(database);
+  const attempt = attempts.rows[0];
+  if (!attempt) throw new Error(`scheduler.running_attempt_missing:${input.attemptId}`);
+  const handoff = await loadLatestHandoffForAttempt(database, input.attemptId);
+  const ledgers = await sql<ReconciliationLedgerRow>`
+    select reservation.id as reservation_id, ledger.id as ledger_id, ledger.unit
+    from budget_reservations reservation
+    join budget_reservation_ledgers link on link.reservation_id = reservation.id
+    join budget_ledgers ledger on ledger.id = link.ledger_id
+    where reservation.attempt_id = ${input.attemptId} and reservation.status = 'reserved'
+    order by ledger.id
+  `.execute(database);
+  const reservationIds = new Set(ledgers.rows.map((row) => row.reservation_id));
+  if (reservationIds.size !== 1) {
+    throw new Error(`scheduler.reservation_missing:${input.attemptId}`);
+  }
+  const totalTokens = attempt.input_tokens + attempt.output_tokens;
+  const settledLedgers = ledgers.rows.map((ledger) => {
+    if (ledger.unit === "usd" && attempt.cost_usd === null) {
+      throw new Error(`scheduler.priced_usage_missing:${input.attemptId}`);
+    }
+    return {
+      actualAmount: ledger.unit === "tokens" ? totalTokens : (attempt.cost_usd ?? 0),
+      id: ledger.ledger_id,
+    };
+  });
+  await finishAttempt(database, {
+    attemptId: input.attemptId,
+    costUsd: attempt.cost_usd,
+    endedAt: input.endedAt,
+    failureClass: input.failureClass,
+    nextClaim: input.nextClaim,
+    reservationId: reservationIds.values().next().value as string,
+    settledLedgers,
+    terminalResult: {
+      id: input.terminalResultId,
+      kind: "execution_failure",
+      payload: {
+        evidence: [],
+        failure_class: input.failureClass,
+        handoff,
+        role: attempt.role,
+        status: "failed",
+        summary: input.summary,
+      },
+      role: attempt.role,
+    },
+    usage: { inputTokens: attempt.input_tokens, outputTokens: attempt.output_tokens },
+    workRef: { id: attempt.work_ref_id, kind: attempt.work_ref_kind },
   });
 }

@@ -10,6 +10,7 @@ import {
   loadLatestHandoffForAttempt,
   recoverInterruptedAttempt,
 } from "./interrupted-attempt-recovery.js";
+import { closeRunningAttemptForReconciliation } from "./scheduler-store.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -272,6 +273,46 @@ describe("interrupted attempt recovery", () => {
       { reserved: 200 },
       { reserved: 200 },
       { reserved: 200 },
+    ]);
+  });
+
+  it("atomically settles and releases terminal tracker work after worker shutdown", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into issues (
+          id, identifier, title, description, acceptance_criteria_json, state,
+          labels_json, priority, blocked_by_json, assignee_id, repo_owner,
+          repo_name, url, provider_revision, created_at, updated_at
+        ) values (
+          'issue-1', 'ORG-1', 'Issue', '', '["Work remains recoverable"]',
+          'Done', '[]', null, '[]', null, 'owner', 'repo',
+          'https://example.test/issues/1', 'revision-terminal',
+          '2026-07-13T09:00:00Z', '2026-07-13T10:02:00Z'
+        )`,
+      )
+      .run();
+    await closeRunningAttemptForReconciliation(opened.database, {
+      attemptId: "attempt-1",
+      endedAt: "2026-07-13T10:03:00Z",
+      failureClass: "task",
+      nextClaim: { mode: "Released", reason: "tracker.terminal" },
+      summary: "Tracker issue became terminal during execution",
+      terminalResultId: "result-terminal-1",
+    });
+
+    expect(opened.sqlite.prepare("select status, failure_class from attempts").get()).toEqual({
+      failure_class: "task",
+      status: "closed",
+    });
+    expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+      count: 0,
+    });
+    expect(
+      opened.sqlite.prepare("select reserved, consumed from budget_ledgers order by id").all(),
+    ).toEqual([
+      { consumed: 120, reserved: 0 },
+      { consumed: 120, reserved: 0 },
+      { consumed: 120, reserved: 0 },
     ]);
   });
 });
