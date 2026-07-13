@@ -152,6 +152,10 @@ export const ImplementationOutcomeSchema = Type.Union([
 ]);
 export type ImplementationOutcome = Static<typeof ImplementationOutcomeSchema>;
 
+export function isImplementationOutcome(value: unknown): value is ImplementationOutcome {
+  return Value.Check(ImplementationOutcomeSchema, value);
+}
+
 export type QuestionValidation =
   | { ok: true }
   | { ok: false; reason: "question.invalid" | "question.default_not_in_options" };

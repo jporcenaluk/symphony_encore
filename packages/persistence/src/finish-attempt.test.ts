@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import { createDispatch } from "./dispatch-store.js";
-import { finishAttempt } from "./finish-attempt.js";
+import { finishAttempt, loadAttemptSettlementState } from "./finish-attempt.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -88,6 +88,24 @@ const finish = {
 };
 
 describe("attempt closure transaction", () => {
+  it("loads the exact open usage and reservation units needed for closure", async () => {
+    await expect(
+      loadAttemptSettlementState(opened.database, {
+        attemptId: "attempt-1",
+        reservationId: "reservation-1",
+      }),
+    ).resolves.toEqual({
+      costUsd: null,
+      inputTokens: 0,
+      ledgers: [
+        { id: "attempt-ledger", unit: "tokens" },
+        { id: "fleet-ledger", unit: "tokens" },
+        { id: "issue-ledger", unit: "tokens" },
+      ],
+      outputTokens: 0,
+    });
+  });
+
   it("atomically closes the attempt, settles budgets, and keeps a Ready claim", async () => {
     await finishAttempt(opened.database, finish);
 

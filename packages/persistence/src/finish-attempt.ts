@@ -42,6 +42,57 @@ interface ReservationLedgerRow {
   reserved_amount: number;
 }
 
+interface AttemptSettlementRow {
+  cost_usd: number | null;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+interface SettlementLedgerRow {
+  ledger_id: string;
+  unit: "tokens" | "usd";
+}
+
+export interface AttemptSettlementState {
+  costUsd: number | null;
+  inputTokens: number;
+  ledgers: readonly { id: string; unit: "tokens" | "usd" }[];
+  outputTokens: number;
+}
+
+export async function loadAttemptSettlementState(
+  database: Kysely<DatabaseSchema>,
+  input: { attemptId: string; reservationId: string },
+): Promise<AttemptSettlementState> {
+  const attempts = await sql<AttemptSettlementRow>`
+    select attempts.input_tokens, attempts.output_tokens, attempts.cost_usd
+    from attempts
+    join budget_reservations
+      on budget_reservations.attempt_id = attempts.id
+      and budget_reservations.id = ${input.reservationId}
+      and budget_reservations.status = 'reserved'
+    where attempts.id = ${input.attemptId} and attempts.status != 'closed'
+  `.execute(database);
+  const attempt = attempts.rows[0];
+  if (!attempt) throw new Error(`Attempt ${input.attemptId} is not open with a reservation`);
+  const ledgers = await sql<SettlementLedgerRow>`
+    select links.ledger_id, ledgers.unit
+    from budget_reservation_ledgers as links
+    join budget_ledgers as ledgers on ledgers.id = links.ledger_id
+    where links.reservation_id = ${input.reservationId}
+    order by links.ledger_id
+  `.execute(database);
+  if (ledgers.rows.length === 0) {
+    throw new Error(`Reservation ${input.reservationId} has no ledgers`);
+  }
+  return {
+    costUsd: attempt.cost_usd,
+    inputTokens: attempt.input_tokens,
+    ledgers: ledgers.rows.map((ledger) => ({ id: ledger.ledger_id, unit: ledger.unit })),
+    outputTokens: attempt.output_tokens,
+  };
+}
+
 export async function finishAttempt(
   database: Kysely<DatabaseSchema>,
   input: FinishAttemptInput,
