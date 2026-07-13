@@ -215,6 +215,7 @@ describe("planned initial issue attempt execution", () => {
       database: opened.database,
       hookTimeoutMs: 60_000,
       issue,
+      newId: () => "failure-result-unused",
       now: () => "2026-07-13T10:00:02.000Z",
       planned,
       repositoryAdapter,
@@ -248,6 +249,113 @@ describe("planned initial issue attempt execution", () => {
     ).toEqual({ count: 1 });
     expect(opened.sqlite.prepare("select count(*) as count from live_sessions").get()).toEqual({
       count: 1,
+    });
+  });
+
+  it("closes and settles a charged attempt when workspace preparation fails", async () => {
+    const order: string[] = [];
+    const agent = createAgent(order);
+    let sequence = 0;
+    const planned = await planInitialIssueAttempt({
+      adapter: agent,
+      configSnapshotId: "config-1",
+      configuration: {
+        budgetLimits: {
+          attemptTokens: 400_000,
+          attemptUsd: 5,
+          fleetTokens: 10_000_000,
+          fleetUsd: 50,
+          issueTokens: 2_000_000,
+          issueUsd: 10,
+        },
+        enabledProfiles: ["economy", "standard", "deep"],
+        estimateTokensByProfile: { deep: 300_000, economy: 100_000, standard: 200_000 },
+        historyMinSamples: 10,
+        historyWindowSamples: 50,
+        leaseTtlMs: 120_000,
+        prompt: "Implement {{ issue.title }}.",
+        requiredSkills: [],
+        riskFloorRules: [],
+        routeProfiles: {
+          adjudication: "deep",
+          implementation: { high_risk: "deep", standard: "standard", trivial: "economy" },
+          integrative_review: "standard",
+          plan_review: "economy",
+          specialist_review: "deep",
+          synthesis: "deep",
+        },
+        rules: "",
+        skillRoots: [],
+        workspaceRoot,
+      },
+      database: opened.database,
+      issue,
+      newId: () => `failed-${++sequence}`,
+      now: () => "2026-07-13T10:00:00.000Z",
+      providerRevision: "revision-7",
+      routingFacts: new Set(),
+      serviceRunId: "run-1",
+      submitPlanSchema: PlanSchema,
+      terminalResultSchema: ImplementationOutcomeSchema,
+    });
+    const tracker = {
+      updateIssueLane: vi.fn(async () => {
+        order.push("lane");
+        return {
+          providerRequestId: "request-1",
+          responsePayloadHash: "sha256:receipt",
+          result: "updated",
+          resultRevision: "revision-8",
+        };
+      }),
+    } as unknown as TrackerAdapter;
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      async populateIssueWorkspace() {
+        order.push("populate");
+        throw new Error("workspace.populate_failed");
+      },
+    };
+
+    await expect(
+      executePlannedInitialIssueAttempt({
+        adapter: agent,
+        agentCommand: "codex app-server",
+        afterCreateCommand: null,
+        allowlistedEnvironmentNames: [],
+        beforeRunCommand: null,
+        database: opened.database,
+        hookTimeoutMs: 60_000,
+        issue,
+        newId: () => "failure-result-1",
+        now: () => "2026-07-13T10:00:02.000Z",
+        planned,
+        repositoryAdapter,
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        sourceEnvironment: {},
+        tracker,
+        workspaceRoot,
+      }),
+    ).rejects.toThrow("workspace.populate_failed");
+
+    expect(order).toEqual(["lane", "populate"]);
+    expect(opened.sqlite.prepare("select status, failure_class from attempts").get()).toEqual({
+      failure_class: "infrastructure",
+      status: "closed",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "launch_failed",
+    });
+    expect(opened.sqlite.prepare("select reserved, consumed from budget_ledgers").all()).toEqual([
+      { consumed: 0, reserved: 0 },
+      { consumed: 0, reserved: 0 },
+      { consumed: 0, reserved: 0 },
+    ]);
+    expect(
+      opened.sqlite.prepare("select result_kind, payload_json from terminal_results").get(),
+    ).toEqual({
+      payload_json: expect.stringContaining('"status":"failed"'),
+      result_kind: "execution_failure",
     });
   });
 });
