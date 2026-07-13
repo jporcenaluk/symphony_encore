@@ -14,3 +14,4 @@ export * from "./scheduler/poll-tick.js";
 export * from "./scheduler/running-reconciliation.js";
 export * from "./scheduler/service.js";
 export * from "./workflow-loader.js";
+export * from "./workflow-prompt.js";

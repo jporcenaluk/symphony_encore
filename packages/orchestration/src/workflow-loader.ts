@@ -3,6 +3,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { CONFIGURATION_CATALOG, CONFIGURATION_KEYS } from "./config/catalog.js";
+import { validateWorkflowPromptTemplate } from "./workflow-prompt.js";
 
 export interface ParsedWorkflow {
   config: Record<string, unknown>;
@@ -54,16 +55,6 @@ const SAFETY_NAMESPACES = [
 const BOOTSTRAP_KEYS: ReadonlySet<string> = new Set<string>(
   CONFIGURATION_KEYS.filter((key) => CONFIGURATION_CATALOG[key].reload === "bootstrap"),
 );
-
-const TEMPLATE_ROOTS = new Set([
-  "work_ref",
-  "issue",
-  "system_job",
-  "attempt",
-  "change_class",
-  "plan",
-  "rules",
-]);
 
 function isMap(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,20 +133,6 @@ function filterConfiguration(config: Record<string, unknown>): {
   return { config: filtered, warnings };
 }
 
-function validateTemplate(prompt: string): void {
-  for (const match of prompt.matchAll(/\{\{([\s\S]*?)\}\}/gu)) {
-    const expression = (match[1] ?? "").trim();
-    if (expression.includes("|")) throw new Error("workflow.template_filter_forbidden");
-    if (!/^[A-Za-z_][A-Za-z0-9_.]*$/u.test(expression)) {
-      throw new Error(`workflow.template_unknown_variable:${expression}`);
-    }
-    const root = expression.split(".")[0] ?? "";
-    if (!TEMPLATE_ROOTS.has(root)) {
-      throw new Error(`workflow.template_unknown_variable:${expression}`);
-    }
-  }
-}
-
 export function parseWorkflowText(source: string): ParsedWorkflow {
   const lines = source.split(/\r?\n/u);
   let unfilteredConfig: Record<string, unknown> = {};
@@ -178,7 +155,7 @@ export function parseWorkflowText(source: string): ParsedWorkflow {
 
   const prompt = promptSource.trim();
   if (prompt.length === 0) throw new Error("workflow.prompt_empty");
-  validateTemplate(prompt);
+  validateWorkflowPromptTemplate(prompt);
   const filtered = filterConfiguration(unfilteredConfig);
   return { config: filtered.config, prompt, warnings: filtered.warnings };
 }
