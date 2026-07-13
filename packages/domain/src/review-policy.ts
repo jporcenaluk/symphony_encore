@@ -1,8 +1,16 @@
 export type ReviewDecision = "approve" | "needs_rework" | "needs_human" | "blocked";
 
 export interface ReviewFindingSummary {
+  behavior: string;
   blocking: boolean;
+  disposition: string;
+  evidenceKey: string;
   id: string;
+}
+
+export interface ReviewConflict {
+  conflictId: string;
+  findingIds: readonly string[];
 }
 
 export interface ReviewRecordSummary {
@@ -69,13 +77,7 @@ export function decideReviewSet(input: ReviewSetInput): ReviewSetDecision {
     }
   }
 
-  const unresolvedBlockingFindingIds = [
-    ...new Set(
-      input.records.flatMap((record) =>
-        record.findings.filter((finding) => finding.blocking).map((finding) => finding.id),
-      ),
-    ),
-  ];
+  const unresolvedBlockingFindingIds = deduplicateBlockingFindings(input.records);
   if (input.records.some((record) => record.decision === "blocked")) {
     return { decision: "blocked", reason: "review.reviewer_blocked" };
   }
@@ -89,4 +91,45 @@ export function decideReviewSet(input: ReviewSetInput): ReviewSetDecision {
     return { decision: "needs_rework", unresolvedBlockingFindingIds };
   }
   return { decision: "approve" };
+}
+
+export function findContraryReviewFindings(
+  records: readonly ReviewRecordSummary[],
+): readonly ReviewConflict[] {
+  const byBehavior = new Map<string, { disposition: string; id: string; reviewer: string }[]>();
+  for (const record of records) {
+    for (const finding of record.findings) {
+      if (!finding.blocking) continue;
+      const behavior = finding.behavior.trim().toLocaleLowerCase("en-US");
+      const entries = byBehavior.get(behavior) ?? [];
+      entries.push({
+        disposition: finding.disposition.trim().toLocaleLowerCase("en-US"),
+        id: finding.id,
+        reviewer: record.reviewer,
+      });
+      byBehavior.set(behavior, entries);
+    }
+  }
+  return [...byBehavior.values()].flatMap((entries) => {
+    const reviewers = new Set(entries.map((entry) => entry.reviewer));
+    const dispositions = new Set(entries.map((entry) => entry.disposition));
+    if (reviewers.size < 2 || dispositions.size < 2) return [];
+    const findingIds = [...new Set(entries.map((entry) => entry.id))].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    return [{ conflictId: `conflict:${findingIds.join("+")}`, findingIds }];
+  });
+}
+
+function deduplicateBlockingFindings(records: readonly ReviewRecordSummary[]): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const finding of records.flatMap((record) => record.findings)) {
+    if (!finding.blocking) continue;
+    const key = `${finding.behavior.trim().toLocaleLowerCase("en-US")}\0${finding.evidenceKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ids.push(finding.id);
+  }
+  return ids;
 }

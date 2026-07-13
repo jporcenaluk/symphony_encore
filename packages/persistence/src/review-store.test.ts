@@ -12,6 +12,7 @@ import {
   loadPendingIntegrativeReview,
   loadPendingReviewCoordination,
   routeNextReviewSpecialist,
+  routeReviewAdjudication,
 } from "./review-store.js";
 
 const directories: string[] = [];
@@ -230,6 +231,97 @@ describe("integrative review repository", () => {
     expect(
       opened.sqlite.prepare("select status from attempts where id = 'review-1'").get(),
     ).toEqual({ status: "running" });
+    await opened.close();
+  });
+
+  it("routes contrary cross-reviewer blockers to adjudication without an aggregate set", async () => {
+    const opened = await fixture();
+    opened.sqlite
+      .prepare(
+        "update claims set mode = 'Running', expires_at = 't9', reason = 'integrative_review'",
+      )
+      .run();
+    const finding = {
+      behavior: "Retry can duplicate a charge",
+      blocking: true,
+      disposition: "Make the insert idempotent",
+      evidence: [{ kind: "file" as const, path: "src/billing.ts" }],
+      id: "finding-1",
+      severity: "high" as const,
+    };
+    await finishReviewAttempt(opened.database, {
+      attemptId: "review-1",
+      costUsd: null,
+      endedAt: "2026-07-13T10:05:00Z",
+      patchIdentity: "sha256:patch",
+      reservationId: "reservation-1",
+      result: {
+        decision: "needs_rework",
+        evidence: finding.evidence,
+        findings: [finding],
+        target_sha: "def5678",
+      },
+      reviewRecordId: "review-record-1",
+      reviewerRole: "integrative_review",
+      settledLedgers: [{ actualAmount: 0, id: "ledger-1" }],
+      targetBaseSha: "abc1234",
+      targetSha: "def5678",
+      terminalResultId: "review-result-1",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+          change_class, started_at, ended_at, status, terminal_result_id
+        ) values (
+          'specialist-1', 'issue', 'issue-1', 'specialist_review', 3, '/work/issue-1',
+          'config-1', 'deep', 'model', 'high', '["specialist.name:systems_security"]',
+          'high_risk', 't4', 't5', 'closed', 'specialist-result-1'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into review_records (
+          id, work_ref_kind, work_ref_id, attempt_id, reviewer_role, target_sha,
+          target_base_sha, patch_identity, decision, findings_json, created_at
+        ) values (
+          'review-record-2', 'issue', 'issue-1', 'specialist-1', 'specialist_review',
+          'def5678', 'abc1234', 'sha256:patch', 'needs_rework', ?, 't5'
+        )`,
+      )
+      .run(
+        JSON.stringify([
+          {
+            ...finding,
+            disposition: "Remove automatic retries",
+            evidence: [{ kind: "file", path: "src/worker.ts" }],
+            id: "finding-2",
+          },
+        ]),
+      );
+
+    await expect(
+      routeReviewAdjudication(opened.database, {
+        updatedAt: "2026-07-13T10:06:00Z",
+        workRef: { id: "issue-1", kind: "issue" },
+      }),
+    ).resolves.toEqual([
+      {
+        conflictId: "conflict:finding-1+finding-2",
+        findingIds: ["finding-1", "finding-2"],
+      },
+    ]);
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "adjudication_required",
+    });
+    expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
+      count: 0,
+    });
     await opened.close();
   });
 });

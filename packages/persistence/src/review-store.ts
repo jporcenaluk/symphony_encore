@@ -4,7 +4,12 @@ import {
   type ReviewRecord,
   type ReviewResult,
 } from "@symphony/contracts";
-import { decideReviewSet } from "@symphony/domain";
+import {
+  decideReviewSet,
+  findContraryReviewFindings,
+  type ReviewConflict,
+  type ReviewRecordSummary,
+} from "@symphony/domain";
 import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -290,17 +295,13 @@ export async function commitOrdinaryReviewSet(
       if (count === 0) throw new Error(`review_set.reviewer_missing:${reviewer}`);
       if (count > 1) throw new Error(`review_set.reviewer_duplicate:${reviewer}`);
     }
+    const records = reviewRecordSummaries(pending);
+    if (findContraryReviewFindings(records).length > 0) {
+      throw new Error("review_set.adjudication_required");
+    }
     const decision = decideReviewSet({
       guardDecisions: [],
-      records: pending.records.map((record) => ({
-        decision: record.decision,
-        findings: record.findings.map((finding) => ({
-          blocking: finding.blocking,
-          id: finding.id,
-        })),
-        reviewer: record.reviewer,
-        targetSha: record.targetSha,
-      })),
+      records,
       requiredReviewers,
       targetSha: pending.targetSha,
       verification: { passed: true, targetSha: pending.targetSha },
@@ -407,6 +408,31 @@ export async function routeNextReviewSpecialist(
   });
 }
 
+export async function routeReviewAdjudication(
+  database: Kysely<DatabaseSchema>,
+  input: { updatedAt: string; workRef: WorkRef },
+): Promise<readonly ReviewConflict[]> {
+  if (!Number.isFinite(Date.parse(input.updatedAt))) {
+    throw new Error("review.adjudication_route_input_invalid");
+  }
+  return database.transaction().execute(async (transaction) => {
+    const pending = await loadPendingReviewCoordination(transaction, input.workRef);
+    if (!pending) throw new Error("review_set.coordination_missing");
+    const conflicts = findContraryReviewFindings(reviewRecordSummaries(pending));
+    if (conflicts.length === 0) return [];
+    const claim = await sql`
+      update claims
+      set reason = 'adjudication_required', updated_at = ${input.updatedAt}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = 'review_coordination_required'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("review.adjudication_claim_not_ready");
+    return conflicts;
+  });
+}
+
 function validateFinishInput(input: FinishReviewAttemptInput): void {
   if (
     !input.attemptId ||
@@ -469,6 +495,33 @@ function parseStringList(value: string, message: string): string[] {
     throw new Error(message);
   }
   return parsed as string[];
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort((left, right) => left.localeCompare(right))
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function reviewRecordSummaries(pending: PendingReviewCoordination): ReviewRecordSummary[] {
+  return pending.records.map((record) => ({
+    decision: record.decision,
+    findings: record.findings.map((finding) => ({
+      behavior: finding.behavior,
+      blocking: finding.blocking,
+      disposition: finding.disposition,
+      evidenceKey: stableJson(finding.evidence),
+      id: finding.id,
+    })),
+    reviewer: record.reviewer,
+    targetSha: record.targetSha,
+  }));
 }
 
 function validateReviewSetInput(input: {

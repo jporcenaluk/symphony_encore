@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { decideReviewSet, type ReviewRecordSummary } from "./review-policy.js";
+import {
+  decideReviewSet,
+  findContraryReviewFindings,
+  type ReviewRecordSummary,
+} from "./review-policy.js";
 
 const integrativeRecord: ReviewRecordSummary = {
   decision: "approve",
@@ -60,7 +64,15 @@ describe("ordinary ReviewSet policy", () => {
           integrativeRecord,
           {
             decision: "needs_rework",
-            findings: [{ blocking: true, id: "finding-1" }],
+            findings: [
+              {
+                behavior: "State is acknowledged before persistence",
+                blocking: true,
+                disposition: "Persist before acknowledging",
+                evidenceKey: "file:worker.ts",
+                id: "finding-1",
+              },
+            ],
             reviewer: "systems_security",
             targetSha: "abcdef1",
           },
@@ -71,5 +83,76 @@ describe("ordinary ReviewSet policy", () => {
       decision: "needs_rework",
       unresolvedBlockingFindingIds: ["finding-1"],
     });
+  });
+
+  it("deduplicates equivalent blockers by affected behavior and evidence without voting", () => {
+    const duplicate = {
+      behavior: "State is acknowledged before persistence",
+      blocking: true,
+      disposition: "Persist before acknowledging",
+      evidenceKey: "file:worker.ts",
+    };
+    expect(
+      decideReviewSet({
+        ...passingInput,
+        records: [
+          {
+            ...integrativeRecord,
+            decision: "needs_rework",
+            findings: [{ ...duplicate, id: "finding-integrative" }],
+          },
+          {
+            decision: "needs_rework",
+            findings: [{ ...duplicate, id: "finding-specialist" }],
+            reviewer: "systems_security",
+            targetSha: "abcdef1",
+          },
+        ],
+        requiredReviewers: ["integrative_review", "systems_security"],
+      }),
+    ).toEqual({
+      decision: "needs_rework",
+      unresolvedBlockingFindingIds: ["finding-integrative"],
+    });
+  });
+
+  it("identifies only cross-reviewer blocking disposition conflicts", () => {
+    expect(
+      findContraryReviewFindings([
+        {
+          decision: "needs_rework",
+          findings: [
+            {
+              behavior: "Retry can duplicate a charge",
+              blocking: true,
+              disposition: "Make the insert idempotent",
+              evidenceKey: "file:billing.ts",
+              id: "finding-1",
+            },
+          ],
+          reviewer: "integrative_review",
+          targetSha: "abcdef1",
+        },
+        {
+          decision: "needs_rework",
+          findings: [
+            {
+              behavior: "Retry can duplicate a charge",
+              blocking: true,
+              disposition: "Remove automatic retries",
+              evidenceKey: "file:worker.ts",
+              id: "finding-2",
+            },
+          ],
+          reviewer: "systems_security",
+          targetSha: "abcdef1",
+        },
+      ]),
+    ).toEqual([
+      {
+        conflictId: "conflict:finding-1+finding-2",
+        findingIds: ["finding-1", "finding-2"],
+      },
+    ]);
   });
 });

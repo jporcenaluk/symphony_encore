@@ -46,6 +46,7 @@ import {
   type OpenedDatabase,
   observeIssue,
   routeNextReviewSpecialist,
+  routeReviewAdjudication,
 } from "@symphony/persistence";
 
 import { syncTrackerCandidates } from "./candidate-sync.js";
@@ -249,6 +250,11 @@ export function createProductionScheduler(input: {
               });
               if (routed) continue;
             }
+            const conflicts = await routeReviewAdjudication(input.database, {
+              updatedAt: new Date().toISOString(),
+              workRef: { id: issueId, kind: "issue" },
+            });
+            if (conflicts.length > 0) continue;
             await commitOrdinaryReviewSet(input.database, {
               createdAt: new Date().toISOString(),
               id: randomUUID(),
