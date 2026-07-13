@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import { createDispatch } from "./dispatch-store.js";
-import { recoverInterruptedAttempt } from "./interrupted-attempt-recovery.js";
+import {
+  listInterruptedAttempts,
+  recoverInterruptedAttempt,
+} from "./interrupted-attempt-recovery.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -106,6 +109,21 @@ const handoff = {
 };
 
 describe("interrupted attempt recovery", () => {
+  it("lists every open attempt with its recorded process identity", async () => {
+    await expect(listInterruptedAttempts(opened.database)).resolves.toEqual([
+      {
+        attemptId: "attempt-1",
+        processGroupId: 1230,
+        processId: 1234,
+      },
+    ]);
+
+    opened.sqlite.prepare("delete from live_sessions where attempt_id = 'attempt-1'").run();
+    await expect(listInterruptedAttempts(opened.database)).resolves.toEqual([
+      { attemptId: "attempt-1", processGroupId: null, processId: null },
+    ]);
+  });
+
   it("atomically closes a terminated owned process and requeues its claim", async () => {
     await recoverInterruptedAttempt(opened.database, {
       attemptId: "attempt-1",

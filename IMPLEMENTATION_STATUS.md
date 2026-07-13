@@ -31,7 +31,7 @@ command. A green but narrower test does not complete a broader item.
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated capability-gated Control API read foundation passes; mutations and remaining resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted closure, recovery gates, and verified Linux process-group termination pass; full startup integration pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, and readiness ordering pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -86,7 +86,7 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 - [ ] `C-WF-07` Skill and adapter preflight before charging an attempt.
 - [ ] `C-DUR-01` Atomic claim, attempt, reservation, and receipt-confirmed stage transition.
 - [ ] `C-DUR-02` Lease modes and complete restart reconstruction.
-- [ ] `C-DUR-03` Process ownership verification and interrupted-attempt closure.
+- [x] `C-DUR-03` Process ownership verification and interrupted-attempt closure.
 - [ ] `C-DUR-04` Intent reconciliation and authorization-envelope rejection matrix.
 - [ ] `C-DUR-05` Persistence failure stops dispatch, mutations, and unsafe workers.
 - [ ] `C-PLAN-01` Role result validation and independent verification records.
@@ -154,3 +154,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Abortable live event following, safe SSE framing, resume cursor, generated EventSource request |
 | 2026-07-13 | working tree | `make verify-fast` | 217 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Linux ownership inspection, TERM/KILL group escalation, and confirmed tree exit |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Linux ownership inspection, TERM/KILL group escalation, and confirmed tree exit |
+| 2026-07-13 | working tree | `make verify-fast` | 220 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Ordered startup termination, atomic interrupted closure, quarantine, and readiness |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Ordered startup termination, atomic interrupted closure, quarantine, and readiness |

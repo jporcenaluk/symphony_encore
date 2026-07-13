@@ -7,9 +7,9 @@ import {
   type OpenedDatabase,
   openDatabase,
 } from "@symphony/persistence";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { recoverStartupState } from "./startup-recovery.js";
+import { recoverLinuxStartupState, recoverStartupState } from "./startup-recovery.js";
 
 const openedDatabases: OpenedDatabase[] = [];
 const temporaryDirectories: string[] = [];
@@ -58,6 +58,28 @@ async function fixture(): Promise<{
         '2026-07-13T10:00:00Z', '2026-07-13T10:02:00Z', 'Todo', 'dispatch')
     `)
     .run();
+  opened.sqlite
+    .prepare(`
+      insert into budget_ledgers (
+        id, scope, scope_id, unit, base_limit, effective_limit, reserved, updated_at
+      ) values ('attempt-ledger', 'attempt', 'attempt-1', 'tokens', 100, 100, 10, 't0')
+    `)
+    .run();
+  opened.sqlite
+    .prepare(`
+      insert into budget_reservations (
+        id, work_ref_kind, work_ref_id, attempt_id, estimated_amounts_json,
+        actual_amounts_json, status, created_at, updated_at
+      ) values ('reservation-1', 'issue', 'issue-1', 'attempt-1', '{"attempt-ledger":10}',
+        '{}', 'reserved', 't0', 't0')
+    `)
+    .run();
+  opened.sqlite
+    .prepare(`
+      insert into budget_reservation_ledgers (reservation_id, ledger_id, reserved_amount)
+      values ('reservation-1', 'attempt-ledger', 10)
+    `)
+    .run();
   await beginServiceRun(opened.database, {
     hostId: "host-1",
     id: "run-1",
@@ -72,12 +94,13 @@ async function fixture(): Promise<{
 describe("startup recovery coordination", () => {
   it("publishes ready only after process and workspace ownership reconcile", async () => {
     const { opened, owned, root, stale } = await fixture();
+    const reconcileProcessOwnership = vi.fn(async () => undefined);
 
     const result = await recoverStartupState({
       completedAt: "2026-07-13T10:01:02Z",
       database: opened.database,
-      processOwnershipReconciled: true,
       quarantineId: "run-1",
+      reconcileProcessOwnership,
       serviceRunId: "run-1",
       workspaceRoot: root,
     });
@@ -91,6 +114,7 @@ describe("startup recovery coordination", () => {
         },
       ],
     });
+    expect(reconcileProcessOwnership).toHaveBeenCalledOnce();
     expect(
       opened.sqlite.prepare("select status from service_runs where id = 'run-1'").get(),
     ).toEqual({ status: "ready" });
@@ -104,8 +128,10 @@ describe("startup recovery coordination", () => {
       recoverStartupState({
         completedAt: "2026-07-13T10:01:02Z",
         database: opened.database,
-        processOwnershipReconciled: false,
         quarantineId: "run-1",
+        async reconcileProcessOwnership() {
+          throw new Error("recovery.process_ownership_unverified");
+        },
         serviceRunId: "run-1",
         workspaceRoot: root,
       }),
@@ -114,6 +140,43 @@ describe("startup recovery coordination", () => {
     expect(
       opened.sqlite.prepare("select status from service_runs where id = 'run-1'").get(),
     ).toEqual({ status: "recovering" });
+  });
+
+  it("closes interrupted attempts before the production Linux path publishes ready", async () => {
+    const { opened, root } = await fixture();
+
+    await recoverLinuxStartupState({
+      completedAt: "2026-07-13T10:01:02Z",
+      database: opened.database,
+      async loadLatestHandoff(attemptId) {
+        expect(attemptId).toBe("attempt-1");
+        return {
+          acceptance_criteria: ["Recovery is durable"],
+          commands: [],
+          decisions_fixed: [],
+          files_changed: [],
+          goal: "Resume safely",
+          open_items: ["Continue implementation"],
+          revision: "base-sha",
+        };
+      },
+      quarantineId: "run-1",
+      serviceRunId: "run-1",
+      terminalResultId: (attemptId) => `interrupted-${attemptId}`,
+      workspaceRoot: root,
+    });
+
+    expect(opened.sqlite.prepare("select status, failure_class from attempts").get()).toEqual({
+      failure_class: "agent_process",
+      status: "closed",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "restart_interrupted_attempt",
+    });
+    expect(opened.sqlite.prepare("select status from service_runs").get()).toEqual({
+      status: "ready",
+    });
   });
 });
 

@@ -42,6 +42,35 @@ interface RecoveryLedgerRow {
   unit: "tokens" | "usd";
 }
 
+interface InterruptedAttemptRow {
+  attempt_id: string;
+  process_group_id: number | null;
+  process_id: number | null;
+}
+
+export interface InterruptedAttempt {
+  attemptId: string;
+  processGroupId: number | null;
+  processId: number | null;
+}
+
+export async function listInterruptedAttempts(
+  database: Kysely<DatabaseSchema>,
+): Promise<InterruptedAttempt[]> {
+  const result = await sql<InterruptedAttemptRow>`
+    select attempts.id as attempt_id, live_sessions.process_id, live_sessions.process_group_id
+    from attempts
+    left join live_sessions on live_sessions.attempt_id = attempts.id
+    where attempts.status in ('created', 'running', 'awaiting_human')
+    order by attempts.started_at, attempts.id
+  `.execute(database);
+  return result.rows.map((row) => ({
+    attemptId: row.attempt_id,
+    processGroupId: row.process_group_id,
+    processId: row.process_id,
+  }));
+}
+
 export async function recoverInterruptedAttempt(
   database: Kysely<DatabaseSchema>,
   input: RecoverInterruptedAttemptInput,
