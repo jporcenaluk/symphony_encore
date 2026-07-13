@@ -14,19 +14,31 @@ describe("receipt-confirmed issue dispatch", () => {
       {
         applyLaneIntent: async () => {
           calls.push("apply-lane");
-          return { providerRequestId: "request-1", resultRevision: "revision-2" };
+          return {
+            providerRequestId: "request-1",
+            responsePayloadHash: "sha256:response",
+            result: "lane_updated",
+            resultRevision: "revision-2",
+          };
         },
         confirmLaneReceipt: async () => calls.push("confirm-receipt-stage"),
         launchWorker: async () => {
           calls.push("launch");
           return { processId: 123 };
         },
+        markIntentApplying: async () => calls.push("mark-applying"),
         persistDispatch: async () => calls.push("persist"),
         safety,
       },
     );
 
-    expect(calls).toEqual(["persist", "apply-lane", "confirm-receipt-stage", "launch"]);
+    expect(calls).toEqual([
+      "persist",
+      "mark-applying",
+      "apply-lane",
+      "confirm-receipt-stage",
+      "launch",
+    ]);
     expect(result).toEqual({ processId: 123 });
   });
 
@@ -42,6 +54,7 @@ describe("receipt-confirmed issue dispatch", () => {
           },
           confirmLaneReceipt: async () => undefined,
           launchWorker,
+          markIntentApplying: async () => undefined,
           persistDispatch: async () => undefined,
           safety,
         },
@@ -61,12 +74,15 @@ describe("receipt-confirmed issue dispatch", () => {
         {
           applyLaneIntent: async () => ({
             providerRequestId: "request-1",
+            responsePayloadHash: "sha256:response",
+            result: "lane_updated",
             resultRevision: "revision-2",
           }),
           confirmLaneReceipt: async () => {
             throw new Error("database read only");
           },
           launchWorker,
+          markIntentApplying: async () => undefined,
           persistDispatch: async () => undefined,
           safety,
         },
@@ -75,5 +91,28 @@ describe("receipt-confirmed issue dispatch", () => {
     expect(stopWorkers).toHaveBeenCalledOnce();
     expect(safety.canDispatch()).toBe(false);
     expect(launchWorker).not.toHaveBeenCalled();
+  });
+
+  it("latches persistence failure before applying the external intent", async () => {
+    const applyLaneIntent = vi.fn();
+    const stopWorkers = vi.fn(async () => undefined);
+    const safety = new PersistenceSafetyController(stopWorkers);
+    await expect(
+      dispatchIssue(
+        { attemptId: "attempt-1", issueId: "issue-1" },
+        {
+          applyLaneIntent,
+          confirmLaneReceipt: async () => undefined,
+          launchWorker: vi.fn(),
+          markIntentApplying: async () => {
+            throw new Error("sqlite.read_only");
+          },
+          persistDispatch: async () => undefined,
+          safety,
+        },
+      ),
+    ).rejects.toThrow("sqlite.read_only");
+    expect(stopWorkers).toHaveBeenCalledOnce();
+    expect(applyLaneIntent).not.toHaveBeenCalled();
   });
 });

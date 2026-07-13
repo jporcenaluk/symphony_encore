@@ -7,6 +7,8 @@ export interface IssueDispatchRequest {
 
 export interface LaneMutationReceipt {
   providerRequestId: string;
+  responsePayloadHash: string;
+  result: string;
   resultRevision: string;
 }
 
@@ -14,6 +16,7 @@ export interface IssueDispatchPorts<LaunchResult> {
   applyLaneIntent(request: IssueDispatchRequest): Promise<LaneMutationReceipt>;
   confirmLaneReceipt(request: IssueDispatchRequest, receipt: LaneMutationReceipt): Promise<unknown>;
   launchWorker(request: IssueDispatchRequest): Promise<LaunchResult>;
+  markIntentApplying(request: IssueDispatchRequest): Promise<unknown>;
   persistDispatch(request: IssueDispatchRequest): Promise<unknown>;
   safety: PersistenceSafetyController;
 }
@@ -25,6 +28,7 @@ export async function dispatchIssue<LaunchResult>(
   ports.safety.assertDispatchAllowed();
   try {
     await ports.persistDispatch(request);
+    await ports.markIntentApplying(request);
   } catch (error) {
     const failure = asError(error);
     await ports.safety.recordFailure(failure);
