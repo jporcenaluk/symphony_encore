@@ -9,6 +9,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@fastify/swagger": "9.8.0",
+    "@fastify/type-provider-typebox": "5.2.0",
+    "@sinclair/typebox": "0.34.52",
     "@symphony/adapters": "workspace:*",
     "@symphony/contracts": "workspace:*",
     "@symphony/domain": "workspace:*",

@@ -4126,6 +4126,118 @@
         }
       }
     },
+    "ControlState": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "dispatch_enabled",
+        "mutations_enabled",
+        "service_run",
+        "version"
+      ],
+      "properties": {
+        "dispatch_enabled": {
+          "type": "boolean"
+        },
+        "mutations_enabled": {
+          "type": "boolean"
+        },
+        "service_run": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "id",
+            "service_version",
+            "started_at",
+            "status"
+          ],
+          "properties": {
+            "id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "service_version": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "started_at": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "const": "starting",
+                  "type": "string"
+                },
+                {
+                  "const": "recovering",
+                  "type": "string"
+                },
+                {
+                  "const": "ready",
+                  "type": "string"
+                },
+                {
+                  "const": "failed",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "ErrorEnvelope": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "code",
+            "current_version",
+            "details",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "current_version": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "details": {
+              "type": "object",
+              "patternProperties": {
+                "^(.*)$": {}
+              }
+            },
+            "message": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "EvidenceRef": {
       "anyOf": [
         {
@@ -4819,6 +4931,40 @@
         },
         "revision": {
           "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "service_state",
+        "status"
+      ],
+      "properties": {
+        "service_state": {
+          "anyOf": [
+            {
+              "const": "starting",
+              "type": "string"
+            },
+            {
+              "const": "recovering",
+              "type": "string"
+            },
+            {
+              "const": "ready",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            }
+          ]
+        },
+        "status": {
+          "const": "healthy",
           "type": "string"
         }
       }
@@ -10340,6 +10486,24 @@
               }
             }
           }
+        }
+      }
+    },
+    "ReadyResponse": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "service_run_id",
+        "status"
+      ],
+      "properties": {
+        "service_run_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "const": "ready",
+          "type": "string"
         }
       }
     },
