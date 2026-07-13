@@ -123,6 +123,13 @@ async function fixture(input?: {
 }
 
 describe("Control API", () => {
+  it("keeps Fastify request logging on the shared Pino lifecycle", async () => {
+    const { server } = await fixture();
+    await server.ready();
+
+    expect(server.log.level).toBe("silent");
+  });
+
   it("creates an HttpOnly same-site session cookie without exposing its opaque token", async () => {
     const { server } = await fixture();
     await server.ready();

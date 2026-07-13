@@ -49,7 +49,7 @@ command. A green but narrower test does not complete a broader item.
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
-| T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
+| T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, and confirmed tree exit pass locally; macOS, CI matrix, and documented WSL smoke pending |
 | T10 | Node distribution and non-root multi-stage container | Not started | Runtime, health, filesystem, and scan jobs |
@@ -160,3 +160,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Atomic pristine bootstrap, local password verification, hash-only sessions, login cookie, and same-origin CSRF |
 | 2026-07-13 | working tree | `make verify-fast` | 239 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Recovery-gated configuration mutation with capability, CSRF, version, idempotency, validation, and audit |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Recovery-gated configuration mutation with capability, CSRF, version, idempotency, validation, and audit |
+| 2026-07-13 | working tree | `make verify-fast` | 242 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Shared Pino/Fastify logging, stable bindings, and recursive secret redaction |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Shared Pino/Fastify logging, stable bindings, and recursive secret redaction |

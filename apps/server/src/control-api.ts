@@ -20,7 +20,7 @@ import {
   LoginResponseSchema,
   ReadyResponseSchema,
 } from "@symphony/contracts";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyRequest } from "fastify";
 
 import { encodeServerSentEvent, resolveEventResumeCursor } from "./event-stream.js";
 
@@ -40,6 +40,7 @@ export interface ControlApiDependencies {
     sessionToken: string;
   } | null>;
   listEvents(input: { afterCursor: number; limit: number }): Promise<EventRecordPage>;
+  logger?: FastifyBaseLogger;
   mutateConfigurationOverride(input: {
     expectedVersion: number;
     idempotencyKey: string;
@@ -59,7 +60,11 @@ export interface ControlApiDependencies {
 }
 
 export async function createControlApi(dependencies: ControlApiDependencies) {
-  const server = Fastify({ logger: false })
+  const server = (
+    dependencies.logger
+      ? Fastify({ loggerInstance: dependencies.logger })
+      : Fastify({ logger: { level: "silent" } })
+  )
     .setValidatorCompiler(TypeBoxValidatorCompiler)
     .withTypeProvider<TypeBoxTypeProvider>();
 
