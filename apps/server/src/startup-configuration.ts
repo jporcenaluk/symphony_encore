@@ -26,6 +26,7 @@ export interface CreateStartupConfigurationInput {
   options: RuntimeOptions;
   overrides: readonly ConfigurationOverride[];
   previousSnapshot: ConfigurationSnapshot;
+  restartBoundaryReached?: boolean;
   systemTemp: string;
   workflow: LoadedWorkflow;
 }
@@ -62,7 +63,7 @@ export function createStartupConfiguration(
     acknowledgedHashes: input.acknowledgedHashes,
     candidate,
     previous: configurationFromSnapshot(input.previousSnapshot),
-    restartBoundaryReached: true,
+    restartBoundaryReached: input.restartBoundaryReached ?? true,
   });
   if (configuration.status === "candidate_invalid") {
     const first = configuration.errors[0];

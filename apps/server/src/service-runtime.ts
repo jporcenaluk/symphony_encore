@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { SideEffectIntent, SideEffectReceipt } from "@symphony/contracts";
@@ -7,8 +7,10 @@ import {
   CONFIGURATION_CATALOG,
   CONFIGURATION_KEYS,
   type ConfigurationKey,
+  parseWorkflowText,
 } from "@symphony/orchestration";
 import {
+  appendEventRecord,
   applyMigrations,
   beginServiceRun,
   type ConfigurationSnapshot,
@@ -32,6 +34,11 @@ import { createPersistentControlApi } from "./persistent-control-api.js";
 import type { RuntimeOptions } from "./runtime-options.js";
 import { createStartupConfiguration } from "./startup-configuration.js";
 import { recoverLinuxStartupState } from "./startup-recovery.js";
+import {
+  createWorkflowFileMonitor,
+  type WorkflowFileMonitor,
+  type WorkflowFileMonitorInput,
+} from "./workflow-file-monitor.js";
 
 export interface ProductionServiceInput {
   bootstrap?: {
@@ -55,6 +62,7 @@ export interface ProductionServiceInput {
     systemTemp: string;
     workflow: Parameters<typeof createStartupConfiguration>[0]["workflow"];
   };
+  workflowMonitorFactory?: (input: WorkflowFileMonitorInput) => WorkflowFileMonitor;
 }
 
 export async function startProductionService(input: ProductionServiceInput) {
@@ -62,6 +70,7 @@ export async function startProductionService(input: ProductionServiceInput) {
   await mkdir(path.dirname(input.options.databasePath), { recursive: true });
   const opened = openDatabase(input.options.databasePath);
   let httpRuntime: Awaited<ReturnType<typeof startHttpRuntime>> | undefined;
+  let workflowMonitor: WorkflowFileMonitor | undefined;
   try {
     await applyMigrations(opened.database);
     const eligibility = await inspectBootstrapEligibility(opened.database);
@@ -132,6 +141,85 @@ export async function startProductionService(input: ProductionServiceInput) {
     await mkdir(runtimeOptions.workspaceRoot, { recursive: true });
 
     let serviceRunId: string | undefined;
+    async function startWorkflowMonitor(snapshot: ConfigurationSnapshot) {
+      if (!input.startupConfiguration || workflowMonitor) return;
+      const startupInput = input.startupConfiguration;
+      const workflowPath = startupInput.workflow.path;
+      const factory = input.workflowMonitorFactory ?? createWorkflowFileMonitor;
+      workflowMonitor = factory({
+        initialSourceHash: snapshot.workflowSourceHash,
+        intervalMs: 1_000,
+        async onCandidate(candidate) {
+          if (serviceRunId === undefined) return;
+          try {
+            const parsed = parseWorkflowText(candidate.source);
+            const reloaded = createStartupConfiguration({
+              acknowledgedHashes: await loadAcknowledgedCandidateHashes(opened.database),
+              createdAt: now(),
+              environment: startupInput.environment,
+              home: startupInput.home,
+              id: randomUUID(),
+              options: input.options,
+              overrides: (await loadActiveOverrides(opened.database)).flatMap((override) =>
+                CONFIGURATION_KEYS.includes(override.key as ConfigurationKey)
+                  ? [override as { key: ConfigurationKey; value: unknown; version: number }]
+                  : [],
+              ),
+              previousSnapshot:
+                (await loadLatestConfigurationSnapshot(opened.database)) ?? snapshot,
+              restartBoundaryReached: false,
+              systemTemp: startupInput.systemTemp,
+              workflow: {
+                ...parsed,
+                path: workflowPath,
+                sourceHash: candidate.sourceHash,
+              },
+            });
+            await storeConfigurationSnapshot(opened.database, reloaded.snapshot);
+            await appendEventRecord(opened.database, {
+              attemptId: null,
+              changeClass: null,
+              computeProfile: null,
+              costUsd: null,
+              eventName: "workflow.reload",
+              id: randomUUID(),
+              payload: { source_hash: candidate.sourceHash },
+              reasonCode: `workflow.${reloaded.configuration.status}`,
+              result: "accepted",
+              serviceRunId,
+              timestamp: now(),
+              workRef: null,
+            });
+            for (const warning of reloaded.warnings) {
+              input.logger?.warn({ warning }, "workflow warning");
+            }
+          } catch (error) {
+            const reasonCode =
+              error instanceof Error ? error.message : "workflow.reload_unknown_error";
+            await appendEventRecord(opened.database, {
+              attemptId: null,
+              changeClass: null,
+              computeProfile: null,
+              costUsd: null,
+              eventName: "workflow.reload",
+              id: randomUUID(),
+              payload: { source_hash: candidate.sourceHash },
+              reasonCode,
+              result: "rejected",
+              serviceRunId,
+              timestamp: now(),
+              workRef: null,
+            });
+            input.logger?.warn({ reason_code: reasonCode }, "workflow reload rejected");
+          }
+        },
+        onReadError(error) {
+          input.logger?.warn({ error }, "workflow file monitor failed");
+        },
+        readSource: () => readFile(workflowPath, "utf8"),
+      });
+    }
+
     async function activate(snapshot: ConfigurationSnapshot) {
       if (serviceRunId !== undefined) throw new Error("runtime.service_already_activated");
       const nextServiceRunId = input.serviceRunId?.() ?? randomUUID();
@@ -155,6 +243,7 @@ export async function startProductionService(input: ProductionServiceInput) {
         workspaceRoot: runtimeOptions.workspaceRoot,
       });
       serviceRunId = nextServiceRunId;
+      await startWorkflowMonitor(snapshot);
     }
 
     const auth = createLocalSessionAuth({
@@ -216,15 +305,22 @@ export async function startProductionService(input: ProductionServiceInput) {
       async close() {
         if (closed) return;
         closed = true;
-        if (serviceRunId !== undefined) {
-          await stopServiceRun(opened.database, {
-            endedAt: now(),
-            endReason: "signal",
-            serviceRunId,
-          });
+        try {
+          await workflowMonitor?.close();
+          if (serviceRunId !== undefined) {
+            await stopServiceRun(opened.database, {
+              endedAt: now(),
+              endReason: "signal",
+              serviceRunId,
+            });
+          }
+        } finally {
+          try {
+            await httpRuntime?.close();
+          } finally {
+            await opened.close();
+          }
         }
-        await httpRuntime?.close();
-        await opened.close();
       },
       server,
       get serviceRunId() {
@@ -233,6 +329,7 @@ export async function startProductionService(input: ProductionServiceInput) {
       url: httpRuntime.url,
     };
   } catch (error) {
+    await workflowMonitor?.close();
     await httpRuntime?.close();
     await opened.close();
     throw error;

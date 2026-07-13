@@ -139,4 +139,27 @@ describe("ordinary startup configuration", () => {
       "startup.configuration_invalid:config.verify_none_reason_required:workspace.verify_none_reason",
     );
   });
+
+  it("keeps restart-bound values pending during a live reload", () => {
+    const reloaded = createStartupConfiguration({
+      acknowledgedHashes: new Set(),
+      createdAt: "2026-07-13T11:00:00Z",
+      environment: {},
+      home: "/home/operator",
+      id: "snapshot-live-reload",
+      options,
+      overrides: [operatorOverride],
+      previousSnapshot: previousSnapshot(),
+      restartBoundaryReached: false,
+      systemTemp: "/tmp",
+      workflow: {
+        ...workflow,
+        config: { ...workflow.config, server: { auth_kind: "local", port: 9090 } },
+        sourceHash: "sha256:workflow-v2",
+      },
+    });
+
+    expect(reloaded.snapshot.effectiveConfig["server.port"]).toBe(8080);
+    expect(reloaded.snapshot.restartState["server.port"]).toBe("pending_restart");
+  });
 });

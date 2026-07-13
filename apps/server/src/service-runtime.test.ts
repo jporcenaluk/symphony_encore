@@ -5,6 +5,7 @@ import { applyMigrations, completeInitialBootstrap, openDatabase } from "@sympho
 import { describe, expect, it, vi } from "vitest";
 
 import { startProductionService } from "./service-runtime.js";
+import type { WorkflowFileMonitorInput } from "./workflow-file-monitor.js";
 
 async function initializedFixture() {
   const root = await mkdtemp(path.join(tmpdir(), "symphony-service-"));
@@ -53,6 +54,7 @@ describe("production service lifecycle", () => {
   it("opens an initialized store, recovers before readiness, and closes durably", async () => {
     const fixture = await initializedFixture();
     const listen = vi.fn(async () => "http://127.0.0.1:48080");
+    let workflowMonitorInput: WorkflowFileMonitorInput | undefined;
     const service = await startProductionService({
       hostId: "host-1",
       listen,
@@ -100,6 +102,10 @@ describe("production service lifecycle", () => {
           warnings: [],
         },
       },
+      workflowMonitorFactory(monitorInput) {
+        workflowMonitorInput = monitorInput;
+        return { check: async () => undefined, close: async () => undefined };
+      },
     });
 
     expect(listen).toHaveBeenCalledOnce();
@@ -115,6 +121,35 @@ describe("production service lifecycle", () => {
       (await service.server.inject({ headers: { accept: "text/html" }, url: "/operations" })).body,
     ).toContain("production UI");
 
+    if (!workflowMonitorInput) throw new Error("test.workflow_monitor_missing");
+    await workflowMonitorInput.onCandidate({
+      source: `---
+agent:
+  approval_policy: on-request
+  thread_sandbox: workspace-write
+  turn_sandbox_policy: workspace-write
+server:
+  auth_kind: local
+  port: 9090
+tracker:
+  kind: github
+  owner: example
+  project_number: 1
+  repo_name: repo
+  repo_owner: example
+workspace:
+  root: ${fixture.workspaceRoot}
+  verify_command: make verify
+---
+Updated prompt for {{ issue.title }}.
+`,
+      sourceHash: "sha256:live-workflow",
+    });
+    await workflowMonitorInput.onCandidate({
+      source: "---\ntracker: [\n---\nBroken",
+      sourceHash: "sha256:invalid-workflow",
+    });
+
     await service.close();
     const reopened = openDatabase(fixture.databasePath);
     expect(
@@ -124,9 +159,22 @@ describe("production service lifecycle", () => {
     ).toEqual({ end_reason: "signal", status: "stopped" });
     expect(reopened.sqlite.prepare("select count(*) as count from config_snapshots").get()).toEqual(
       {
-        count: 2,
+        count: 3,
       },
     );
+    const latest = reopened.sqlite
+      .prepare(
+        "select effective_config_json, restart_state_json from config_snapshots order by rowid desc limit 1",
+      )
+      .get() as { effective_config_json: string; restart_state_json: string };
+    expect(JSON.parse(latest.effective_config_json)["server.port"]).toBe(8080);
+    expect(JSON.parse(latest.restart_state_json)["server.port"]).toBe("pending_restart");
+    expect(
+      reopened.sqlite.prepare("select event_name, result from event_records order by cursor").all(),
+    ).toEqual([
+      { event_name: "workflow.reload", result: "accepted" },
+      { event_name: "workflow.reload", result: "rejected" },
+    ]);
     await reopened.close();
   });
 
