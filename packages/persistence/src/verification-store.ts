@@ -151,7 +151,14 @@ export interface PendingIndependentVerification {
 export async function loadPendingIndependentVerification(
   database: Kysely<DatabaseSchema>,
   workRef: WorkRef,
+  expectedReadyReason = "independent_verification_required",
 ): Promise<PendingIndependentVerification | null> {
+  if (
+    expectedReadyReason !== "independent_verification_required" &&
+    expectedReadyReason !== "independent_verification_after_base_update_required"
+  ) {
+    throw new Error("verification.ready_reason_invalid");
+  }
   const query = await sql<PendingVerificationRow>`
     select attempt.id as attempt_id, attempt.config_snapshot_id,
            attempt.workspace_path, result.payload_json
@@ -169,7 +176,7 @@ export async function loadPendingIndependentVerification(
     where claim.work_ref_kind = ${workRef.kind}
       and claim.work_ref_id = ${workRef.id}
       and claim.mode = 'Ready'
-      and claim.reason = 'independent_verification_required'
+      and claim.reason = ${expectedReadyReason}
     order by attempt.attempt_number desc
     limit 1
   `.execute(database);

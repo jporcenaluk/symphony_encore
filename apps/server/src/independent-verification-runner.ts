@@ -35,6 +35,7 @@ export async function runPendingIndependentVerification(input: {
   command: string;
   database: OpenedDatabase["database"];
   execute?: VerificationExecutor;
+  expectedReadyReason?: string;
   newId(): string;
   readRevision?: RevisionReader;
   safety: PersistenceSafetyController;
@@ -42,6 +43,7 @@ export async function runPendingIndependentVerification(input: {
   target: PendingIndependentVerification;
   timeoutMs: number;
   verifyNoneReason?: string | null;
+  verifiedReadyReason?: string;
   workRef: { id: string; kind: "issue" | "system_job" };
   workspaceRoot: string;
 }): Promise<{ result: VerificationExecutionResult["result"]; targetRevision: string }> {
@@ -70,10 +72,12 @@ export async function runPendingIndependentVerification(input: {
       attemptId: input.target.attemptId,
       configSnapshotId: input.target.configSnapshotId,
       execution,
-      expectedReadyReason: "independent_verification_required",
+      expectedReadyReason: input.expectedReadyReason ?? "independent_verification_required",
       id,
       nextReadyReason:
-        execution.result === "passed" ? "pull_request_required" : "verification_rework",
+        execution.result === "passed"
+          ? (input.verifiedReadyReason ?? "pull_request_required")
+          : "verification_rework",
       targetRevision,
       workRef: input.workRef,
     });

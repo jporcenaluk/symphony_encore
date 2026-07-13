@@ -53,6 +53,21 @@ export async function loadPendingMergeQueue(
   database: Kysely<DatabaseSchema>,
   workRef: WorkRef,
 ): Promise<PendingMergeQueue | null> {
+  return loadPendingRepositoryMutation(database, workRef, "merge_queue_required");
+}
+
+export async function loadPendingBaseUpdate(
+  database: Kysely<DatabaseSchema>,
+  workRef: WorkRef,
+): Promise<PendingMergeQueue | null> {
+  return loadPendingRepositoryMutation(database, workRef, "base_update_required");
+}
+
+async function loadPendingRepositoryMutation(
+  database: Kysely<DatabaseSchema>,
+  workRef: WorkRef,
+  expectedReason: "base_update_required" | "merge_queue_required",
+): Promise<PendingMergeQueue | null> {
   const result = await sql<PendingMergeQueueRow>`
     select verification.attempt_id,
            link.base_ref,
@@ -90,7 +105,7 @@ export async function loadPendingMergeQueue(
     where claim.work_ref_kind = ${workRef.kind}
       and claim.work_ref_id = ${workRef.id}
       and claim.mode = 'Ready'
-      and claim.reason = 'merge_queue_required'
+      and claim.reason = ${expectedReason}
     order by review_set.created_at desc, review_set.id desc,
              link.cycle desc, link.created_at desc, link.id desc
     limit 1
@@ -113,6 +128,89 @@ export async function loadPendingMergeQueue(
         workspacePath: row.workspace_path,
       }
     : null;
+}
+
+export async function beginRepositoryBranchUpdate(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    baseSha: string;
+    headSha: string;
+    now: string;
+    repository: string;
+    workRef: WorkRef;
+  },
+): Promise<void> {
+  validateTimestamp(input.now);
+  await database.transaction().execute(async (transaction) => {
+    await sql`
+      insert into repository_merge_queue_entries (
+        work_ref_kind, work_ref_id, repository, state, head_sha, base_sha,
+        merge_sha, created_at, updated_at
+      ) values (
+        ${input.workRef.kind}, ${input.workRef.id}, ${input.repository}, 'landing',
+        ${input.headSha}, ${input.baseSha}, null, ${input.now}, ${input.now}
+      )
+    `.execute(transaction);
+    const claim = await sql`
+      update claims
+      set reason = 'base_update_landing', updated_at = ${input.now}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = 'base_update_required'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("merge_queue.claim_not_base_update");
+  });
+}
+
+export async function commitRepositoryBranchUpdate(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    baseSha: string;
+    headSha: string;
+    now: string;
+    receipt: SideEffectReceipt;
+    workRef: WorkRef;
+  },
+): Promise<void> {
+  validateTimestamp(input.now);
+  if (input.receipt.result_revision !== input.headSha) {
+    throw new Error("merge_queue.receipt_revision_mismatch");
+  }
+  await database.transaction().execute(async (transaction) => {
+    await recordSideEffectReceiptInTransaction(transaction, input.receipt);
+    const link = await sql`
+      update repository_links
+      set head_sha = ${input.headSha}, base_sha = ${input.baseSha}, updated_at = ${input.now}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and state = 'open'
+    `.execute(transaction);
+    if (link.numAffectedRows !== 1n) throw new Error("merge_queue.link_not_open");
+    const checkout = await sql`
+      update workspace_checkouts
+      set base_sha = ${input.baseSha}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+    `.execute(transaction);
+    if (checkout.numAffectedRows !== 1n) throw new Error("merge_queue.checkout_missing");
+    const claim = await sql`
+      update claims
+      set reason = 'independent_verification_after_base_update_required', updated_at = ${input.now}
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = 'base_update_landing'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("merge_queue.claim_not_base_update");
+    const queue = await sql`
+      delete from repository_merge_queue_entries
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and state = 'landing'
+    `.execute(transaction);
+    if (queue.numAffectedRows !== 1n) throw new Error("merge_queue.entry_not_landing");
+  });
 }
 
 export async function loadAuthorizedMergeLogins(

@@ -217,6 +217,8 @@ describe("production reconciliation scheduler", () => {
       summary: "Implementation is ready for independent verification.",
       verification: { command: "make verify-fast", exit_code: 0, result: "passed" },
     };
+    let repositoryBase = "abc1234";
+    let repositoryHead = "abc1234";
     const agent: AgentAdapter = {
       launch: vi.fn(async (request: AgentLaunchRequest) => {
         const isReview = request.preflight.role === "integrative_review";
@@ -264,9 +266,9 @@ describe("production reconciliation scheduler", () => {
                   event: "terminal_result_reported" as const,
                   result: {
                     decision: "approve",
-                    evidence: [{ kind: "commit", sha: "abc1234" }],
+                    evidence: [{ kind: "commit", sha: repositoryHead }],
                     findings: [],
-                    target_sha: "abc1234",
+                    target_sha: repositoryHead,
                   },
                   session_id: "thread-1-turn-1",
                   timestamp: "2026-07-13T10:00:04.000Z",
@@ -395,10 +397,10 @@ describe("production reconciliation scheduler", () => {
       fetchPullRequestSnapshot: vi.fn(async () => ({
         base_ref: "main",
         checks: [],
-        head_sha: "abc1234",
+        head_sha: repositoryHead,
         is_draft: false,
         mergeable: true,
-        observed_base_sha: "abc1234",
+        observed_base_sha: repositoryBase,
         post_merge_checks: [],
         pr_number: 42,
         pr_state: "open" as const,
@@ -408,7 +410,7 @@ describe("production reconciliation scheduler", () => {
         reviews: [
           {
             author: "maintainer",
-            commit_sha: "abc1234",
+            commit_sha: repositoryHead,
             state: "approved",
             submitted_at: "2026-07-13T10:00:08.000Z",
           },
@@ -434,7 +436,21 @@ describe("production reconciliation scheduler", () => {
           resultRevision: "abc1234",
         },
       })),
-      updateBranch: vi.fn(),
+      updateBranch: vi.fn(async (_workRef, expectedHeadSha, expectedBaseSha) => {
+        expect(expectedHeadSha).toBe(repositoryHead);
+        expect(expectedBaseSha).toBe(repositoryBase);
+        repositoryHead = "def5678";
+        return {
+          branch: "symphony/org-9",
+          headSha: repositoryHead,
+          mutation: {
+            providerRequestId: "request-update",
+            responsePayloadHash: "sha256:update",
+            result: "updated",
+            resultRevision: repositoryHead,
+          },
+        };
+      }),
     };
     const logger = { error: vi.fn(), warn: vi.fn() };
     const scheduler = createProductionScheduler({
@@ -445,6 +461,7 @@ describe("production reconciliation scheduler", () => {
       prompt: "Implement {{ issue.title }}.",
       repositoryAdapter,
       repositoryHostingAdapter,
+      repositorySync: vi.fn(async (request) => request.expectedHeadSha),
       review: {
         collectEvidence: vi.fn(async (request) => ({
           baseSha: request.baseSha,
@@ -475,7 +492,7 @@ describe("production reconciliation scheduler", () => {
           stderr: "",
           stdout: "all passed",
         })),
-        readRevision: vi.fn(async () => "abc1234"),
+        readRevision: vi.fn(async () => repositoryHead),
       },
     });
 
@@ -530,6 +547,49 @@ describe("production reconciliation scheduler", () => {
         reason: "merge_queue_required",
       }),
     );
+    repositoryBase = "7654321";
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "base_update_required",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "independent_verification_after_base_update_required",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "pull_request_hygiene_required",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_required",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_coordination_required",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "merge_queue_required",
+      }),
+    );
     await scheduler.trigger();
     await vi.waitFor(() =>
       expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
@@ -547,7 +607,7 @@ describe("production reconciliation scheduler", () => {
     await scheduler.close();
 
     expect(logger.warn).not.toHaveBeenCalled();
-    expect(agent.launch).toHaveBeenCalledTimes(2);
+    expect(agent.launch).toHaveBeenCalledTimes(3);
     expect(tracker.updateIssueLane).toHaveBeenCalledWith(
       candidate.id,
       "In Progress",
@@ -559,6 +619,7 @@ describe("production reconciliation scheduler", () => {
     ).toEqual([
       { role: "implementation", status: "closed" },
       { role: "integrative_review", status: "closed" },
+      { role: "integrative_review", status: "closed" },
     ]);
     expect(opened.sqlite.prepare("select state from issues").get()).toEqual({ state: "Done" });
     expect(opened.sqlite.prepare("select state from repository_merge_queue_entries").get()).toEqual(
@@ -566,19 +627,30 @@ describe("production reconciliation scheduler", () => {
     );
     expect(repositoryHostingAdapter.mergePullRequest).toHaveBeenCalledWith(
       { issue_id: candidate.id },
-      "abc1234",
+      "def5678",
       "squash",
       expect.any(Object),
     );
     expect(
-      opened.sqlite.prepare("select target_revision, result from verification_records").get(),
-    ).toEqual({
-      result: "passed",
-      target_revision: "abc1234",
-    });
+      opened.sqlite
+        .prepare(
+          "select target_revision, result from verification_records order by target_revision",
+        )
+        .all(),
+    ).toEqual([
+      { result: "passed", target_revision: "abc1234" },
+      { result: "passed", target_revision: "def5678" },
+    ]);
     expect(
-      opened.sqlite.prepare("select reviewer_role, target_sha, decision from review_records").get(),
-    ).toEqual({ decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" });
+      opened.sqlite
+        .prepare(
+          "select reviewer_role, target_sha, decision from review_records order by target_sha",
+        )
+        .all(),
+    ).toEqual([
+      { decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" },
+      { decision: "approve", reviewer_role: "integrative_review", target_sha: "def5678" },
+    ]);
     expect(opened.sqlite.prepare("select pull_request_number from repository_links").get()).toEqual(
       {
         pull_request_number: 42,

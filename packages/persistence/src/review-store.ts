@@ -226,6 +226,11 @@ export async function loadPendingIntegrativeReview(
       and verification.work_ref_id = claim.work_ref_id
       and verification.result = 'passed'
       and verification.exit_code = 0
+    join repository_links link
+      on link.work_ref_kind = claim.work_ref_kind
+      and link.work_ref_id = claim.work_ref_id
+      and link.head_sha = verification.target_revision
+      and link.state = 'open'
     join workspace_checkouts checkout
       on checkout.work_ref_kind = claim.work_ref_kind
       and checkout.work_ref_id = claim.work_ref_id
@@ -234,7 +239,7 @@ export async function loadPendingIntegrativeReview(
       and claim.work_ref_id = ${workRef.id}
       and claim.mode = 'Ready'
       and claim.reason = 'review_required'
-    order by implementation.attempt_number desc, verification.ended_at desc
+    order by implementation.attempt_number desc, verification.ended_at desc, verification.id desc
     limit 1
   `.execute(database);
   const row = result.rows[0];

@@ -8,6 +8,7 @@ import type { GhCliApiClient } from "./gh-cli-api.js";
 import {
   createGitHubWorkspaceRepositoryAdapter,
   createNodeWorkspaceCommandRunner,
+  syncWorkspaceToPublishedBranch,
   type WorkspaceCommandRunner,
 } from "./github-workspace.js";
 
@@ -185,5 +186,54 @@ describe("GitHub trusted workspace population", () => {
         timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ exitCode: 0, stderr: "", stdout: "rev-parse HEAD" });
+  });
+
+  it("synchronizes a clean assigned workspace to an exact published branch revision", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "symphony-workspace-sync-"));
+    directories.push(root);
+    const workspace = path.join(root, "ORG_repo_42");
+    await mkdir(workspace);
+    const headSha = "fedcba9876543210fedcba9876543210fedcba98";
+    const run = vi.fn<WorkspaceCommandRunner["run"]>(async (request) => {
+      if (request.arguments.includes("status")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      if (request.arguments.includes("rev-parse")) {
+        return { exitCode: 0, stderr: "", stdout: `${headSha}\n` };
+      }
+      return { exitCode: 0, stderr: "", stdout: "" };
+    });
+
+    await expect(
+      syncWorkspaceToPublishedBranch({
+        branch: "symphony/issue-1",
+        commandRunner: { run },
+        environment: { HOME: "/home/service", PATH: "/usr/bin:/bin", SECRET: "no" },
+        expectedHeadSha: headSha,
+        timeoutMs: 5_000,
+        workspace,
+        workspaceRoot: root,
+      }),
+    ).resolves.toBe(headSha);
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        arguments: [
+          "-C",
+          workspace,
+          "fetch",
+          "--force",
+          "origin",
+          "refs/heads/symphony/issue-1:refs/remotes/origin/symphony/issue-1",
+        ],
+        environment: { HOME: "/home/service", PATH: "/usr/bin:/bin" },
+      }),
+    );
+    expect(run).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        arguments: ["-C", workspace, "reset", "--hard", headSha],
+      }),
+    );
   });
 });

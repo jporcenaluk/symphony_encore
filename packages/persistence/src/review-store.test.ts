@@ -534,6 +534,19 @@ async function fixture(): Promise<OpenedDatabase> {
     .run();
   sqlite
     .prepare(
+      `insert into repository_links (
+        id, work_ref_kind, work_ref_id, cycle, kind, repo_owner, repo_name, branch,
+        pull_request_number, pull_request_url, head_sha, base_ref, base_sha, state,
+        created_at, updated_at
+      ) values (
+        'link-1', 'issue', 'issue-1', 1, 'primary', 'owner', 'repo',
+        'symphony/issue-1', 42, 'https://github.com/owner/repo/pull/42',
+        'def5678', 'main', 'abc1234', 'open', 't2', 't2'
+      )`,
+    )
+    .run();
+  sqlite
+    .prepare(
       `insert into claims (
         work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at, expires_at,
         origin_stage, reason

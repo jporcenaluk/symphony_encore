@@ -13,6 +13,7 @@ import {
   discoverCodexAppServerManifest,
   type RepositoryHostingAdapter,
   readWorkspaceHeadRevision,
+  syncWorkspaceToPublishedBranch,
   type TrackerAdapter,
   terminateLinuxProcessGroup,
   type WorkspaceRepositoryAdapter,
@@ -53,6 +54,7 @@ import {
   loadLatestPlanByStatus,
   loadLatestPlanReviewResult,
   loadLatestValidatedPlan,
+  loadPendingBaseUpdate,
   loadPendingImplementationRetry,
   loadPendingIndependentVerification,
   loadPendingIntegrativeReview,
@@ -93,7 +95,11 @@ import {
   planSpecialistReviewAttempt,
 } from "./integrative-review-attempt-planner.js";
 import { collectIntegrativeReviewContext } from "./integrative-review-evidence.js";
-import { executeMergeQueueLanding, executePostMergeVerification } from "./merge-queue.js";
+import {
+  executeBaseUpdate,
+  executeMergeQueueLanding,
+  executePostMergeVerification,
+} from "./merge-queue.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
 import { runPullRequestHygiene } from "./pull-request-hygiene.js";
@@ -116,6 +122,11 @@ export function createProductionScheduler(input: {
   prompt: string;
   repositoryAdapter?: WorkspaceRepositoryAdapter;
   repositoryHostingAdapter?: RepositoryHostingAdapter;
+  repositorySync?(request: {
+    branch: string;
+    expectedHeadSha: string;
+    workspace: string;
+  }): Promise<string>;
   serviceRunId: string;
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
@@ -249,17 +260,23 @@ export function createProductionScheduler(input: {
         const isPostMerge =
           claim.reason === "post_merge_verification_required" &&
           repositoryHostingAdapter !== undefined;
+        const isBaseUpdate =
+          claim.reason === "base_update_required" && repositoryHostingAdapter !== undefined;
         if (
           availableSlots < 1 &&
           !isReviewCoordination &&
           !isRepositoryPublication &&
           !isPullRequestHygiene &&
           !isMergeQueue &&
-          !isPostMerge
+          !isPostMerge &&
+          !isBaseUpdate
         )
           continue;
         const isPlanReview = claim.reason === "plan_review_required";
-        const isIndependentVerification = claim.reason === "independent_verification_required";
+        const isBaseUpdateVerification =
+          claim.reason === "independent_verification_after_base_update_required";
+        const isIndependentVerification =
+          claim.reason === "independent_verification_required" || isBaseUpdateVerification;
         const isIntegrativeReview = claim.reason === "review_required";
         const isAdjudication = claim.reason === "adjudication_required";
         const isReviewRework = claim.reason === "review_rework";
@@ -280,6 +297,7 @@ export function createProductionScheduler(input: {
             !isPullRequestHygiene &&
             !isMergeQueue &&
             !isPostMerge &&
+            !isBaseUpdate &&
             !isSpecialistReview &&
             !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
@@ -459,15 +477,20 @@ export function createProductionScheduler(input: {
             continue;
           }
           if (isIndependentVerification) {
-            const target = await loadPendingIndependentVerification(input.database, {
-              id: issueId,
-              kind: "issue",
-            });
+            const target = await loadPendingIndependentVerification(
+              input.database,
+              {
+                id: issueId,
+                kind: "issue",
+              },
+              claim.reason,
+            );
             if (!target) throw new Error(`scheduler.verification_target_missing:${issueId}`);
             await runPendingIndependentVerification({
               allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
               command: stringValue(values, "workspace.verify_command"),
               database: input.database,
+              expectedReadyReason: claim.reason,
               ...(input.verification?.execute ? { execute: input.verification.execute } : {}),
               newId: randomUUID,
               ...(input.verification?.readRevision
@@ -478,10 +501,46 @@ export function createProductionScheduler(input: {
               target,
               timeoutMs: numberValue(values, "hooks.timeout_ms"),
               verifyNoneReason: nullableString(values, "workspace.verify_none_reason"),
+              verifiedReadyReason: isBaseUpdateVerification
+                ? "pull_request_hygiene_required"
+                : "pull_request_required",
               workRef: { id: issueId, kind: "issue" },
               workspaceRoot: stringValue(values, "workspace.root"),
             });
             continue;
+          }
+          if (isBaseUpdate) {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            if (repositoryMergeActive) continue;
+            const target = await loadPendingBaseUpdate(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.base_update_target_missing:${issueId}`);
+            await executeBaseUpdate({
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              repository: repositoryHostingAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              syncWorkspace:
+                input.repositorySync ??
+                ((request) =>
+                  syncWorkspaceToPublishedBranch({
+                    ...request,
+                    commandRunner: createNodeWorkspaceCommandRunner(),
+                    environment: input.environment,
+                    timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+                    workspaceRoot: stringValue(values, "workspace.root"),
+                  })),
+              target,
+              workRef: { id: issueId, kind: "issue" },
+            });
+            break;
           }
           if (isIntegrativeReview) {
             const target = await loadPendingIntegrativeReview(input.database, {

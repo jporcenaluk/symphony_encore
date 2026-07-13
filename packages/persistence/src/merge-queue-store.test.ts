@@ -7,9 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyMigrations, openDatabase } from "./database.js";
 import {
   beginMergeQueueLanding,
+  beginRepositoryBranchUpdate,
   commitMergeQueueLanding,
   commitPostMergeSuccess,
+  commitRepositoryBranchUpdate,
   loadAuthorizedMergeLogins,
+  loadPendingBaseUpdate,
   loadPendingMergeQueue,
   loadPendingPostMerge,
 } from "./merge-queue-store.js";
@@ -160,6 +163,51 @@ describe("merge queue persistence", () => {
     expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
       count: 0,
     });
+    await opened.close();
+  });
+
+  it("persists an exclusive base update and routes the synchronized head to verification", async () => {
+    const opened = await fixture();
+    opened.sqlite.prepare("update claims set reason = 'base_update_required'").run();
+    await expect(
+      loadPendingBaseUpdate(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({ baseSha: "abc1234", headSha: "def5678" });
+    await beginRepositoryBranchUpdate(opened.database, {
+      baseSha: "7654321",
+      headSha: "def5678",
+      now: "2026-07-13T10:10:00Z",
+      repository: "owner/repo",
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    await createAuthorizedIntent(opened.database, updateIntent("update-intent"));
+    await commitRepositoryBranchUpdate(opened.database, {
+      baseSha: "7654321",
+      headSha: "fedcba9",
+      now: "2026-07-13T10:11:00Z",
+      receipt: {
+        applied_at: "2026-07-13T10:11:00Z",
+        intent_id: "update-intent",
+        provider_request_id: "REQ-UPDATE",
+        response_payload_hash: "sha256:update-response",
+        result: "updated",
+        result_revision: "fedcba9",
+      },
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    expect(opened.sqlite.prepare("select head_sha, base_sha from repository_links").get()).toEqual({
+      base_sha: "7654321",
+      head_sha: "fedcba9",
+    });
+    expect(opened.sqlite.prepare("select base_sha from workspace_checkouts").get()).toEqual({
+      base_sha: "7654321",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "independent_verification_after_base_update_required",
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from repository_merge_queue_entries").get(),
+    ).toEqual({ count: 0 });
     await opened.close();
   });
 });
@@ -351,6 +399,48 @@ function trackerIntent(id: string) {
       id,
       idempotency_key: id,
       request_payload_hash: "sha256:done-payload",
+      scope: "work" as const,
+      service_run_id: "run-1",
+      status: "pending" as const,
+      target: authorization.target,
+      target_revision: authorization.target_revision,
+      updated_at: authorization.authorized_at,
+      work_ref: { issue_id: "issue-1" },
+    },
+  };
+}
+
+function updateIntent(id: string) {
+  const authorization = {
+    action: "repository.update_branch",
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy" as const,
+    attempt_role: "implementation" as const,
+    authorized_at: "2026-07-13T10:10:00Z",
+    config_snapshot_id: "config-1",
+    decision_rule_ids: ["merge_queue.base_advanced"],
+    expires_at: "2026-07-13T10:20:00Z",
+    id: "update-authorization",
+    idempotency_key: id,
+    intent_id: id,
+    observed_state_ref: "repository:owner/repo:head:def5678:base:7654321",
+    operator_capability: null,
+    scope: "work" as const,
+    service_run_id: "run-1",
+    target: "owner/repo:issue:issue-1",
+    target_revision: "def5678",
+    work_ref: { issue_id: "issue-1" },
+  };
+  return {
+    authorization,
+    intent: {
+      action: authorization.action,
+      attempt_id: "attempt-1",
+      authorization_id: authorization.id,
+      created_at: authorization.authorized_at,
+      id,
+      idempotency_key: id,
+      request_payload_hash: "sha256:update-payload",
       scope: "work" as const,
       service_run_id: "run-1",
       status: "pending" as const,

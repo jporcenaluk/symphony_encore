@@ -15,8 +15,10 @@ import { evaluatePullRequestGate, type PullRequestGateSnapshot } from "@symphony
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   beginMergeQueueLanding,
+  beginRepositoryBranchUpdate,
   commitMergeQueueLanding,
   commitPostMergeSuccess,
+  commitRepositoryBranchUpdate,
   createAuthorizedIntent,
   loadAuthorizedMergeLogins,
   markIntentApplying,
@@ -231,6 +233,80 @@ export async function executePostMergeVerification(input: {
     }),
   );
   return { result: "completed" };
+}
+
+export async function executeBaseUpdate(input: {
+  database: OpenedDatabase["database"];
+  expiresAt: string;
+  newId(): string;
+  now(): string;
+  repository: RepositoryHostingAdapter;
+  safety: PersistenceSafetyController;
+  serviceRunId: string;
+  syncWorkspace(request: {
+    branch: string;
+    expectedHeadSha: string;
+    workspace: string;
+  }): Promise<string>;
+  target: PendingMergeQueue;
+  workRef: { id: string; kind: "issue" };
+}): Promise<{ baseSha: string; headSha: string }> {
+  const contractWorkRef = { issue_id: input.workRef.id } as const;
+  const snapshot = await input.repository.fetchPullRequestSnapshot(contractWorkRef);
+  assertPullRequestIdentity(snapshot, input.target);
+  if (snapshot.observed_base_sha === input.target.baseSha) {
+    throw new Error("merge_queue.base_not_advanced");
+  }
+  const startedAt = input.now();
+  await durable(input.safety, () =>
+    beginRepositoryBranchUpdate(input.database, {
+      baseSha: snapshot.observed_base_sha,
+      headSha: snapshot.head_sha,
+      now: startedAt,
+      repository: input.target.repository,
+      workRef: input.workRef,
+    }),
+  );
+  const mutation = composeBranchUpdateMutation(input, snapshot, startedAt);
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: mutation.authority.authorization,
+      intent: mutation.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, mutation.intent.id, input.now()),
+  );
+  const updated = await input.repository.updateBranch(
+    contractWorkRef,
+    snapshot.head_sha,
+    snapshot.observed_base_sha,
+    mutation.authority,
+  );
+  if (
+    updated.branch !== input.target.branch ||
+    updated.headSha === snapshot.head_sha ||
+    updated.mutation.resultRevision !== updated.headSha
+  ) {
+    throw new Error("merge_queue.branch_update_response_invalid");
+  }
+  const synchronized = await input.syncWorkspace({
+    branch: updated.branch,
+    expectedHeadSha: updated.headSha,
+    workspace: input.target.workspacePath,
+  });
+  if (synchronized !== updated.headSha) throw new Error("merge_queue.workspace_sync_mismatch");
+  const appliedAt = input.now();
+  await durable(input.safety, () =>
+    commitRepositoryBranchUpdate(input.database, {
+      baseSha: snapshot.observed_base_sha,
+      headSha: updated.headSha,
+      now: appliedAt,
+      receipt: receipt(mutation.intent.id, updated.mutation, appliedAt),
+      workRef: input.workRef,
+    }),
+  );
+  return { baseSha: snapshot.observed_base_sha, headSha: updated.headSha };
 }
 
 export function hasAuthorizedMergeApproval(
@@ -492,6 +568,92 @@ function composeDoneMutation(
       status: "pending",
       target: input.workRef.id,
       target_revision: input.target.providerRevision,
+      updated_at: authorizedAt,
+      work_ref: workRef,
+    },
+  };
+}
+
+function composeBranchUpdateMutation(
+  input: {
+    expiresAt: string;
+    newId(): string;
+    serviceRunId: string;
+    target: PendingMergeQueue;
+    workRef: { id: string; kind: "issue" };
+  },
+  snapshot: PullRequestSnapshot,
+  authorizedAt: string,
+): {
+  authority: ProviderMutationAuthority & { authorization: MutationAuthorization };
+  intent: SideEffectIntent;
+} {
+  if (!Number.isFinite(Date.parse(authorizedAt)) || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error("merge_queue.authorization_time_invalid");
+  }
+  const authorizationId = requiredId(input.newId());
+  const intentId = requiredId(input.newId());
+  const workRef = { issue_id: input.workRef.id } as const;
+  const target = `${input.target.repository}:issue:${input.workRef.id}`;
+  const observedStateRef = `repository:${input.target.repository}:head:${snapshot.head_sha}:base:${snapshot.observed_base_sha}`;
+  const authorization: MutationAuthorization = {
+    action: "repository.update_branch",
+    actor_id: "orchestrator",
+    actor_kind: "orchestrator_policy",
+    attempt_role: "implementation",
+    authorized_at: authorizedAt,
+    config_snapshot_id: input.target.configSnapshotId,
+    decision_rule_ids: ["merge_queue.base_advanced", "repository.head_revision_exact"],
+    expires_at: input.expiresAt,
+    id: authorizationId,
+    idempotency_key: intentId,
+    intent_id: intentId,
+    observed_state_ref: observedStateRef,
+    operator_capability: null,
+    scope: "work",
+    service_run_id: input.serviceRunId,
+    target,
+    target_revision: snapshot.head_sha,
+    work_ref: workRef,
+  };
+  return {
+    authority: {
+      authorization,
+      expectation: {
+        action: authorization.action,
+        actorId: authorization.actor_id,
+        actorKind: authorization.actor_kind,
+        attemptRole: authorization.attempt_role,
+        configSnapshotId: authorization.config_snapshot_id,
+        idempotencyKey: authorization.idempotency_key,
+        intentId: authorization.intent_id,
+        observedStateRef: authorization.observed_state_ref,
+        operatorCapability: authorization.operator_capability,
+        scope: authorization.scope,
+        serviceRunId: authorization.service_run_id,
+        target: authorization.target,
+        targetRevision: authorization.target_revision,
+        workRef: `issue:${input.workRef.id}`,
+      },
+    },
+    intent: {
+      action: authorization.action,
+      attempt_id: input.target.attemptId,
+      authorization_id: authorization.id,
+      created_at: authorizedAt,
+      id: intentId,
+      idempotency_key: intentId,
+      request_payload_hash: sha256(
+        JSON.stringify({
+          expected_base_sha: snapshot.observed_base_sha,
+          expected_head_sha: snapshot.head_sha,
+        }),
+      ),
+      scope: "work",
+      service_run_id: input.serviceRunId,
+      status: "pending",
+      target,
+      target_revision: snapshot.head_sha,
       updated_at: authorizedAt,
       work_ref: workRef,
     },

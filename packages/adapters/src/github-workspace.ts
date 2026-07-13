@@ -248,6 +248,60 @@ export async function readWorkspaceHeadRevision(options: {
   return revision;
 }
 
+export async function syncWorkspaceToPublishedBranch(options: {
+  branch: string;
+  commandRunner: WorkspaceCommandRunner;
+  environment: Readonly<Record<string, string | undefined>>;
+  expectedHeadSha: string;
+  timeoutMs: number;
+  workspace: string;
+  workspaceRoot: string;
+}): Promise<string> {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(options.branch) ||
+    options.branch.includes("..") ||
+    options.branch.includes("@{") ||
+    options.branch.endsWith("/")
+  ) {
+    throw new Error("workspace.branch_invalid");
+  }
+  if (!/^[A-Fa-f0-9]{7,64}$/u.test(options.expectedHeadSha)) {
+    throw new Error("workspace.head_revision_invalid");
+  }
+  const workspace = await resolveAssignedWorkspace(options.workspaceRoot, options.workspace);
+  const environment = allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS);
+  const request = (arguments_: readonly string[]) =>
+    runRequired(options.commandRunner, {
+      arguments: arguments_,
+      command: "git" as const,
+      cwd: options.workspaceRoot,
+      environment,
+      maxOutputBytes: 1_000_000,
+      timeoutMs: options.timeoutMs,
+    });
+  const status = await request(["-C", workspace, "status", "--porcelain=v1"]);
+  if (status.stdout.trim()) throw new Error("workspace.dirty_before_sync");
+  const remoteRef = `refs/remotes/origin/${options.branch}`;
+  await request([
+    "-C",
+    workspace,
+    "fetch",
+    "--force",
+    "origin",
+    `refs/heads/${options.branch}:${remoteRef}`,
+  ]);
+  const fetched = (await request(["-C", workspace, "rev-parse", remoteRef])).stdout.trim();
+  if (fetched.toLocaleLowerCase("en-US") !== options.expectedHeadSha.toLocaleLowerCase("en-US")) {
+    throw new Error("workspace.fetched_revision_mismatch");
+  }
+  await request(["-C", workspace, "reset", "--hard", options.expectedHeadSha]);
+  const head = (await request(["-C", workspace, "rev-parse", "HEAD"])).stdout.trim();
+  if (head.toLocaleLowerCase("en-US") !== options.expectedHeadSha.toLocaleLowerCase("en-US")) {
+    throw new Error("workspace.synced_revision_mismatch");
+  }
+  return head;
+}
+
 async function runRequired(
   runner: WorkspaceCommandRunner,
   request: WorkspaceCommandRequest,
