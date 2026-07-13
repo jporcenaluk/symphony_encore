@@ -89,6 +89,7 @@ export async function recordSubmittedPlan(
 interface StoredPlanRow {
   acceptance_criteria_json: string;
   approach: string;
+  approved_by_attempt_id: string | null;
   created_at: string;
   created_by_attempt_id: string;
   estimated_changed_lines: number;
@@ -97,9 +98,50 @@ interface StoredPlanRow {
   proposed_paths_json: string;
   revision: number;
   risk_facts_json: string;
+  status: Plan["status"];
+  validated_at: string | null;
   verification_commands_json: string;
   work_ref_id: string;
   work_ref_kind: "issue" | "system_job";
+}
+
+export async function loadLatestValidatedPlan(
+  database: Kysely<DatabaseSchema>,
+  workRef: { id: string; kind: "issue" | "system_job" },
+): Promise<Plan | null> {
+  const result = await sql<StoredPlanRow>`
+    select * from plans
+    where work_ref_kind = ${workRef.kind}
+      and work_ref_id = ${workRef.id}
+      and status = 'validated'
+      and validated_at is not null
+    order by revision desc
+    limit 1
+  `.execute(database);
+  const row = result.rows[0];
+  if (!row) return null;
+  const plan = {
+    acceptance_criteria: JSON.parse(row.acceptance_criteria_json),
+    approach: row.approach,
+    approved_by_attempt_id: row.approved_by_attempt_id,
+    created_at: row.created_at,
+    created_by_attempt_id: row.created_by_attempt_id,
+    estimated_changed_lines: row.estimated_changed_lines,
+    estimated_files: row.estimated_files,
+    id: row.id,
+    proposed_paths: JSON.parse(row.proposed_paths_json),
+    revision: row.revision,
+    risk_facts: JSON.parse(row.risk_facts_json),
+    status: row.status,
+    validated_at: row.validated_at,
+    verification_commands: JSON.parse(row.verification_commands_json),
+    work_ref:
+      row.work_ref_kind === "issue"
+        ? { issue_id: row.work_ref_id }
+        : { system_job_id: row.work_ref_id },
+  };
+  if (!isPlan(plan)) throw new Error("plan.persisted_record_invalid");
+  return plan;
 }
 
 export async function markPlanValidated(

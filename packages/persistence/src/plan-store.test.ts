@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import {
   loadAttemptPlanGateState,
+  loadLatestValidatedPlan,
   markPlanValidated,
   recordAuthoritativePlanClassification,
   recordSubmittedPlan,
@@ -165,6 +166,15 @@ describe("submitted plan persistence", () => {
     await expect(loadAttemptPlanGateState(opened.database, "attempt-1")).resolves.toEqual({
       changeClass: "high_risk",
       validatedPlan: true,
+    });
+    await expect(
+      loadLatestValidatedPlan(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({
+      id: "plan-1",
+      revision: 1,
+      status: "validated",
+      validated_at: "2026-07-13T10:02:00Z",
+      work_ref: { issue_id: "issue-1" },
     });
     await expect(
       recordAuthoritativePlanClassification(opened.database, {
