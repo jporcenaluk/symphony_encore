@@ -119,6 +119,29 @@ test("rejects workspace dependencies that point outward", async () => {
   );
 });
 
+test("rejects Node package builds that resolve production imports to TypeScript source", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: REQUIRED_MAKE_TARGETS.map((target) => `${target}:\n\t@true`).join("\n"),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "packages/domain/package.json": JSON.stringify({
+      name: "@symphony/domain",
+      exports: "./src/index.ts",
+      scripts: { build: "tsc -p tsconfig.build.json" },
+    }),
+  });
+
+  assert(
+    (await validateRepository(root)).some((item) =>
+      item.includes("@symphony/domain production export must resolve to ./dist/index.js"),
+    ),
+  );
+});
+
 test("rejects unresolved conflict markers in repository-owned text", async () => {
   const root = await fixture({
     "package.json": JSON.stringify({

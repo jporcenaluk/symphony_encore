@@ -64,3 +64,19 @@ export async function completeServiceRecovery(
     }
   });
 }
+
+export async function stopServiceRun(
+  database: Kysely<DatabaseSchema>,
+  input: { endedAt: string; endReason: string; serviceRunId: string },
+): Promise<void> {
+  const result = await sql`
+    update service_runs
+    set ended_at = ${input.endedAt}, status = 'stopped', end_reason = ${input.endReason}
+    where id = ${input.serviceRunId}
+      and ended_at is null
+      and status in ('recovering', 'ready')
+  `.execute(database);
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`service_run.not_active:${input.serviceRunId}`);
+  }
+}

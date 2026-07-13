@@ -7,7 +7,7 @@ import {
   readServiceStatus,
   streamEventRecords,
 } from "@symphony/persistence";
-
+import type { FastifyBaseLogger } from "fastify";
 import {
   type ControlApi,
   type ControlApiDependencies,
@@ -20,6 +20,7 @@ export interface PersistentControlApiInput {
   authenticateMutation: ControlApiDependencies["authenticateMutation"];
   database: OpenedDatabase["database"];
   login: ControlApiDependencies["login"];
+  logger?: FastifyBaseLogger;
   newActionId?: () => string;
   now?: () => string;
   sessionCookieSecure: boolean;
@@ -35,6 +36,7 @@ export async function createPersistentControlApi(input: PersistentControlApiInpu
     authenticate: input.authenticate,
     authenticateMutation: input.authenticateMutation,
     login: input.login,
+    ...(input.logger ? { logger: input.logger } : {}),
     async mutateConfigurationOverride(request) {
       const requestPayloadHash = hashCanonical({
         expectedVersion: request.expectedVersion,

@@ -71,6 +71,22 @@ export async function loadConfigurationSnapshot(
   `.execute(database);
   const row = result.rows[0];
   if (!row) return undefined;
+  return mapConfigurationSnapshot(row);
+}
+
+export async function loadLatestConfigurationSnapshot(
+  database: Kysely<DatabaseSchema>,
+): Promise<ConfigurationSnapshot | undefined> {
+  const result = await sql<ConfigurationSnapshotRow>`
+    select * from config_snapshots
+    order by created_at desc, id desc
+    limit 1
+  `.execute(database);
+  const row = result.rows[0];
+  return row ? mapConfigurationSnapshot(row) : undefined;
+}
+
+function mapConfigurationSnapshot(row: ConfigurationSnapshotRow): ConfigurationSnapshot {
   return {
     acknowledgmentState: JSON.parse(row.acknowledgment_state_json) as Record<string, unknown>,
     adapterVersions: JSON.parse(row.adapter_versions_json) as Record<string, unknown>,

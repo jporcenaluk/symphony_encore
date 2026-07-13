@@ -9,7 +9,7 @@ command. A green but narrower test does not complete a broader item.
 ## Current state
 
 - Branch target: `feat/symphony-encore-core`.
-- Current milestone: Control API breadth, production runtime, and delivery pipeline.
+- Current milestone: first-run bootstrap, container, and canonical delivery pipeline.
 - Canonical gate: not implemented yet.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
@@ -31,7 +31,7 @@ command. A green but narrower test does not complete a broader item.
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated reads plus a recovery-gated, CSRF-bound, capability/version/idempotency/audit protected configuration mutation pass; remaining mutation resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, and readiness ordering pass; timer/cursor reconstruction pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, interrupted closure, verified Linux tree termination, workspace recovery, production recovering-to-ready startup, and orderly durable stop pass; timer/cursor reconstruction pending |
 | S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Pristine fail-closed bootstrap, salted local credentials, hash-only sessions, same-origin CSRF, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; mutation integration and macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Authenticated bounded `gh api` GraphQL transport, GitHub tracker normalization, checklist extraction, complete-page enforcement, revision recheck, authorization matrix, provider-independent contracts, and normalized PR snapshot schema pass; Projects queries and repository-hosting implementation pending |
@@ -43,7 +43,7 @@ command. A green but narrower test does not complete a broader item.
 
 | ID | Requirement area | Status | Required proof |
 |---|---|---|---|
-| T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck |
+| T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck, and production workspace imports resolve to emitted JavaScript |
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | In progress | Authenticated responsive React/Vite console, TanStack Router/Query/Table operations and settings slice, production build, Chromium flow, and Fastify static delivery pass; durable history/live-log/API breadth and component-system completion pending |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | Typed login/read/configuration-mutation routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, EventSource requests, SPA fallback isolation, and restrictive response headers pass; remaining API resources pending |
@@ -51,8 +51,8 @@ command. A green but narrower test does not complete a broader item.
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Eight checksummed migrations cover durable entities, evidence, append-only events, operators, and sessions; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Implemented | Shared Pino/Fastify lifecycle, stable bindings, NDJSON, and recursive fixed-field secret-redaction tests pass |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, generated-contract drift checks, real subprocess boundaries, and production-build Playwright flow pass; full boundary matrix pending |
-| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, and confirmed tree exit pass locally; macOS, CI matrix, and documented WSL smoke pending |
-| T10 | Node distribution and non-root multi-stage container | Not started | Runtime, health, filesystem, and scan jobs |
+| T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox, process-group signal escalation, confirmed tree exit, SIGINT/SIGTERM idempotence, and real SIGTERM production smoke pass locally; macOS, CI matrix, and documented WSL smoke pending |
+| T10 | Node distribution and non-root multi-stage container | In progress | Built Node entrypoint, safe runtime options, one-port API/UI, health/readiness, durable lifecycle, and production import smoke pass; container pending |
 | T11 | Exact dependency/toolchain pinning and update policy | In progress | Lockfile, toolchain file, Dependabot |
 | T12 | Deferred technologies remain absent | Not started | Dependency and architecture policy check |
 
@@ -65,13 +65,13 @@ command. A green but narrower test does not complete a broader item.
 | D03 | Least-privilege workflow permissions and untrusted-code isolation | Not started | actionlint, zizmor, workflow audit |
 | D04 | Policy, docs, lockfile, graph, and title gates | Not started | Stable `ci / required` aggregation |
 | D05 | Dependency, action, image, and secret review | Not started | Dependency review, pin checks, Gitleaks, Trivy |
-| D06 | Static, unit, contract, integration, build, E2E, and image jobs | In progress | Local static/unit/contract/build and production-build Playwright targets pass; integration/image jobs and canonical workflow graph pending |
+| D06 | Static, unit, contract, integration, build, E2E, and image jobs | In progress | Local static/unit/contract/build, emitted-runtime integration, and production-build Playwright targets pass; image job and canonical workflow graph pending |
 | D07 | Verified immutable artifacts, SBOM, provenance, and checksums | Not started | Successful trusted-main publication |
 | D08 | Tag promotion without rebuilding | Not started | Release workflow and artifact lookup test |
 | D09 | Dependabot for pnpm, Actions, and Docker | Not started | Valid updater configuration |
 | D10 | Fast staged-file hooks and optional pre-push verification | Not started | Hook fixture tests |
 | D11 | Cache, artifact, retention, flake, and rollback policy | Not started | Workflow settings and operator documentation |
-| D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, verify-fast, and production-build test-e2e targets pass; remaining runtime/integration/image/conformance targets pending |
+| D12 | Complete stable Make command interface | In progress | Format, lint, typecheck, test, build, start, verify-fast, emitted-runtime test-integration, and production-build test-e2e targets pass; remaining dev/image/conformance targets pending |
 
 ## Core conformance matrix
 
@@ -171,3 +171,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make test-e2e` | Chromium passed against the production Vite build | Login, operations, hostile-content escaping, committed settings mutation, and mobile navigation |
 | 2026-07-13 | working tree | `make verify-fast` | 271 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Fastify production asset caching, SPA fallback isolation, structured API 404s, and restrictive response headers |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | One-port static hosting boundary |
+| 2026-07-13 | working tree | `make verify-fast` | 279 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Production exports, runtime options, initialized startup/readiness, same-port ownership, and idempotent shutdown |
+| 2026-07-13 | working tree | `make test-integration` | Emitted Node server passed real loopback health/readiness/UI/SIGTERM/SQLite stop checks | Normal Node production distribution |

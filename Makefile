@@ -14,7 +14,7 @@ build:
 	corepack pnpm build
 
 start:
-	@node scripts/not-implemented.ts start
+	corepack pnpm start
 
 format:
 	corepack pnpm format
@@ -29,7 +29,7 @@ test:
 	corepack pnpm test
 
 test-integration:
-	@node scripts/not-implemented.ts test-integration
+	corepack pnpm test:integration
 
 test-e2e:
 	corepack pnpm test:e2e

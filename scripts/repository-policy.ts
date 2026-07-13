@@ -77,7 +77,9 @@ interface PackageManifest {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   engines?: { node?: string };
+  exports?: string | Record<string, unknown>;
   packageManager?: string;
+  scripts?: Record<string, string>;
 }
 
 async function optionalRead(file: string): Promise<string | undefined> {
@@ -216,6 +218,19 @@ export async function validateRepository(root: string): Promise<string[]> {
         if (FORBIDDEN_DOMAIN_DEPENDENCIES.includes(dependency)) {
           violations.push(`@symphony/domain has forbidden dependency ${dependency}`);
         }
+      }
+    }
+    if (manifest.scripts?.build && name !== "@symphony/web") {
+      const rootExport =
+        typeof manifest.exports === "object" && manifest.exports !== null
+          ? manifest.exports["."]
+          : undefined;
+      const productionExport =
+        typeof rootExport === "object" && rootExport !== null && "default" in rootExport
+          ? rootExport.default
+          : undefined;
+      if (productionExport !== "./dist/index.js") {
+        violations.push(`${name} production export must resolve to ./dist/index.js`);
       }
     }
   }
