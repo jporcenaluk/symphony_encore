@@ -3,12 +3,12 @@ import type {
   AgentEvent,
   EvidenceRef,
   Issue,
-  MutationAuthorization,
   PullRequestSnapshot,
   WorkRef,
 } from "@symphony/contracts";
 
 import type { AdapterPage } from "./pagination.js";
+import type { ProviderMutationAuthority } from "./provider-authorization.js";
 
 export interface ProviderMutationResult {
   providerRequestId: string;
@@ -36,7 +36,7 @@ export interface TrackerAdapter {
     id: string,
     marker: string,
     body: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<ProviderMutationResult>;
   ensureProjectSchema?: (
     project: string,
@@ -58,7 +58,7 @@ export interface TrackerAdapter {
     id: string,
     lane: string,
     reason: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<ProviderMutationResult>;
 }
 
@@ -84,14 +84,14 @@ export interface RepositoryHostingAdapter {
     workRef: WorkRef,
     failedMergeSha: string,
     evidence: readonly EvidenceRef[],
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<PullRequestIdentity>;
   ensurePullRequest(
     workRef: WorkRef,
     headSha: string,
     baseRef: string,
     bodyProjection: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<PullRequestIdentity>;
   fetchPostMergeStatus(repository: string, mergeSha: string): Promise<PullRequestSnapshot>;
   fetchPullRequestSnapshot(workRef: WorkRef): Promise<PullRequestSnapshot>;
@@ -99,19 +99,19 @@ export interface RepositoryHostingAdapter {
     workRef: WorkRef,
     expectedHeadSha: string,
     landingPolicy: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<MergeResult>;
   publishBranch(
     workRef: WorkRef,
     workspace: string,
     expectedBaseSha: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<PublishedBranch>;
   updateBranch(
     workRef: WorkRef,
     expectedHeadSha: string,
     expectedBaseSha: string,
-    authorization: MutationAuthorization,
+    authority: ProviderMutationAuthority,
   ): Promise<PublishedBranch>;
 }
 
