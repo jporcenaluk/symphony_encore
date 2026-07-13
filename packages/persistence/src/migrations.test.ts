@@ -37,6 +37,8 @@ describe("production migrations", () => {
     ).toEqual([
       { name: "core_control_plane", version: 1 },
       { name: "durable_stage_transitions", version: 2 },
+      { name: "configuration_overrides_and_operator_audit", version: 3 },
+      { name: "exact_configuration_acknowledgments", version: 4 },
     ]);
   });
 

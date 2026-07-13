@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
+import { CONFIGURATION_CATALOG, CONFIGURATION_KEYS } from "./config/catalog.js";
+
 export interface ParsedWorkflow {
   config: Record<string, unknown>;
   prompt: string;
@@ -19,74 +21,17 @@ export interface WorkflowFileInput {
   trustedPath?: string;
 }
 
-const CORE_KEYS: Readonly<Record<string, readonly string[] | "extension">> = {
-  agent: [
-    "command",
-    "read_timeout_ms",
-    "max_concurrent",
-    "max_turns",
-    "turn_timeout_ms",
-    "stall_timeout_ms",
-    "max_failure_retries",
-    "max_rework_cycles",
-    "max_plan_revisions",
-    "max_escalations",
-    "max_retry_backoff_ms",
-    "required_skills",
-    "approval_policy",
-    "thread_sandbox",
-    "turn_sandbox_policy",
-  ],
-  bootstrap: ["admin_credential"],
-  budget: [
-    "per_attempt_tokens",
-    "per_attempt_usd",
-    "per_issue_usd",
-    "rolling_24h_usd",
-    "per_issue_tokens",
-    "rolling_24h_tokens",
-    "estimate_tokens_by_profile",
-    "history_min_samples",
-    "history_window_samples",
-  ],
-  class: ["trivial_max_changed_lines", "trivial_patterns", "risk_paths"],
-  compute: ["enabled_profiles", "route_profiles", "risk_floor_rules"],
-  env: ["allowlist"],
-  extensions: "extension",
-  hooks: ["after_create", "before_run", "after_run", "before_remove", "timeout_ms"],
-  human: ["operators", "reminder_hours"],
-  learning: ["interval_issues", "max_rules", "max_prompt_tokens", "rule_decay_issues"],
-  notify: ["command", "webhook_url"],
-  persistence: ["database_path", "lease_ttl_ms", "retention_days"],
-  polling: ["interval_ms"],
-  quality: ["audit_rate", "escape_window_days"],
-  review: [
-    "max_parallel_specialists",
-    "specialists",
-    "required_checks",
-    "accepted_check_conclusions",
-    "snapshot_timeout_ms",
-    "settle_timeout_ms",
-    "quiet_period_ms",
-  ],
-  server: ["port", "host", "auth_kind", "session_secret"],
-  tracker: [
-    "kind",
-    "owner",
-    "project_number",
-    "repo_owner",
-    "repo_name",
-    "status_field",
-    "priority_field",
-    "priority_order",
-    "acceptance_criteria_heading",
-    "assignee",
-    "required_labels",
-  ],
-  ui: ["live_refresh_ms"],
-  workflow: ["path"],
-  workspace: ["root", "verify_command", "verify_none_reason"],
-};
+const mutableCoreKeys: Record<string, string[] | "extension"> = { extensions: "extension" };
+for (const fullKey of CONFIGURATION_KEYS) {
+  const [namespace, key] = fullKey.split(".");
+  if (!namespace || !key) throw new Error(`Invalid catalog key ${fullKey}`);
+  const keys = mutableCoreKeys[namespace];
+  if (keys === "extension")
+    throw new Error(`Catalog namespace ${namespace} conflicts with extensions`);
+  if (keys) keys.push(key);
+  else mutableCoreKeys[namespace] = [key];
+}
+const CORE_KEYS: Readonly<Record<string, readonly string[] | "extension">> = mutableCoreKeys;
 
 const SAFETY_NAMESPACES = [
   "budget",
@@ -106,11 +51,9 @@ const SAFETY_NAMESPACES = [
   "quality",
 ] as const;
 
-const BOOTSTRAP_KEYS = new Set([
-  "workflow.path",
-  "persistence.database_path",
-  "bootstrap.admin_credential",
-]);
+const BOOTSTRAP_KEYS: ReadonlySet<string> = new Set<string>(
+  CONFIGURATION_KEYS.filter((key) => CONFIGURATION_CATALOG[key].reload === "bootstrap"),
+);
 
 const TEMPLATE_ROOTS = new Set([
   "work_ref",

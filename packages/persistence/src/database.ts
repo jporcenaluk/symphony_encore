@@ -15,6 +15,10 @@ export interface DatabaseSchema {
   budget_reservations: Record<string, unknown>;
   claims: Record<string, unknown>;
   config_snapshots: Record<string, unknown>;
+  configuration_acknowledgments: Record<string, unknown>;
+  configuration_overrides: Record<string, unknown>;
+  operator_actions: Record<string, unknown>;
+  operator_idempotency_keys: Record<string, unknown>;
   schema_migrations: SchemaMigrationTable;
   service_runs: Record<string, unknown>;
   stage_transitions: Record<string, unknown>;
@@ -208,9 +212,90 @@ const stageTransitionMigration: RepositoryMigration = {
   version: 2,
 };
 
+const configurationOverrideMigration: RepositoryMigration = {
+  checksum: "sha256:2835087d9d6f184f1cb6587038f620b493707fc9f04647ab83c149d975552968",
+  name: "configuration_overrides_and_operator_audit",
+  async up(database) {
+    await sql`
+      create table operator_actions (
+        id text primary key,
+        operator_id text not null,
+        auth_subject text not null,
+        capability text not null,
+        endpoint text not null,
+        action text not null,
+        target text not null,
+        reason text not null,
+        expected_version integer not null check (expected_version >= 0),
+        observed_version integer not null check (observed_version >= 0),
+        idempotency_key text not null,
+        request_payload_hash text not null,
+        result text not null,
+        created_at text not null
+      ) strict
+    `.execute(database);
+    await sql`
+      create table operator_idempotency_keys (
+        operator_id text not null,
+        endpoint text not null,
+        target text not null,
+        idempotency_key text not null,
+        request_payload_hash text not null,
+        original_action_id text not null references operator_actions(id),
+        response_json text not null check (json_valid(response_json)),
+        primary key (operator_id, endpoint, target, idempotency_key)
+      ) strict
+    `.execute(database);
+    await sql`
+      create table configuration_overrides (
+        key text not null,
+        version integer not null check (version > 0),
+        operation text not null check (operation in ('set', 'clear')),
+        value_json text check (value_json is null or json_valid(value_json)),
+        created_by text not null,
+        created_at text not null,
+        reason text not null,
+        validation_result text not null,
+        acknowledgment_state text not null,
+        reload_state text not null,
+        operator_action_id text not null unique references operator_actions(id),
+        primary key (key, version),
+        check (
+          (operation = 'set' and value_json is not null)
+          or (operation = 'clear' and value_json is null)
+        )
+      ) strict
+    `.execute(database);
+  },
+  version: 3,
+};
+
+const configurationAcknowledgmentMigration: RepositoryMigration = {
+  checksum: "sha256:9fbc8cf62392b0dc9c52f12802deaa9d1df76ad9f45613e76327985a09b7f7f8",
+  name: "exact_configuration_acknowledgments",
+  async up(database) {
+    await sql`alter table operator_actions add column expected_version_ref text`.execute(database);
+    await sql`alter table operator_actions add column observed_version_ref text`.execute(database);
+    await sql`
+      create table configuration_acknowledgments (
+        id text primary key,
+        key text not null,
+        candidate_hash text not null unique,
+        candidate_version text not null,
+        acknowledged_by text not null,
+        acknowledged_at text not null,
+        operator_action_id text not null unique references operator_actions(id)
+      ) strict
+    `.execute(database);
+  },
+  version: 4,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
+  configurationOverrideMigration,
+  configurationAcknowledgmentMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

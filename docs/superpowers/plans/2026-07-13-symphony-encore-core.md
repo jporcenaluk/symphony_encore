@@ -248,8 +248,8 @@ runtime tests.
 - [ ] Run the entire Section 19.2 matrix and generate the Core conformance report.
 - [ ] Run the Real Integration Profile in a non-production GitHub repository and record redacted
   evidence for every Section 19.3 scenario.
-- [ ] Inspect and configure repository rules, publish the branch through the Git Data API, open the
-  Conventional Commit-titled pull request, and verify every required check on its exact head SHA.
+- [ ] Inspect and configure repository rules, publish the branch, open the Conventional
+  Commit-titled pull request, and verify every required check on its exact head SHA.
 
 ## Completion audit
 

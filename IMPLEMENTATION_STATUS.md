@@ -8,9 +8,8 @@ command. A green but narrower test does not complete a broader item.
 
 ## Current state
 
-- Branch target: `feat/symphony-encore-core` (to be published through the GitHub Git Data API because
-  this managed checkout cannot write `.git`).
-- Current milestone: workflow configuration and durable control-plane records.
+- Branch target: `feat/symphony-encore-core`.
+- Current milestone: workflow configuration, durable control-plane records, and compute routing.
 - Canonical gate: not implemented yet.
 - Pull request: not opened yet.
 - Core Conformance: not achieved.
@@ -27,7 +26,7 @@ command. A green but narrower test does not complete a broader item.
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
 | S06 | Workspace isolation, hooks, and independent verification | Not started | Filesystem and process boundary integration tests |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
-| S08 | Compute routing | Not started | Profile resolution and risk-floor policy tests |
+| S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
 | S10 | Git, pull requests, and serialized merge queues | Not started | Repository adapter and multi-queue integration tests |
 | S11 | Human questions, approvals, notifications, and controls | Not started | API capability and durable routing tests |
@@ -37,7 +36,7 @@ command. A green but narrower test does not complete a broader item.
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope and bootstrap-key boundary pass; auth/sandbox pending |
 | S16 | GitHub tracker and repository-hosting adapters | Not started | Shared adapter conformance tests and real-profile smoke test |
 | S17 | Codex app-server adapter | Not started | Protocol fixtures and real-profile smoke test |
-| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Strict parsing/path/hash/typo tests pass; value/reload/override work pending |
+| S18 | `WORKFLOW.md`, validation, reload, and overrides | In progress | Complete key catalog, precedence/provenance, semantic validation, last-known-good reload, durable overrides, exact-candidate acknowledgment, and immutable snapshots pass; startup/API integration pending |
 | S19 | Core and real-integration conformance reports | Not started | `make conformance` and redacted real-profile report |
 
 ## Technology-stack coverage
@@ -49,7 +48,7 @@ command. A green but narrower test does not complete a broader item.
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | Not started | Contract drift and reconnect tests |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Classification/lifecycle/plan/budget/review/authority policies pass |
-| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Two checksummed migrations and atomic core transactions pass |
+| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Four checksummed migrations, atomic core transactions, configuration history, snapshots, and acknowledgments pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Vitest/Biome/TypeScript active; Playwright and boundary suites pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | Not started | CI matrix and documented WSL smoke test |
@@ -123,3 +122,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Foundation |
 | 2026-07-13 | working tree | `make verify-fast` | 90 tests; lint and typecheck passed | Domain, contracts, persistence, workflow |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Domain, contracts, persistence, workflow |
+| 2026-07-13 | working tree | `make verify-fast` | 119 tests; lint and typecheck passed | Configuration, snapshots, acknowledgment, compute routing |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Configuration, snapshots, acknowledgment, compute routing |
