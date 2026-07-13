@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { appendEventRecord, listEventRecords } from "./event-store.js";
+import { appendEventRecord, listEventRecords, streamEventRecords } from "./event-store.js";
 import { beginServiceRun } from "./service-run-store.js";
 
 const openedDatabases: OpenedDatabase[] = [];
@@ -106,5 +106,30 @@ describe("append-only event store", () => {
     await expect(
       listEventRecords(opened.database, { afterCursor: 0, limit: 1001 }),
     ).rejects.toThrow("events.invalid_limit");
+  });
+
+  it("follows new durable cursors and stops promptly when aborted", async () => {
+    const { opened } = await fixture();
+    await appendEventRecord(opened.database, event("event-1", "2026-07-13T10:00:01Z"));
+    const controller = new AbortController();
+    let waited = false;
+    const seen: number[] = [];
+
+    for await (const record of streamEventRecords(opened.database, {
+      afterCursor: 0,
+      batchSize: 10,
+      pollIntervalMs: 1,
+      signal: controller.signal,
+      async wait() {
+        waited = true;
+        await appendEventRecord(opened.database, event("event-2", "2026-07-13T10:00:02Z"));
+      },
+    })) {
+      seen.push(record.cursor);
+      if (record.cursor === 2) controller.abort();
+    }
+
+    expect(waited).toBe(true);
+    expect(seen).toEqual([1, 2]);
   });
 });

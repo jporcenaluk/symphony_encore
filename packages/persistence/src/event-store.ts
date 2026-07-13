@@ -100,6 +100,46 @@ export async function listEventRecords(
   };
 }
 
+export async function* streamEventRecords(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    afterCursor: number;
+    batchSize: number;
+    pollIntervalMs: number;
+    signal: AbortSignal;
+    wait?: (signal: AbortSignal, intervalMs: number) => Promise<void>;
+  },
+): AsyncGenerator<EventRecord> {
+  let cursor = input.afterCursor;
+  const wait = input.wait ?? waitForAbortableDelay;
+  while (!input.signal.aborted) {
+    const page = await listEventRecords(database, {
+      afterCursor: cursor,
+      limit: input.batchSize,
+    });
+    for (const record of page.items) {
+      cursor = record.cursor;
+      yield record;
+      if (input.signal.aborted) return;
+    }
+    if (page.hasMore) continue;
+    await wait(input.signal, input.pollIntervalMs);
+  }
+}
+
+async function waitForAbortableDelay(signal: AbortSignal, intervalMs: number): Promise<void> {
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(finish, intervalMs);
+    signal.addEventListener("abort", finish, { once: true });
+    function finish(): void {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+  });
+}
+
 function splitWorkRef(workRef: AppendEventRecordInput["workRef"]): {
   id: string | null;
   kind: "issue" | "system_job" | null;

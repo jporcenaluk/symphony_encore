@@ -32,7 +32,7 @@ command. A green but narrower test does not complete a broader item.
 | S11 | Human questions, approvals, notifications, and controls | In progress | Authenticated capability-gated Control API read foundation passes; mutations and remaining resources pending |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
 | S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted-attempt closure, and fail-closed process/workspace recovery gating pass; process termination adapter pending |
-| S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, monotonic bounded cursors, restart replay, and authenticated paginated reads pass; live delivery, logs, quality, retention, and tombstones pending |
+| S14 | Durable logs, events, quality metrics, and retention | In progress | Append-only Event Records, restart replay, authenticated paging, and abortable cursor-based SSE pass; logs, quality, retention, and tombstones pending |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
 | S17 | Codex app-server adapter | In progress | Exact normalized event/error contracts and immutable capability/profile/price manifest pass; protocol implementation pending |
@@ -46,7 +46,7 @@ command. A green but narrower test does not complete a broader item.
 | T01 | Node 24 Active LTS, pnpm workspace, strict TypeScript, one lockfile | Implemented | Pinned files, frozen install, typecheck |
 | T02 | Inward, acyclic package graph | Implemented | Repository policy tests and lint gate |
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
-| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | TypeBox health/readiness/state/event routes, structured validation errors, OpenAPI/client generation, and drift gates pass; live SSE and full API pending |
+| T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | In progress | TypeBox routes, structured errors, OpenAPI/client drift gates, durable SSE IDs, replay, and EventSource requests pass; remaining API resources pending |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
 | T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Seven checksummed migrations cover durable entities, evidence, and append-only events; WAL, atomic transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
@@ -150,3 +150,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | SQLite-backed control state and append-only resumable Event Record cursors |
 | 2026-07-13 | working tree | `make verify-fast` | 208 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Authenticated event paging, generated cursor client, structured 422 validation |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Authenticated event paging, generated cursor client, structured 422 validation |
+| 2026-07-13 | working tree | `make verify-fast` | 214 tests; lint, contract/OpenAPI/client drift, and typecheck passed | Abortable live event following, safe SSE framing, resume cursor, generated EventSource request |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Abortable live event following, safe SSE framing, resume cursor, generated EventSource request |

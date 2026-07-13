@@ -4808,6 +4808,25 @@
         }
       }
     },
+    "EventStreamHeaders": {
+      "type": "object",
+      "properties": {
+        "last-event-id": {
+          "pattern": "^(?:0|[1-9][0-9]*)$",
+          "type": "string"
+        }
+      }
+    },
+    "EventStreamQuery": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "after_cursor": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      }
+    },
     "EvidenceRef": {
       "anyOf": [
         {

@@ -83,3 +83,14 @@ export const EventRecordPageSchema = Type.Object(
   { additionalProperties: false },
 );
 export type EventRecordPage = Static<typeof EventRecordPageSchema>;
+
+export const EventStreamQuerySchema = Type.Object(
+  { after_cursor: Type.Optional(Type.Integer({ minimum: 0 })) },
+  { additionalProperties: false },
+);
+export type EventStreamQuery = Static<typeof EventStreamQuerySchema>;
+
+export const EventStreamHeadersSchema = Type.Object({
+  "last-event-id": Type.Optional(Type.String({ pattern: "^(?:0|[1-9][0-9]*)$" })),
+});
+export type EventStreamHeaders = Static<typeof EventStreamHeadersSchema>;

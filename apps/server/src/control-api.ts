@@ -5,13 +5,18 @@ import {
   type ControlState,
   ControlStateSchema,
   ErrorEnvelopeSchema,
+  type EventRecord,
   type EventRecordPage,
   EventRecordPageQuerySchema,
   EventRecordPageSchema,
+  EventStreamHeadersSchema,
+  EventStreamQuerySchema,
   HealthResponseSchema,
   ReadyResponseSchema,
 } from "@symphony/contracts";
 import Fastify, { type FastifyRequest } from "fastify";
+
+import { encodeServerSentEvent, resolveEventResumeCursor } from "./event-stream.js";
 
 export interface OperatorPrincipal {
   authSubject: string;
@@ -24,6 +29,7 @@ export interface ControlApiDependencies {
   listEvents(input: { afterCursor: number; limit: number }): Promise<EventRecordPage>;
   readControlState(): Promise<ControlState>;
   readServiceStatus(): Promise<{ id: string; state: ActiveServiceState }>;
+  streamEvents(input: { afterCursor: number; signal: AbortSignal }): AsyncIterable<EventRecord>;
 }
 
 export async function createControlApi(dependencies: ControlApiDependencies) {
@@ -45,13 +51,16 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
 
   server.setErrorHandler((error, _request, reply) => {
     const validationIssues = extractValidationIssues(error);
-    if (validationIssues !== null) {
+    if (
+      validationIssues !== null ||
+      (error instanceof Error && error.message === "events.invalid_cursor")
+    ) {
       return reply.code(422).send({
         error: {
           code: "validation_failed",
           current_version: null,
           details: {
-            issues: validationIssues,
+            issues: validationIssues ?? [],
           },
           message: "Request validation failed",
         },
@@ -109,6 +118,77 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
               : "Service is not ready",
         },
       });
+    },
+  );
+
+  server.get(
+    "/api/v1/events/stream",
+    {
+      schema: {
+        headers: EventStreamHeadersSchema,
+        operationId: "streamEvents",
+        produces: ["text/event-stream"],
+        querystring: EventStreamQuerySchema,
+        response: {
+          200: { type: "string" },
+          401: ErrorEnvelopeSchema,
+          403: ErrorEnvelopeSchema,
+          422: ErrorEnvelopeSchema,
+        },
+        security: [{ sessionCookie: [] }],
+        summary: "Live durable event stream",
+        tags: ["control"],
+      },
+    },
+    async (request, reply) => {
+      const operator = await dependencies.authenticate(request);
+      if (operator === null) {
+        return reply.code(401).send({
+          error: {
+            code: "authentication_required",
+            current_version: null,
+            details: {},
+            message: "Authentication is required",
+          },
+        });
+      }
+      if (!operator.capabilities.includes("operator.read")) {
+        return reply.code(403).send({
+          error: {
+            code: "capability_required",
+            current_version: null,
+            details: { capability: "operator.read" },
+            message: "The operator.read capability is required",
+          },
+        });
+      }
+
+      const afterCursor = resolveEventResumeCursor({
+        explicit:
+          request.query.after_cursor === undefined ? undefined : String(request.query.after_cursor),
+        lastEventId: request.headers["last-event-id"],
+      });
+      const controller = new AbortController();
+      request.raw.once("close", () => controller.abort());
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "content-type": "text/event-stream; charset=utf-8",
+      });
+      try {
+        for await (const record of dependencies.streamEvents({
+          afterCursor,
+          signal: controller.signal,
+        })) {
+          if (controller.signal.aborted) break;
+          reply.raw.write(encodeServerSentEvent(record));
+        }
+      } finally {
+        controller.abort();
+        reply.raw.end();
+      }
+      return reply;
     },
   );
 

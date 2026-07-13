@@ -5,6 +5,7 @@ import {
   ControlStateSchema,
   ErrorEnvelopeSchema,
   EventRecordPageSchema,
+  EventStreamQuerySchema,
   HealthResponseSchema,
   ReadyResponseSchema,
 } from "./control-api.js";
@@ -64,5 +65,7 @@ describe("Control API wire contracts", () => {
       }),
     ).toBe(true);
     expect(Value.Check(EventRecordPageSchema, { has_more: false, items: [] })).toBe(false);
+    expect(Value.Check(EventStreamQuerySchema, { after_cursor: 42 })).toBe(true);
+    expect(Value.Check(EventStreamQuerySchema, { after_cursor: -1 })).toBe(false);
   });
 });

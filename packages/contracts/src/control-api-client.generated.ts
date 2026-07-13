@@ -24,8 +24,14 @@ export class ControlApiClientError extends Error {
 export interface ControlApiClient {
   getHealth(): Promise<HealthResponse>;
   getReady(): Promise<ReadyResponse>;
+  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;
   listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
   getControlState(): Promise<ControlState>;
+}
+
+export interface ControlEventStreamRequest {
+  url: string;
+  withCredentials: true;
 }
 
 export function createControlApiClient(
@@ -46,6 +52,13 @@ export function createControlApiClient(
   return {
     getHealth: () => request<HealthResponse>("/health", "GET"),
     getReady: () => request<ReadyResponse>("/ready", "GET"),
+    streamEvents: (input = {}) => {
+      const suffix = input.afterCursor === undefined ? "" : `?after_cursor=${input.afterCursor}`;
+      return {
+        url: `${normalizedBaseUrl}/api/v1/events/stream${suffix}`,
+        withCredentials: true as const,
+      };
+    },
     listEvents: (input = {}) => {
       const query = new URLSearchParams();
       if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));

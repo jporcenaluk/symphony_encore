@@ -43,6 +43,7 @@ async function buildOpenApiDocument(): Promise<OpenApiDocument> {
     async readServiceStatus() {
       return { id: "schema-generation", state: "recovering" as const };
     },
+    async *streamEvents() {},
   });
   try {
     await server.ready();
@@ -57,6 +58,7 @@ const OPERATION_RETURN_TYPES: Readonly<Record<string, string>> = {
   getHealth: "HealthResponse",
   getReady: "ReadyResponse",
   listEvents: "EventRecordPage",
+  streamEvents: "ControlEventStreamRequest",
 };
 
 export async function renderControlApiClient(): Promise<string> {
@@ -90,6 +92,15 @@ export async function renderControlApiClient(): Promise<string> {
       return request<EventRecordPage>(\`${operation.path}\${suffix}\`, ${JSON.stringify(operation.method)});
     },`;
       }
+      if (operation.operationId === "streamEvents") {
+        return `    streamEvents: (input = {}) => {
+      const suffix = input.afterCursor === undefined ? "" : \`?after_cursor=\${input.afterCursor}\`;
+      return {
+        url: \`\${normalizedBaseUrl}${operation.path}\${suffix}\`,
+        withCredentials: true as const,
+      };
+    },`;
+      }
       return `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`;
     })
     .join("\n");
@@ -117,7 +128,12 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
+${operations.map((operation) => (operation.operationId === "listEvents" ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;" : operation.operationId === "streamEvents" ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;" : `  ${operation.operationId}(): Promise<${operation.returnType}>;`)).join("\n")}
+}
+
+export interface ControlEventStreamRequest {
+  url: string;
+  withCredentials: true;
 }
 
 export function createControlApiClient(

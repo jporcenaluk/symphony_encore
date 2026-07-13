@@ -1,4 +1,4 @@
-import type { ActiveServiceState, ControlState } from "@symphony/contracts";
+import type { ActiveServiceState, ControlState, EventRecord } from "@symphony/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type ControlApi, createControlApi } from "./control-api.js";
@@ -23,6 +23,25 @@ async function fixture(input?: { capabilities?: readonly string[]; authenticated
     version: "state-1",
   };
   const listEvents = vi.fn(async () => ({ has_more: false, items: [], next_cursor: 7 }));
+  const streamEvents = vi.fn((request: { afterCursor: number; signal: AbortSignal }) =>
+    (async function* (): AsyncGenerator<EventRecord> {
+      yield {
+        attempt_id: null,
+        change_class: null,
+        compute_profile: null,
+        cost_usd: null,
+        cursor: request.afterCursor + 1,
+        event_name: "service.recovery",
+        id: "event-live",
+        payload: {},
+        reason_code: "recovery.progress",
+        result: "recorded",
+        service_run_id: "run-1",
+        timestamp: "2026-07-13T10:00:01Z",
+        work_ref: null,
+      };
+    })(),
+  );
   const server = await createControlApi({
     async authenticate(request) {
       if (input?.authenticated === false || request.headers.authorization !== "Session valid") {
@@ -41,12 +60,14 @@ async function fixture(input?: { capabilities?: readonly string[]; authenticated
       return { id: "run-1", state: serviceState };
     },
     listEvents,
+    streamEvents,
   });
   servers.push(server);
   return {
     listEvents,
     server,
     setServiceState: (value: ActiveServiceState) => (serviceState = value),
+    streamEvents,
   };
 }
 
@@ -137,6 +158,39 @@ describe("Control API", () => {
         message: "Request validation failed",
       },
     });
+  });
+
+  it("streams durable SSE ids from an explicit resume cursor", async () => {
+    const { server, streamEvents } = await fixture();
+    await server.ready();
+
+    const response = await server.inject({
+      headers: { authorization: "Session valid", "last-event-id": "11" },
+      method: "GET",
+      url: "/api/v1/events/stream?after_cursor=12",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toContain("id: 13\nevent: symphony.event\ndata:");
+    expect(streamEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ afterCursor: 12, signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("returns 422 for an unsafe Last-Event-ID cursor", async () => {
+    const { server } = await fixture();
+    await server.ready();
+
+    const response = await server.inject({
+      headers: {
+        authorization: "Session valid",
+        "last-event-id": "999999999999999999999999999999",
+      },
+      method: "GET",
+      url: "/api/v1/events/stream",
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe("validation_failed");
   });
 
   it("generates OpenAPI from the accepted TypeBox route schemas", async () => {

@@ -3,6 +3,7 @@ import {
   type OpenedDatabase,
   readControlState,
   readServiceStatus,
+  streamEventRecords,
 } from "@symphony/persistence";
 
 import {
@@ -30,6 +31,13 @@ export async function createPersistentControlApi(input: PersistentControlApiInpu
     },
     readControlState: () => readControlState(input.database),
     readServiceStatus: () => readServiceStatus(input.database),
+    streamEvents: ({ afterCursor, signal }) =>
+      streamEventRecords(input.database, {
+        afterCursor,
+        batchSize: 100,
+        pollIntervalMs: 250,
+        signal,
+      }),
   });
 }
 

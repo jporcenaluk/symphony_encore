@@ -52,4 +52,13 @@ describe("generated Control API client", () => {
       expect.objectContaining({ method: "GET" }),
     );
   });
+
+  it("builds a credentialed EventSource request from the streaming operation", () => {
+    const client = createControlApiClient("http://127.0.0.1:3000/", vi.fn());
+
+    expect(client.streamEvents({ afterCursor: 12 })).toEqual({
+      url: "http://127.0.0.1:3000/api/v1/events/stream?after_cursor=12",
+      withCredentials: true,
+    });
+  });
 });
