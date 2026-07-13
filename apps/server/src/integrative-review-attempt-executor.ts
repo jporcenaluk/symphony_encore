@@ -26,7 +26,7 @@ export interface ExecutePlannedIntegrativeReviewAttemptInput {
   beforeRunCommand: string | null;
   database: OpenedDatabase["database"];
   hookTimeoutMs: number;
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
+  issue: Issue | SystemJob;
   newId(): string;
   now(): string;
   planned: PlannedIntegrativeReviewAttempt;
@@ -141,11 +141,11 @@ async function executePlannedReviewAttempt(
   }
 }
 
-function workTitle(work: Issue | Extract<SystemJob, { kind: "repair" }>): string {
+function workTitle(work: Issue | SystemJob): string {
   return "kind" in work ? work.goal : work.title;
 }
 
-function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+function reviewWorkRef(work: Issue | SystemJob): {
   id: string;
   kind: "issue" | "system_job";
 } {

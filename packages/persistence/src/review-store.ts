@@ -16,6 +16,7 @@ import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 import { finishAttemptInTransaction } from "./finish-attempt.js";
+import { transitionStageInTransaction } from "./stage-transition.js";
 
 type WorkRef = { id: string; kind: "issue" | "system_job" };
 
@@ -100,7 +101,7 @@ export async function loadPendingReviewCoordination(
     select attempt.change_class, record.patch_identity, record.target_base_sha,
            record.target_sha, verification.id as verification_record_id,
            implementation.routing_reasons_json as risk_facts_json,
-           plan.proposed_paths_json, attempt.workspace_path
+           coalesce(plan.proposed_paths_json, '[]') as proposed_paths_json, attempt.workspace_path
     from claims claim
     join review_records record
       on record.work_ref_kind = claim.work_ref_kind
@@ -115,9 +116,9 @@ export async function loadPendingReviewCoordination(
       and verification.exit_code = 0
     join attempts implementation
       on implementation.id = verification.attempt_id
-      and implementation.role = 'implementation'
+      and implementation.role in ('implementation', 'synthesis')
       and implementation.status = 'closed'
-    join plans plan
+    left join plans plan
       on plan.work_ref_kind = claim.work_ref_kind
       and plan.work_ref_id = claim.work_ref_id
       and plan.revision = (
@@ -217,7 +218,7 @@ export async function loadPendingIntegrativeReview(
     join attempts implementation
       on implementation.work_ref_kind = claim.work_ref_kind
       and implementation.work_ref_id = claim.work_ref_id
-      and implementation.role = 'implementation'
+      and implementation.role in ('implementation', 'synthesis')
       and implementation.status = 'closed'
       and implementation.change_class in ('standard', 'high_risk')
     join verification_records verification
@@ -319,6 +320,21 @@ export async function finishReviewAttempt(
       nextClaim: { mode: "Ready", reason: "review_coordination_required" },
       reservationId: input.reservationId,
       settledLedgers: input.settledLedgers,
+      ...(input.workRef.kind === "system_job"
+        ? {
+            systemJobStageTransition: {
+              attemptId: input.attemptId,
+              confirmedExternalRevision: null,
+              enteredAt: input.endedAt,
+              expectedFromStage: "running",
+              id: `${input.terminalResultId}:stage`,
+              reason: `review.${input.result.decision}`,
+              timestampSource: "observed_estimate" as const,
+              toStage: "review" as const,
+              workRef: input.workRef,
+            },
+          }
+        : {}),
       terminalResult: {
         id: input.terminalResultId,
         kind: "review_result",
@@ -336,6 +352,7 @@ export async function commitOrdinaryReviewSet(
   input: {
     createdAt: string;
     id: string;
+    maxReworkCycles?: number;
     requiredSpecialistNames: readonly string[];
     workRef: WorkRef;
   },
@@ -396,10 +413,37 @@ export async function commitOrdinaryReviewSet(
         ${input.createdAt}
       )
     `.execute(transaction);
-    const route = reviewSetRoute(aggregateDecision);
+    let synthesisJob = false;
+    let synthesisReworkExhausted = false;
+    if (input.workRef.kind === "system_job") {
+      const job = await sql<{ kind: string; status: string }>`
+        select kind, status from system_jobs where id = ${input.workRef.id}
+      `.execute(transaction);
+      synthesisJob = job.rows[0]?.kind === "synthesis";
+      if (synthesisJob && job.rows[0]?.status !== "review") {
+        throw new Error(`review_set.synthesis_stage_mismatch:${job.rows[0]?.status ?? "missing"}`);
+      }
+      if (synthesisJob && aggregateDecision === "blocked") {
+        const maxReworkCycles = input.maxReworkCycles ?? 2;
+        if (!Number.isSafeInteger(maxReworkCycles) || maxReworkCycles < 1) {
+          throw new Error("review_set.rework_limit_invalid");
+        }
+        const prior = await sql<{ count: number }>`
+          select count(*) as count from review_sets
+          where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+            and decision = 'blocked'
+        `.execute(transaction);
+        synthesisReworkExhausted = (prior.rows[0]?.count ?? 0) >= maxReworkCycles;
+      }
+    }
+    const route = synthesisReworkExhausted
+      ? { mode: "AwaitingHuman" as const, reason: "human_review" }
+      : reviewSetRoute(aggregateDecision);
+    const claimReason =
+      synthesisJob && route.reason === "review_rework" ? "synthesis_rework" : route.reason;
     const claim = await sql`
       update claims
-      set mode = ${route.mode}, reason = ${route.reason}, updated_at = ${input.createdAt},
+      set mode = ${route.mode}, reason = ${claimReason}, updated_at = ${input.createdAt},
           expires_at = null, retry_due_at = null, blocker_predicate = null,
           question_id = null, approval_request_id = null
       where work_ref_kind = ${input.workRef.kind}
@@ -408,13 +452,33 @@ export async function commitOrdinaryReviewSet(
         and reason = 'review_coordination_required'
     `.execute(transaction);
     if (claim.numAffectedRows !== 1n) throw new Error("review_set.claim_not_ready");
+    if (synthesisJob && (claimReason === "synthesis_rework" || route.mode === "AwaitingHuman")) {
+      const toStage = claimReason === "synthesis_rework" ? "rework" : "human";
+      await transitionStageInTransaction(transaction, {
+        attemptId: null,
+        confirmedExternalRevision: null,
+        enteredAt: input.createdAt,
+        expectedFromStage: "review",
+        id: `${input.id}:stage`,
+        reason: `review_set.${claimReason}`,
+        timestampSource: "observed_estimate",
+        toStage,
+        workRef: input.workRef,
+      });
+      const job = await sql`
+        update system_jobs set status = ${toStage}
+        where id = ${input.workRef.id} and kind = 'synthesis' and status = 'review'
+      `.execute(transaction);
+      if (job.numAffectedRows !== 1n) throw new Error("review_set.synthesis_stage_mismatch");
+    }
     if (route.mode === "AwaitingHuman") {
       await sql`
         insert into parked_work (
           work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
           question_id, parked_at, last_checked_at, resolved_at
         ) values (
-          ${input.workRef.kind}, ${input.workRef.id}, 'Review', ${route.reason}, null,
+          ${input.workRef.kind}, ${input.workRef.id},
+          ${input.workRef.kind === "system_job" ? "review" : "Review"}, ${claimReason}, null,
           null, ${input.createdAt}, ${input.createdAt}, null
         )
         on conflict (work_ref_kind, work_ref_id) do update set
@@ -574,7 +638,8 @@ export async function finishAdjudicationAttempt(
           work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
           question_id, parked_at, last_checked_at, resolved_at
         ) values (
-          ${input.workRef.kind}, ${input.workRef.id}, 'Review', 'human_review', null,
+          ${input.workRef.kind}, ${input.workRef.id},
+          ${input.workRef.kind === "system_job" ? "review" : "Review"}, 'human_review', null,
           ${questionId}, ${input.endedAt}, ${input.endedAt}, null
         )
         on conflict (work_ref_kind, work_ref_id) do update set
@@ -601,6 +666,22 @@ export async function finishAdjudicationAttempt(
             },
       reservationId: input.reservationId,
       settledLedgers: input.settledLedgers,
+      ...(input.workRef.kind === "system_job"
+        ? {
+            systemJobStageTransition: {
+              attemptId: input.attemptId,
+              confirmedExternalRevision: null,
+              enteredAt: input.endedAt,
+              expectedFromStage: "running",
+              id: `${input.terminalResultId}:stage`,
+              reason: `adjudication.${input.result.decision}`,
+              timestampSource: "observed_estimate" as const,
+              toStage:
+                input.result.decision === "resolve" ? ("review" as const) : ("human" as const),
+              workRef: input.workRef,
+            },
+          }
+        : {}),
       terminalResult: {
         id: input.terminalResultId,
         kind: "adjudication_result",

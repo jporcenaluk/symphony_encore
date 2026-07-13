@@ -8,6 +8,7 @@ import {
   type AgentSession,
   issueWorkspacePath,
   type RepositoryHostingAdapter,
+  systemJobWorkspacePath,
   type WorkspaceRepositoryAdapter,
 } from "@symphony/adapters";
 import { type AgentAdapterManifest, type Issue, PlanSchema } from "@symphony/contracts";
@@ -65,6 +66,10 @@ const effectiveConfig = {
   "hooks.before_remove": null,
   "hooks.before_run": null,
   "hooks.timeout_ms": 60_000,
+  "learning.interval_issues": 25,
+  "learning.max_prompt_tokens": 4_000,
+  "learning.max_rules": 25,
+  "learning.rule_decay_issues": 100,
   "persistence.lease_ttl_ms": 120_000,
   "polling.interval_ms": 30_000,
   "review.accepted_check_conclusions": ["success", "neutral", "skipped"],
@@ -1181,6 +1186,525 @@ describe("production reconciliation scheduler", () => {
       { from_stage: "In Progress", to_stage: "Review" },
       { from_stage: "Review", to_stage: "Done" },
     ]);
+    await opened.close();
+  });
+
+  it("drives an interval synthesis proposal through supervised review and merge without tracker mutation", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-production-synthesis-"));
+    directories.push(directory);
+    const workspaceRoot = path.join(directory, "workspaces");
+    await mkdir(workspaceRoot);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into service_runs (
+          id, service_version, host_id, started_at, status,
+          startup_config_snapshot_id, start_reason
+        ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into operators (
+          id, auth_subject, capabilities_json, tracker_login, status,
+          version, created_at, updated_at
+        ) values (
+          'operator-1', 'subject-1', '["merge_queue.write"]', 'maintainer',
+          'active', 1, 't0', 't0'
+        )`,
+      )
+      .run();
+    const completed = { ...candidate, id: "completed-issue", state: "Done" as const };
+    await observeIssue(opened.database, {
+      issue: completed,
+      observedAt: "2026-07-13T09:00:00Z",
+      providerRevision: "revision-done",
+      transitionId: "completed-baseline",
+    });
+    opened.sqlite
+      .prepare(
+        `insert into lessons (
+          id, created_at, work_ref_kind, work_ref_id, source, text, evidence_json
+        ) values (
+          'lesson-1', '2026-07-13T09:01:00Z', 'issue', 'completed-issue',
+          'confusion', 'Require current-head verification',
+          '[{"kind":"commit","sha":"abc1234"}]'
+        )`,
+      )
+      .run();
+    const tracker = {
+      createOrUpdateComment: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
+      fetchCommentsSince: vi.fn(),
+      fetchIssuesByStates: vi.fn(),
+      fetchStatesByIds: vi.fn(),
+      updateIssueLane: vi.fn(),
+    };
+    const agent: AgentAdapter = {
+      launch: vi.fn(async (request: AgentLaunchRequest) => {
+        const role = request.preflight.role;
+        return {
+          cancel: vi.fn(async () => undefined),
+          events: {
+            async *[Symbol.asyncIterator]() {
+              yield {
+                attempt_id: request.attemptId,
+                event: "session_started" as const,
+                model: "gpt-test",
+                reasoning_effort: role === "synthesis" ? "high" : "medium",
+                session_id: `${role}-session`,
+                thread_id: `${role}-thread`,
+                timestamp: "2026-07-13T10:00:01Z",
+                turn_id: `${role}-turn`,
+              };
+              yield {
+                attempt_id: request.attemptId,
+                event: "terminal_result_reported" as const,
+                result:
+                  role === "synthesis"
+                    ? {
+                        branch: "symphony/system-synthesis-local",
+                        cited_lesson_ids: ["lesson-1"],
+                        decision: "propose_changes",
+                        evidence: [{ kind: "commit", sha: "def5678" }],
+                        handoff: {
+                          acceptance_criteria: [
+                            "Every proposed rule change cites durable lesson ids",
+                          ],
+                          commands: [{ command: "make verify-fast", exit_code: 0 }],
+                          decisions_fixed: [],
+                          files_changed: ["WORKFLOW.md"],
+                          goal: "Synthesize durable lessons",
+                          open_items: [],
+                          revision: "def5678",
+                        },
+                        pull_request: { base_ref: "main", title: "Improve workflow rules" },
+                        repository_revision: "def5678",
+                        rule_changes: [
+                          {
+                            action: "add",
+                            lesson_ids: ["lesson-1"],
+                            rationale: "Prevent recurrence",
+                            rule_id: "rule-new",
+                            text: "Require current-head verification",
+                          },
+                        ],
+                      }
+                    : {
+                        decision: "approve",
+                        evidence: [{ kind: "commit", sha: "def5678" }],
+                        findings: [],
+                        target_sha: "def5678",
+                      },
+                session_id: `${role}-session`,
+                timestamp: "2026-07-13T10:00:02Z",
+              };
+              yield {
+                attempt_id: request.attemptId,
+                event: "turn_completed" as const,
+                provider_reason: "completed",
+                session_id: `${role}-session`,
+                timestamp: "2026-07-13T10:00:03Z",
+              };
+            },
+          },
+          processGroupId: role === "synthesis" ? 7400 : 7402,
+          processId: role === "synthesis" ? 7401 : 7403,
+          waitForExit: vi.fn(async () => ({ code: 0, signal: null })),
+        };
+      }),
+      manifest: vi.fn(async () => manifest),
+      preflight: vi.fn(async (request: AgentPreflightRequest) => ({
+        adapterVersion: manifest.adapter_version,
+        manifest,
+        protocolSchemaHash: manifest.protocol.schema_hash,
+        resolvedSkills: request.requiredSkills,
+        role: request.role,
+        submitPlanSchema: null,
+        terminalResultSchema: request.terminalResultSchema,
+      })),
+    };
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      populateIssueWorkspace: vi.fn(async () => {
+        throw new Error("issue workspace not expected");
+      }),
+      populateSystemJobWorkspace: vi.fn(async (request) => {
+        const workspacePath = systemJobWorkspacePath(
+          request.workspaceRoot,
+          request.kind,
+          request.id,
+        );
+        await mkdir(workspacePath, { recursive: true });
+        return {
+          baseRef: "main",
+          baseSha: "abc1234",
+          checkoutMethod: "trusted_repository_adapter" as const,
+          createdAt: "2026-07-13T10:00:00Z",
+          localBranch: "symphony/system-synthesis-local",
+          repository: request.repository,
+          workspacePath,
+        };
+      }),
+    };
+    const snapshot = {
+      base_ref: "main",
+      checks: [],
+      head_sha: "def5678",
+      is_draft: false,
+      mergeable: true,
+      observed_base_sha: "abc1234",
+      post_merge_checks: [],
+      pr_number: 43,
+      pr_state: "open" as const,
+      pr_url: "https://github.com/owner/repo/pull/43",
+      required_check_source: "union" as const,
+      review_decision: "approved" as const,
+      reviews: [
+        {
+          author: "maintainer",
+          commit_sha: "def5678",
+          state: "approved",
+          submitted_at: "2026-07-13T10:05:00Z",
+        },
+      ],
+      unresolved_threads: [],
+    };
+    const repositoryHostingAdapter: RepositoryHostingAdapter = {
+      createRepairPullRequest: vi.fn(),
+      ensurePullRequest: vi.fn(async (_workRef, headSha) => ({
+        mutation: {
+          providerRequestId: "request-synthesis-pr",
+          responsePayloadHash: "sha256:synthesis-pr",
+          result: "created",
+          resultRevision: headSha,
+        },
+        number: 43,
+        url: snapshot.pr_url,
+      })),
+      fetchPostMergeStatus: vi.fn(async () => ({
+        ...snapshot,
+        head_sha: "fedcba9",
+        pr_state: "merged" as const,
+      })),
+      fetchPullRequestSnapshot: vi.fn(async () => snapshot),
+      mergePullRequest: vi.fn(async () => ({
+        mergeSha: "fedcba9",
+        mutation: {
+          providerRequestId: "request-synthesis-merge",
+          responsePayloadHash: "sha256:synthesis-merge",
+          result: "merged",
+          resultRevision: "fedcba9",
+        },
+      })),
+      publishBranch: vi.fn(async () => ({
+        branch: "symphony/system-synthesis-deadbeefdeadbeef",
+        headSha: "def5678",
+        mutation: {
+          providerRequestId: "request-synthesis-publish",
+          responsePayloadHash: "sha256:synthesis-publish",
+          result: "published",
+          resultRevision: "def5678",
+        },
+      })),
+      updateBranch: vi.fn(),
+    };
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    const scheduler = createProductionScheduler({
+      agent,
+      database: opened.database,
+      environment: {},
+      logger,
+      prompt: "<!-- rules:start --><!-- rules:end -->",
+      repositoryAdapter,
+      repositoryHostingAdapter,
+      review: {
+        collectEvidence: vi.fn(async (request) => ({
+          baseSha: request.baseSha,
+          changeClass: request.changeClass,
+          changedFiles: ["WORKFLOW.md"],
+          changedLines: 4,
+          diff: "diff --git a/WORKFLOW.md b/WORKFLOW.md",
+          patchIdentity: "sha256:synthesis-patch",
+          repositoryDocs: [],
+          targetSha: request.targetSha,
+          verificationRecordId: request.verificationRecordId,
+        })),
+      },
+      serviceRunId: "run-1",
+      snapshot: {
+        effectiveConfig: {
+          ...effectiveConfig,
+          "learning.interval_issues": 1,
+          "workspace.root": workspaceRoot,
+        },
+        id: "config-1",
+      } as never,
+      tracker,
+      verification: {
+        execute: vi.fn(async () => ({
+          commandHash: "sha256:command",
+          endedAt: "2026-07-13T10:01:00Z",
+          environmentPolicyHash: "sha256:environment",
+          exitCode: 0,
+          result: "passed" as const,
+          startedAt: "2026-07-13T10:00:30Z",
+          stderr: "",
+          stdout: "all passed",
+        })),
+        readRevision: vi.fn(async () => "def5678"),
+      },
+    });
+
+    await scheduler.start();
+    await vi.waitFor(() =>
+      expect(
+        opened.sqlite.prepare("select reason from claims where work_ref_kind = 'system_job'").get(),
+      ).toEqual({ reason: "synthesis_verification_required" }),
+    );
+    for (const expectedReason of [
+      "pull_request_required",
+      "pull_request_hygiene_required",
+      "review_required",
+      "review_coordination_required",
+      "merge_queue_required",
+    ]) {
+      await scheduler.trigger();
+      await vi.waitFor(() =>
+        expect({
+          claim: opened.sqlite
+            .prepare("select reason from claims where work_ref_kind = 'system_job'")
+            .get(),
+          warnings: logger.warn.mock.calls,
+        }).toEqual({ claim: { reason: expectedReason }, warnings: [] }),
+      );
+    }
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(
+        opened.sqlite
+          .prepare("select mode, reason from claims where work_ref_kind = 'system_job'")
+          .get(),
+      ).toEqual({
+        mode: "RetryQueued",
+        reason: "post_merge_verification_required",
+      }),
+    );
+    opened.sqlite
+      .prepare(
+        "update claims set retry_due_at = '2000-01-01T00:00:00.000Z' where work_ref_kind = 'system_job'",
+      )
+      .run();
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(
+        opened.sqlite.prepare("select status from system_jobs where kind = 'synthesis'").get(),
+      ).toEqual({
+        status: "done",
+      }),
+    );
+    await scheduler.close();
+
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(tracker.updateIssueLane).not.toHaveBeenCalled();
+    expect(agent.launch).toHaveBeenCalledTimes(2);
+    expect(repositoryHostingAdapter.mergePullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ system_job_id: expect.any(String) }),
+      "def5678",
+      "squash",
+      expect.any(Object),
+      "synthesis",
+    );
+    expect(
+      opened.sqlite
+        .prepare("select count(*) as count from claims where work_ref_kind = 'system_job'")
+        .get(),
+    ).toEqual({
+      count: 0,
+    });
+    await opened.close();
+  });
+
+  it.each([
+    "no_change",
+    "needs_input",
+  ] as const)("closes a synthesis %s result without repository or tracker mutation", async (decision) => {
+    const directory = await mkdtemp(path.join(tmpdir(), `symphony-synthesis-${decision}-`));
+    directories.push(directory);
+    const workspaceRoot = path.join(directory, "workspaces");
+    await mkdir(workspaceRoot);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into service_runs (
+            id, service_version, host_id, started_at, status,
+            startup_config_snapshot_id, start_reason
+          ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
+      )
+      .run();
+    await observeIssue(opened.database, {
+      issue: { ...candidate, id: `completed-${decision}`, state: "Done" },
+      observedAt: "2026-07-13T09:00:00Z",
+      providerRevision: `revision-${decision}`,
+      transitionId: `baseline-${decision}`,
+    });
+    const result = {
+      cited_lesson_ids: [],
+      decision,
+      evidence: [{ kind: "commit" as const, sha: "abc1234" }],
+      handoff: {
+        acceptance_criteria: [],
+        commands: [],
+        decisions_fixed: [],
+        files_changed: [],
+        goal: "Synthesize lessons",
+        open_items: [],
+        revision: "abc1234",
+      },
+      ...(decision === "needs_input"
+        ? {
+            question: {
+              default: "Keep",
+              options: ["Keep", "Remove"],
+              text: "Resolve the conflicting rule",
+            },
+          }
+        : {}),
+      rule_changes: [],
+    };
+    const agent: AgentAdapter = {
+      launch: vi.fn(async (request: AgentLaunchRequest) => ({
+        cancel: vi.fn(async () => undefined),
+        events: {
+          async *[Symbol.asyncIterator]() {
+            yield {
+              attempt_id: request.attemptId,
+              event: "session_started" as const,
+              model: "gpt-test",
+              reasoning_effort: "high",
+              session_id: `${decision}-session`,
+              thread_id: `${decision}-thread`,
+              timestamp: "2026-07-13T10:00:01Z",
+              turn_id: `${decision}-turn`,
+            };
+            yield {
+              attempt_id: request.attemptId,
+              event: "terminal_result_reported" as const,
+              result,
+              session_id: `${decision}-session`,
+              timestamp: "2026-07-13T10:00:02Z",
+            };
+            yield {
+              attempt_id: request.attemptId,
+              event: "turn_completed" as const,
+              provider_reason: "completed",
+              session_id: `${decision}-session`,
+              timestamp: "2026-07-13T10:00:03Z",
+            };
+          },
+        },
+        processGroupId: 7500,
+        processId: 7501,
+        waitForExit: vi.fn(async () => ({ code: 0, signal: null })),
+      })),
+      manifest: vi.fn(async () => manifest),
+      preflight: vi.fn(async (request: AgentPreflightRequest) => ({
+        adapterVersion: manifest.adapter_version,
+        manifest,
+        protocolSchemaHash: manifest.protocol.schema_hash,
+        resolvedSkills: request.requiredSkills,
+        role: request.role,
+        submitPlanSchema: null,
+        terminalResultSchema: request.terminalResultSchema,
+      })),
+    };
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      populateIssueWorkspace: vi.fn(async () => {
+        throw new Error("issue workspace not expected");
+      }),
+      populateSystemJobWorkspace: vi.fn(async (request) => {
+        const workspacePath = systemJobWorkspacePath(
+          request.workspaceRoot,
+          request.kind,
+          request.id,
+        );
+        await mkdir(workspacePath, { recursive: true });
+        return {
+          baseRef: "main",
+          baseSha: "abc1234",
+          checkoutMethod: "trusted_repository_adapter" as const,
+          createdAt: "2026-07-13T10:00:00Z",
+          localBranch: "symphony/system-synthesis-local",
+          repository: request.repository,
+          workspacePath,
+        };
+      }),
+    };
+    const repositoryHostingAdapter: RepositoryHostingAdapter = {
+      createRepairPullRequest: vi.fn(),
+      ensurePullRequest: vi.fn(),
+      fetchPostMergeStatus: vi.fn(),
+      fetchPullRequestSnapshot: vi.fn(),
+      mergePullRequest: vi.fn(),
+      publishBranch: vi.fn(),
+      updateBranch: vi.fn(),
+    };
+    const tracker = {
+      createOrUpdateComment: vi.fn(),
+      fetchCandidates: vi.fn(async () => ({ cursor: null, hasMore: false, items: [] })),
+      fetchCommentsSince: vi.fn(),
+      fetchIssuesByStates: vi.fn(),
+      fetchStatesByIds: vi.fn(),
+      updateIssueLane: vi.fn(),
+    };
+    const scheduler = createProductionScheduler({
+      agent,
+      database: opened.database,
+      environment: {},
+      prompt: "<!-- rules:start --><!-- rules:end -->",
+      repositoryAdapter,
+      repositoryHostingAdapter,
+      serviceRunId: "run-1",
+      snapshot: {
+        effectiveConfig: {
+          ...effectiveConfig,
+          "learning.interval_issues": 1,
+          "workspace.root": workspaceRoot,
+        },
+        id: "config-1",
+      } as never,
+      tracker,
+      verification: { readRevision: vi.fn(async () => "abc1234") },
+    });
+
+    await scheduler.start();
+    await vi.waitFor(() =>
+      expect(
+        opened.sqlite.prepare("select status from system_jobs where kind = 'synthesis'").get(),
+      ).toEqual({
+        status: decision === "no_change" ? "done" : "human",
+      }),
+    );
+    await scheduler.close();
+
+    expect(repositoryHostingAdapter.publishBranch).not.toHaveBeenCalled();
+    expect(repositoryHostingAdapter.ensurePullRequest).not.toHaveBeenCalled();
+    expect(tracker.updateIssueLane).not.toHaveBeenCalled();
+    expect(
+      opened.sqlite
+        .prepare("select mode, reason from claims where work_ref_kind = 'system_job'")
+        .get(),
+    ).toEqual(
+      decision === "no_change" ? undefined : { mode: "AwaitingHuman", reason: "needs_input" },
+    );
     await opened.close();
   });
 });

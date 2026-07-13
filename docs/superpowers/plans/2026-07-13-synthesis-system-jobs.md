@@ -117,18 +117,18 @@ agent/workspace/repository adapters, production scheduler.
 - Modify: `apps/server/src/production-scheduler.ts`
 - Modify: `apps/server/src/production-scheduler.test.ts`
 
-- [ ] Write a failing scheduler test that queues an interval-triggered synthesis, executes its deep
+- [x] Write a failing scheduler test that queues an interval-triggered synthesis, executes its deep
   attempt, verifies and publishes a proposal, runs fresh review, requires operator merge approval,
   lands the PR, passes post-merge checks, and marks the SystemJob `done` without tracker calls.
-- [ ] Generalize review work types from repair-only SystemJobs to all SystemJobs while preserving
+- [x] Generalize review work types from repair-only SystemJobs to all SystemJobs while preserving
   specialist selection and adjudication invariants.
-- [ ] Reconcile synthesis triggers before candidate dispatch each tick and route every synthesis
+- [x] Reconcile synthesis triggers before candidate dispatch each tick and route every synthesis
   Ready reason through the existing global slot and repository-merge serialization controls.
-- [ ] Reuse current-head hygiene, immutable ReviewSet, merge queue, and SystemJob post-merge success
+- [x] Reuse current-head hygiene, immutable ReviewSet, merge queue, and SystemJob post-merge success
   paths; reject any attempt to synthesize a tracker lane.
-- [ ] Add a `no_change` scheduler case and a `needs_input` case proving no repository mutation.
-- [ ] Run `pnpm exec vitest run apps/server/src/production-scheduler.test.ts` and expect all tests to pass.
-- [ ] Commit with `feat(synthesis): integrate supervised synthesis lifecycle`.
+- [x] Add a `no_change` scheduler case and a `needs_input` case proving no repository mutation.
+- [x] Run `pnpm exec vitest run apps/server/src/production-scheduler.test.ts` and expect all tests to pass.
+- [x] Commit with `feat(synthesis): integrate supervised synthesis lifecycle`.
 
 ## Task 6: Ledger and canonical verification
 

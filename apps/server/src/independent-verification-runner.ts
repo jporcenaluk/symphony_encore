@@ -11,6 +11,7 @@ import {
   type OpenedDatabase,
   type PendingIndependentVerification,
   type PendingSynthesisVerification,
+  recordSynthesisVerificationAndRoute,
   recordVerificationAndRoute,
 } from "@symphony/persistence";
 
@@ -42,6 +43,8 @@ export async function runPendingIndependentVerification(input: {
   reworkReadyReason?: string;
   safety: PersistenceSafetyController;
   sourceEnvironment: Readonly<Record<string, string | undefined>>;
+  synthesisMaxReworkCycles?: number;
+  synthesisVerifiedReadyReason?: "pull_request_hygiene_required" | "pull_request_required";
   target: PendingIndependentVerification | PendingSynthesisVerification;
   timeoutMs: number;
   verifyNoneReason?: string | null;
@@ -73,19 +76,38 @@ export async function runPendingIndependentVerification(input: {
   const id = input.newId();
   if (!id) throw new Error("verification.identity_invalid");
   try {
-    await recordVerificationAndRoute(input.database, {
-      attemptId: input.target.attemptId,
-      configSnapshotId: input.target.configSnapshotId,
-      execution,
-      expectedReadyReason: input.expectedReadyReason ?? "independent_verification_required",
-      id,
-      nextReadyReason:
-        execution.result === "passed"
-          ? (input.verifiedReadyReason ?? "pull_request_required")
-          : (input.reworkReadyReason ?? "verification_rework"),
-      targetRevision,
-      workRef: input.workRef,
-    });
+    if ("result" in input.target) {
+      const transitionId = input.newId();
+      if (!transitionId) throw new Error("verification.identity_invalid");
+      await recordSynthesisVerificationAndRoute(input.database, {
+        attemptId: input.target.attemptId,
+        configSnapshotId: input.target.configSnapshotId,
+        execution,
+        expectedReadyReason: "synthesis_verification_required",
+        id,
+        maxReworkCycles: input.synthesisMaxReworkCycles ?? 2,
+        targetRevision,
+        transitionId,
+        ...(input.synthesisVerifiedReadyReason
+          ? { verifiedReadyReason: input.synthesisVerifiedReadyReason }
+          : {}),
+        workRef: input.workRef,
+      });
+    } else {
+      await recordVerificationAndRoute(input.database, {
+        attemptId: input.target.attemptId,
+        configSnapshotId: input.target.configSnapshotId,
+        execution,
+        expectedReadyReason: input.expectedReadyReason ?? "independent_verification_required",
+        id,
+        nextReadyReason:
+          execution.result === "passed"
+            ? (input.verifiedReadyReason ?? "pull_request_required")
+            : (input.reworkReadyReason ?? "verification_rework"),
+        targetRevision,
+        workRef: input.workRef,
+      });
+    }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     await input.safety.recordFailure(failure);

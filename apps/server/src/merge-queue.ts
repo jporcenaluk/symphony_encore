@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   ProviderMutationAuthority,
   RepositoryHostingAdapter,
+  RepositorySystemJobKind,
   TrackerAdapter,
 } from "@symphony/adapters";
 import type {
@@ -55,6 +56,7 @@ export async function executeMergeQueueLanding(input: {
   requiredChecks: readonly string[];
   safety: PersistenceSafetyController;
   serviceRunId: string;
+  systemJobKind?: RepositorySystemJobKind;
   target: PendingMergeQueue;
   workRef: { id: string; kind: "issue" | "system_job" };
 }): Promise<MergeQueueResult> {
@@ -62,7 +64,9 @@ export async function executeMergeQueueLanding(input: {
     throw new Error("merge_queue.poll_interval_invalid");
   }
   const contractWorkRef = toContractWorkRef(input.workRef);
-  const snapshot = await input.repository.fetchPullRequestSnapshot(contractWorkRef);
+  const snapshot = input.systemJobKind
+    ? await input.repository.fetchPullRequestSnapshot(contractWorkRef, input.systemJobKind)
+    : await input.repository.fetchPullRequestSnapshot(contractWorkRef);
   assertPullRequestIdentity(snapshot, input.target);
   const decision = evaluatePullRequestGate(toDomainSnapshot(snapshot), {
     acceptedCheckConclusions: input.acceptedCheckConclusions,
@@ -123,12 +127,20 @@ export async function executeMergeQueueLanding(input: {
   await durable(input.safety, () =>
     markIntentApplying(input.database, mutation.intent.id, input.now()),
   );
-  const merged = await input.repository.mergePullRequest(
-    contractWorkRef,
-    snapshot.head_sha,
-    input.landingPolicy,
-    mutation.authority,
-  );
+  const merged = input.systemJobKind
+    ? await input.repository.mergePullRequest(
+        contractWorkRef,
+        snapshot.head_sha,
+        input.landingPolicy,
+        mutation.authority,
+        input.systemJobKind,
+      )
+    : await input.repository.mergePullRequest(
+        contractWorkRef,
+        snapshot.head_sha,
+        input.landingPolicy,
+        mutation.authority,
+      );
   if (!merged.mergeSha || merged.mutation.resultRevision !== merged.mergeSha) {
     throw new Error("merge_queue.merge_response_invalid");
   }
@@ -445,16 +457,19 @@ export async function executeBaseUpdate(input: {
   repository: RepositoryHostingAdapter;
   safety: PersistenceSafetyController;
   serviceRunId: string;
+  systemJobKind?: RepositorySystemJobKind;
   syncWorkspace(request: {
     branch: string;
     expectedHeadSha: string;
     workspace: string;
   }): Promise<string>;
   target: PendingMergeQueue;
-  workRef: { id: string; kind: "issue" };
+  workRef: { id: string; kind: "issue" | "system_job" };
 }): Promise<{ baseSha: string; headSha: string }> {
-  const contractWorkRef = { issue_id: input.workRef.id } as const;
-  const snapshot = await input.repository.fetchPullRequestSnapshot(contractWorkRef);
+  const contractWorkRef = toContractWorkRef(input.workRef);
+  const snapshot = input.systemJobKind
+    ? await input.repository.fetchPullRequestSnapshot(contractWorkRef, input.systemJobKind)
+    : await input.repository.fetchPullRequestSnapshot(contractWorkRef);
   assertPullRequestIdentity(snapshot, input.target);
   if (snapshot.observed_base_sha === input.target.baseSha) {
     throw new Error("merge_queue.base_not_advanced");
@@ -479,12 +494,20 @@ export async function executeBaseUpdate(input: {
   await durable(input.safety, () =>
     markIntentApplying(input.database, mutation.intent.id, input.now()),
   );
-  const updated = await input.repository.updateBranch(
-    contractWorkRef,
-    snapshot.head_sha,
-    snapshot.observed_base_sha,
-    mutation.authority,
-  );
+  const updated = input.systemJobKind
+    ? await input.repository.updateBranch(
+        contractWorkRef,
+        snapshot.head_sha,
+        snapshot.observed_base_sha,
+        mutation.authority,
+        input.systemJobKind,
+      )
+    : await input.repository.updateBranch(
+        contractWorkRef,
+        snapshot.head_sha,
+        snapshot.observed_base_sha,
+        mutation.authority,
+      );
   if (
     updated.branch !== input.target.branch ||
     updated.headSha === snapshot.head_sha ||
@@ -703,7 +726,8 @@ function composeDoneMutation(
     newId(): string;
     serviceRunId: string;
     target: PendingPostMerge;
-    workRef: { id: string; kind: "issue" };
+    systemJobKind?: RepositorySystemJobKind;
+    workRef: { id: string; kind: "issue" | "system_job" };
   },
   authorizedAt: string,
 ): {
@@ -862,8 +886,9 @@ function composeBranchUpdateMutation(
     expiresAt: string;
     newId(): string;
     serviceRunId: string;
+    systemJobKind?: RepositorySystemJobKind;
     target: PendingMergeQueue;
-    workRef: { id: string; kind: "issue" };
+    workRef: { id: string; kind: "issue" | "system_job" };
   },
   snapshot: PullRequestSnapshot,
   authorizedAt: string,
@@ -876,14 +901,14 @@ function composeBranchUpdateMutation(
   }
   const authorizationId = requiredId(input.newId());
   const intentId = requiredId(input.newId());
-  const workRef = { issue_id: input.workRef.id } as const;
-  const target = `${input.target.repository}:issue:${input.workRef.id}`;
+  const workRef = toContractWorkRef(input.workRef);
+  const target = `${input.target.repository}:${input.workRef.kind}:${input.workRef.id}`;
   const observedStateRef = `repository:${input.target.repository}:head:${snapshot.head_sha}:base:${snapshot.observed_base_sha}`;
   const authorization: MutationAuthorization = {
     action: "repository.update_branch",
     actor_id: "orchestrator",
     actor_kind: "orchestrator_policy",
-    attempt_role: "implementation",
+    attempt_role: input.systemJobKind === "synthesis" ? "synthesis" : "implementation",
     authorized_at: authorizedAt,
     config_snapshot_id: input.target.configSnapshotId,
     decision_rule_ids: ["merge_queue.base_advanced", "repository.head_revision_exact"],
@@ -916,7 +941,7 @@ function composeBranchUpdateMutation(
         serviceRunId: authorization.service_run_id,
         target: authorization.target,
         targetRevision: authorization.target_revision,
-        workRef: `issue:${input.workRef.id}`,
+        workRef: `${input.workRef.kind}:${input.workRef.id}`,
       },
     },
     intent: {

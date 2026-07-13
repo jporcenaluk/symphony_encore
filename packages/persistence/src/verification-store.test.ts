@@ -9,6 +9,7 @@ import {
   loadPendingIndependentVerification,
   loadPendingSynthesisVerification,
   loadVerificationEvidence,
+  recordSynthesisVerificationAndRoute,
   recordVerification,
   recordVerificationAndRoute,
 } from "./verification-store.js";
@@ -288,6 +289,18 @@ describe("independent verification repository", () => {
         )`,
       )
       .run();
+    opened.sqlite
+      .prepare(
+        `insert into stage_transitions (
+          id, work_ref_kind, work_ref_id, from_stage, to_stage, reason,
+          attempt_id, entered_at, timestamp_source
+        ) values (
+          'stage-review', 'system_job', 'synthesis-1', 'running', 'review',
+          'synthesis.propose_changes', 'attempt-synthesis',
+          '2026-07-13T10:01:00Z', 'observed_estimate'
+        )`,
+      )
+      .run();
 
     await expect(loadPendingSynthesisVerification(opened.database, "synthesis-1")).resolves.toEqual(
       {
@@ -297,6 +310,80 @@ describe("independent verification repository", () => {
         workspacePath: "/work/synthesis-1",
       },
     );
+    const failedExecution = {
+      commandHash: "sha256:command",
+      endedAt: "2026-07-13T10:02:00Z",
+      environmentPolicyHash: "sha256:environment",
+      exitCode: 1,
+      result: "failed" as const,
+      startedAt: "2026-07-13T10:01:00Z",
+      stderr: "test failed",
+      stdout: "",
+    };
+    await expect(
+      recordSynthesisVerificationAndRoute(opened.database, {
+        attemptId: "attempt-synthesis",
+        configSnapshotId: "config-1",
+        execution: failedExecution,
+        expectedReadyReason: "synthesis_verification_required",
+        id: "verification-synthesis-1",
+        maxReworkCycles: 2,
+        targetRevision: "def5678",
+        transitionId: "stage-rework",
+        workRef: { id: "synthesis-1", kind: "system_job" },
+      }),
+    ).resolves.toMatchObject({ route: "rework" });
+    expect(opened.sqlite.prepare("select status from system_jobs").get()).toEqual({
+      status: "rework",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "synthesis_rework",
+    });
+    opened.sqlite
+      .prepare(
+        `update stage_transitions set exited_at = '2026-07-13T10:03:00Z', duration_ms = 60000
+         where id = 'stage-rework'`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into stage_transitions (
+          id, work_ref_kind, work_ref_id, from_stage, to_stage, reason,
+          attempt_id, entered_at, timestamp_source
+        ) values (
+          'stage-review-2', 'system_job', 'synthesis-1', 'rework', 'review',
+          'synthesis.propose_changes', 'attempt-synthesis',
+          '2026-07-13T10:03:00Z', 'observed_estimate'
+        )`,
+      )
+      .run();
+    opened.sqlite.prepare("update system_jobs set status = 'review'").run();
+    opened.sqlite.prepare("update claims set reason = 'synthesis_verification_required'").run();
+    await expect(
+      recordSynthesisVerificationAndRoute(opened.database, {
+        attemptId: "attempt-synthesis",
+        configSnapshotId: "config-1",
+        execution: {
+          ...failedExecution,
+          endedAt: "2026-07-13T10:04:00Z",
+          startedAt: "2026-07-13T10:03:00Z",
+        },
+        expectedReadyReason: "synthesis_verification_required",
+        id: "verification-synthesis-2",
+        maxReworkCycles: 2,
+        targetRevision: "def5678",
+        transitionId: "stage-human",
+        workRef: { id: "synthesis-1", kind: "system_job" },
+      }),
+    ).resolves.toMatchObject({ route: "human" });
+    expect(opened.sqlite.prepare("select status from system_jobs").get()).toEqual({
+      status: "human",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "AwaitingHuman",
+      reason: "human_review",
+    });
     await opened.close();
   });
 });

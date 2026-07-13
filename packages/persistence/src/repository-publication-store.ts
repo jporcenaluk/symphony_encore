@@ -33,6 +33,19 @@ interface PendingPublicationRow {
   workspace_path: string;
 }
 
+export async function hasOpenRepositoryLink(
+  database: Kysely<DatabaseSchema>,
+  workRef: WorkRef,
+): Promise<boolean> {
+  const result = await sql<{ present: number }>`
+    select exists(
+      select 1 from repository_links
+      where work_ref_kind = ${workRef.kind} and work_ref_id = ${workRef.id} and state = 'open'
+    ) as present
+  `.execute(database);
+  return result.rows[0]?.present === 1;
+}
+
 export async function loadPendingRepositoryPublication(
   database: Kysely<DatabaseSchema>,
   workRef: WorkRef,

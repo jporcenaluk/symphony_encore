@@ -140,31 +140,11 @@ export async function beginRepositoryBranchUpdate(
     headSha: string;
     now: string;
     repository: string;
-    transitionId?: string;
     workRef: WorkRef;
   },
 ): Promise<void> {
   validateTimestamp(input.now);
   await database.transaction().execute(async (transaction) => {
-    if (input.workRef.kind === "system_job") {
-      if (!input.transitionId) throw new Error("merge_queue.transition_identity_missing");
-      const job = await sql`
-        update system_jobs set status = 'merge'
-        where id = ${input.workRef.id} and status = 'review'
-      `.execute(transaction);
-      if (job.numAffectedRows !== 1n) throw new Error("merge_queue.system_job_not_review");
-      await transitionStageInTransaction(transaction, {
-        attemptId: null,
-        confirmedExternalRevision: null,
-        enteredAt: input.now,
-        expectedFromStage: "review",
-        id: input.transitionId,
-        reason: "merge_queue.started",
-        timestampSource: "observed_estimate",
-        toStage: "merge",
-        workRef: input.workRef,
-      });
-    }
     await sql`
       insert into repository_merge_queue_entries (
         work_ref_kind, work_ref_id, repository, state, head_sha, base_sha,
@@ -217,9 +197,19 @@ export async function commitRepositoryBranchUpdate(
         and work_ref_id = ${input.workRef.id}
     `.execute(transaction);
     if (checkout.numAffectedRows !== 1n) throw new Error("merge_queue.checkout_missing");
+    let nextVerificationReason = "independent_verification_after_base_update_required";
+    if (input.workRef.kind === "system_job") {
+      const job = await sql<{ kind: string }>`
+        select kind from system_jobs where id = ${input.workRef.id} and status = 'review'
+      `.execute(transaction);
+      if (!job.rows[0]) throw new Error("merge_queue.system_job_not_review");
+      if (job.rows[0].kind === "synthesis") {
+        nextVerificationReason = "synthesis_verification_required";
+      }
+    }
     const claim = await sql`
       update claims
-      set reason = 'independent_verification_after_base_update_required', updated_at = ${input.now}
+      set reason = ${nextVerificationReason}, updated_at = ${input.now}
       where work_ref_kind = ${input.workRef.kind}
         and work_ref_id = ${input.workRef.id}
         and mode = 'Ready'
@@ -332,11 +322,31 @@ export async function beginMergeQueueLanding(
     headSha: string;
     now: string;
     repository: string;
+    transitionId?: string;
     workRef: WorkRef;
   },
 ): Promise<void> {
   validateTimestamp(input.now);
   await database.transaction().execute(async (transaction) => {
+    if (input.workRef.kind === "system_job") {
+      if (!input.transitionId) throw new Error("merge_queue.transition_identity_missing");
+      const job = await sql`
+        update system_jobs set status = 'merge'
+        where id = ${input.workRef.id} and status = 'review'
+      `.execute(transaction);
+      if (job.numAffectedRows !== 1n) throw new Error("merge_queue.system_job_not_review");
+      await transitionStageInTransaction(transaction, {
+        attemptId: null,
+        confirmedExternalRevision: null,
+        enteredAt: input.now,
+        expectedFromStage: "review",
+        id: input.transitionId,
+        reason: "merge_queue.started",
+        timestampSource: "observed_estimate",
+        toStage: "merge",
+        workRef: input.workRef,
+      });
+    }
     await sql`
       insert into repository_merge_queue_entries (
         work_ref_kind, work_ref_id, repository, state, head_sha, base_sha,
@@ -616,7 +626,7 @@ export async function commitPostMergeSystemJobRepairCycle(
       parent_work_ref_kind: "issue" | "system_job" | null;
     }>`
       select parent_work_ref_kind, parent_work_ref_id
-      from system_jobs where id = ${input.workRef.id} and kind = 'repair' and status = 'merge'
+      from system_jobs where id = ${input.workRef.id} and status = 'merge'
     `.execute(transaction);
     const job = jobResult.rows[0];
     if (!job) throw new Error("merge_queue.system_job_not_merge");

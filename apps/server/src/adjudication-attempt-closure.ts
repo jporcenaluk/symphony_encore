@@ -24,7 +24,7 @@ export async function closeAdjudicationAttempt(input: {
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
   endedAt: string;
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
+  issue: Issue | SystemJob;
   newId(): string;
   reservationId: string;
   safety: PersistenceSafetyController;
@@ -104,7 +104,7 @@ export async function closeAdjudicationAttempt(input: {
   }
 }
 
-function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+function reviewWorkRef(work: Issue | SystemJob): {
   id: string;
   kind: "issue" | "system_job";
 } {

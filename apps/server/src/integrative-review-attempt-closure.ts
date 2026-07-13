@@ -25,7 +25,7 @@ interface CloseReviewAttemptInput {
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
   endedAt: string;
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
+  issue: Issue | SystemJob;
   newId(): string;
   reservationId: string;
   safety: PersistenceSafetyController;
@@ -124,7 +124,7 @@ async function closeReviewAttempt(
   }
 }
 
-function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+function reviewWorkRef(work: Issue | SystemJob): {
   id: string;
   kind: "issue" | "system_job";
 } {

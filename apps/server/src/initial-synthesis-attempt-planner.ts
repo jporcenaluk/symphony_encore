@@ -56,7 +56,10 @@ export async function planInitialSynthesisAttempt(
     job: Extract<SystemJob, { kind: "synthesis" }>;
     maxPromptTokens: number;
     maxRules: number;
-    expectedReadyReason?: "synthesis_retry_required" | "system_job_dispatch_required";
+    expectedReadyReason?:
+      | "synthesis_retry_required"
+      | "synthesis_rework"
+      | "system_job_dispatch_required";
     newId(): string;
     now(): string;
     serviceRunId: string;

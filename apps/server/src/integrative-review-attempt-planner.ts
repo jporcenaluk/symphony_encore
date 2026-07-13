@@ -69,7 +69,7 @@ interface ReviewPlanningInput {
   configuration: IntegrativeReviewAttemptConfiguration;
   context: IntegrativeReviewContext;
   database: OpenedDatabase["database"];
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>;
+  issue: Issue | SystemJob;
   newId(): string;
   now(): string;
   serviceRunId: string;
@@ -233,7 +233,7 @@ async function planReviewAttempt(
       acquiredAt: now,
       expiresAt: new Date(nowMs + input.configuration.leaseTtlMs).toISOString(),
       holder: input.serviceRunId,
-      originStage: "In Progress",
+      originStage: workRef.kind === "system_job" ? "review" : "In Progress",
       reason: mode.role,
     },
     reservation: {
@@ -255,10 +255,7 @@ async function planReviewAttempt(
   };
 }
 
-function renderPrompt(
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
-  context: IntegrativeReviewContext,
-): string {
+function renderPrompt(issue: Issue | SystemJob, context: IntegrativeReviewContext): string {
   return [
     "You are the fresh-context integrative reviewer for an immutable implementation.",
     "Review the full diff against the issue acceptance criteria and repository rules.",
@@ -281,7 +278,7 @@ function renderPrompt(
 }
 
 function renderSpecialistPrompt(
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  issue: Issue | SystemJob,
   context: IntegrativeReviewContext,
   selection: SpecialistSelection,
 ): string {
@@ -312,7 +309,7 @@ function renderSpecialistPrompt(
 }
 
 function renderAdjudicationPrompt(
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
+  issue: Issue | SystemJob,
   context: IntegrativeReviewContext,
   conflicts: readonly AdjudicationConflictInput[],
 ): string {
@@ -334,10 +331,7 @@ function renderAdjudicationPrompt(
   ].join("\n");
 }
 
-function assertTarget(
-  issue: Issue | Extract<SystemJob, { kind: "repair" }>,
-  context: IntegrativeReviewContext,
-): void {
+function assertTarget(issue: Issue | SystemJob, context: IntegrativeReviewContext): void {
   if (
     !issue.id ||
     !/^[A-Fa-f0-9]{7,64}$/u.test(context.baseSha) ||
@@ -349,7 +343,7 @@ function assertTarget(
   }
 }
 
-function reviewWorkRef(work: Issue | Extract<SystemJob, { kind: "repair" }>): {
+function reviewWorkRef(work: Issue | SystemJob): {
   id: string;
   kind: "issue" | "system_job";
 } {

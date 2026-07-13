@@ -10,6 +10,7 @@ import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import { transitionStageInTransaction } from "./stage-transition.js";
 
 type WorkRef = { id: string; kind: "issue" | "system_job" };
 
@@ -133,6 +134,75 @@ export async function recordVerificationAndRoute(
   });
 }
 
+export async function recordSynthesisVerificationAndRoute(
+  database: Kysely<DatabaseSchema>,
+  input: RecordVerificationInput & {
+    expectedReadyReason: "synthesis_verification_required";
+    maxReworkCycles: number;
+    transitionId: string;
+    verifiedReadyReason?: "pull_request_hygiene_required" | "pull_request_required";
+  },
+): Promise<{ recorded: RecordedVerification; route: "human" | "pull_request" | "rework" }> {
+  if (
+    input.workRef.kind !== "system_job" ||
+    !input.transitionId ||
+    !Number.isSafeInteger(input.maxReworkCycles) ||
+    input.maxReworkCycles < 1
+  ) {
+    throw new Error("verification.synthesis_route_input_invalid");
+  }
+  return database.transaction().execute(async (transaction) => {
+    const priorFailures = await sql<{ count: number }>`
+      select count(*) as count from verification_records
+      where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+        and result != 'passed'
+    `.execute(transaction);
+    const recorded = await recordVerificationInTransaction(transaction, input);
+    if (input.execution.result === "passed") {
+      const claim = await sql`
+        update claims set reason = ${input.verifiedReadyReason ?? "pull_request_required"},
+          updated_at = ${input.execution.endedAt}
+        where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+          and mode = 'Ready' and reason = ${input.expectedReadyReason}
+      `.execute(transaction);
+      if (claim.numAffectedRows !== 1n) throw new Error("verification.claim_not_ready");
+      return { recorded, route: "pull_request" };
+    }
+    const exhausted = (priorFailures.rows[0]?.count ?? 0) + 1 >= input.maxReworkCycles;
+    await transitionStageInTransaction(transaction, {
+      attemptId: input.attemptId,
+      confirmedExternalRevision: null,
+      enteredAt: input.execution.endedAt,
+      expectedFromStage: "review",
+      id: input.transitionId,
+      reason: exhausted ? "synthesis.verification_rework_limit" : "synthesis.verification_failed",
+      timestampSource: "observed_estimate",
+      toStage: exhausted ? "human" : "rework",
+      workRef: input.workRef,
+    });
+    const job = await sql`
+      update system_jobs set status = ${exhausted ? "human" : "rework"}
+      where id = ${input.workRef.id} and kind = 'synthesis' and status = 'review'
+    `.execute(transaction);
+    if (job.numAffectedRows !== 1n) throw new Error("verification.synthesis_stage_mismatch");
+    const claim = exhausted
+      ? await sql`
+          update claims set mode = 'AwaitingHuman', reason = 'human_review',
+            updated_at = ${input.execution.endedAt}, expires_at = null,
+            blocker_predicate = null, question_id = null, approval_request_id = null
+          where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+            and mode = 'Ready' and reason = ${input.expectedReadyReason}
+        `.execute(transaction)
+      : await sql`
+          update claims set reason = 'synthesis_rework', updated_at = ${input.execution.endedAt}
+          where work_ref_kind = 'system_job' and work_ref_id = ${input.workRef.id}
+            and mode = 'Ready' and reason = ${input.expectedReadyReason}
+        `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("verification.claim_not_ready");
+    return { recorded, route: exhausted ? "human" : "rework" };
+  });
+}
+
 interface PendingVerificationRow {
   attempt_id: string;
   config_snapshot_id: string;
@@ -235,6 +305,42 @@ export async function loadPendingSynthesisVerification(
       and claim.work_ref_id = ${systemJobId}
       and claim.mode = 'Ready'
       and claim.reason = 'synthesis_verification_required'
+    order by attempt.attempt_number desc
+    limit 1
+  `.execute(database);
+  const row = query.rows[0];
+  if (!row) return null;
+  const result: unknown = JSON.parse(row.payload_json);
+  if (!isSynthesisResult(result) || result.decision !== "propose_changes") {
+    throw new Error("verification.synthesis_result_invalid");
+  }
+  return {
+    attemptId: row.attempt_id,
+    configSnapshotId: row.config_snapshot_id,
+    result,
+    workspacePath: row.workspace_path,
+  };
+}
+
+export async function loadLatestSynthesisProposal(
+  database: Kysely<DatabaseSchema>,
+  systemJobId: string,
+): Promise<PendingSynthesisVerification | null> {
+  const query = await sql<PendingVerificationRow>`
+    select attempt.id as attempt_id, attempt.config_snapshot_id,
+           attempt.workspace_path, result.payload_json
+    from attempts attempt
+    join terminal_results result
+      on result.id = attempt.terminal_result_id
+      and result.attempt_id = attempt.id
+      and result.role = 'synthesis'
+      and result.result_kind = 'synthesis_result'
+    join system_jobs job
+      on job.id = attempt.work_ref_id and job.kind = 'synthesis'
+    where attempt.work_ref_kind = 'system_job'
+      and attempt.work_ref_id = ${systemJobId}
+      and attempt.role = 'synthesis'
+      and attempt.status = 'closed'
     order by attempt.attempt_number desc
     limit 1
   `.execute(database);
