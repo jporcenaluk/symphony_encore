@@ -38,6 +38,7 @@ describe.runIf(process.platform === "linux")("Linux filesystem sandbox", () => {
       ],
       command: "/bin/bash",
       environment: { GITHUB_TOKEN: "must-not-cross", PATH: "/usr/bin:/bin" },
+      timeoutMs: 5_000,
       workspace,
       workspaceRoot: path.join(parent, "root"),
     });
@@ -46,5 +47,23 @@ describe.runIf(process.platform === "linux")("Linux filesystem sandbox", () => {
     expect(await readFile(path.join(workspace, "inside.txt"), "utf8")).toBe("inside");
     await expect(access(path.join(parent, "traversal.txt"))).rejects.toThrow();
     await expect(access(path.join(outside, "symlink.txt"))).rejects.toThrow();
+  });
+
+  it("kills and waits for the sandbox process group at timeout", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-sandbox-timeout-"));
+    directories.push(parent);
+    const workspace = path.join(parent, "root", "issue-1");
+    await mkdir(workspace, { recursive: true });
+
+    await expect(
+      runLinuxSandboxed({
+        args: ["-c", "sleep 0.2 & wait"],
+        command: "/bin/bash",
+        environment: { PATH: "/usr/bin:/bin" },
+        timeoutMs: 10,
+        workspace,
+        workspaceRoot: path.join(parent, "root"),
+      }),
+    ).rejects.toThrow("sandbox.timeout");
   });
 });

@@ -24,7 +24,7 @@ command. A green but narrower test does not complete a broader item.
 | S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
-| S06 | Workspace isolation, hooks, and independent verification | In progress | Realpath/symlink containment, isolated writable state, environment scrubbing, and real Linux/WSL mount-boundary test pass; macOS/hooks/process tree pending |
+| S06 | Workspace isolation, hooks, and independent verification | In progress | Realpath/symlink containment, isolated writable state, environment scrubbing, Linux/WSL mount boundary, and timeout process-group termination pass; macOS/hooks/full lifecycle pending |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
@@ -138,3 +138,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Interrupted attempt closure, ownership evidence, settlement, and requeue |
 | 2026-07-13 | working tree | `make verify-fast` | 166 tests; lint, generated-contract drift, and typecheck passed | Workspace containment, credential scrubbing, Linux/WSL write boundary |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Workspace containment, credential scrubbing, Linux/WSL write boundary |
+| 2026-07-13 | working tree | `make verify-fast` | 167 tests; lint, generated-contract drift, and typecheck passed | Sandboxed timeout and process-group termination |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Sandboxed timeout and process-group termination |

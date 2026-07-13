@@ -7,6 +7,7 @@ export interface LinuxSandboxRequest {
   command: string;
   environment: Readonly<Record<string, string>>;
   maxOutputBytes?: number;
+  timeoutMs: number;
   workspace: string;
   workspaceRoot: string;
 }
@@ -22,6 +23,9 @@ export async function runLinuxSandboxed(
   request: LinuxSandboxRequest,
 ): Promise<SandboxedProcessResult> {
   if (process.platform !== "linux") throw new Error("sandbox.linux_required");
+  if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0) {
+    throw new Error("sandbox.invalid_timeout");
+  }
   const workspace = await resolveAssignedWorkspace(request.workspaceRoot, request.workspace);
   const sandboxArgs = [
     "--die-with-parent",
@@ -106,23 +110,45 @@ export async function runLinuxSandboxed(
   const stderr: Buffer[] = [];
   let outputBytes = 0;
   let outputExceeded = false;
+  let timedOut = false;
+  const killProcessGroup = () => {
+    if (child.pid === undefined) child.kill("SIGKILL");
+    else {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  };
   const collect = (target: Buffer[]) => (chunk: Buffer) => {
     outputBytes += chunk.byteLength;
     if (outputBytes <= maximum) target.push(chunk);
     else if (!outputExceeded) {
       outputExceeded = true;
-      if (child.pid === undefined) child.kill("SIGKILL");
-      else process.kill(-child.pid, "SIGKILL");
+      killProcessGroup();
     }
   };
   child.stdout.on("data", collect(stdout));
   child.stderr.on("data", collect(stderr));
 
   return new Promise((resolve, reject) => {
-    child.once("error", reject);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup();
+    }, request.timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.once("close", (exitCode, signal) => {
+      clearTimeout(timeout);
       if (outputExceeded) {
         reject(new Error("sandbox.output_limit_exceeded"));
+        return;
+      }
+      if (timedOut) {
+        reject(new Error("sandbox.timeout"));
         return;
       }
       resolve({
