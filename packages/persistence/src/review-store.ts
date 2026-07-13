@@ -111,7 +111,10 @@ export async function loadPendingReviewCoordination(
     where claim.work_ref_kind = ${workRef.kind}
       and claim.work_ref_id = ${workRef.id}
       and claim.mode = 'Ready'
-      and claim.reason = 'review_coordination_required'
+      and (
+        claim.reason = 'review_coordination_required'
+        or claim.reason like 'specialist_review_required:%'
+      )
     order by attempt.attempt_number desc, verification.ended_at desc
     limit 1
   `.execute(database);
@@ -201,6 +204,7 @@ export interface FinishReviewAttemptInput {
   reservationId: string;
   result: ReviewResult;
   reviewRecordId: string;
+  reviewerRole: "integrative_review" | "specialist_review";
   settledLedgers: readonly { actualAmount: number; id: string }[];
   targetBaseSha: string;
   targetSha: string;
@@ -232,7 +236,7 @@ export async function finishReviewAttempt(
       where review.id = ${input.attemptId}
         and review.work_ref_kind = ${input.workRef.kind}
         and review.work_ref_id = ${input.workRef.id}
-        and review.role = 'integrative_review'
+        and review.role = ${input.reviewerRole}
         and review.status != 'closed'
       limit 1
     `.execute(transaction);
@@ -243,7 +247,7 @@ export async function finishReviewAttempt(
         target_base_sha, patch_identity, decision, findings_json, created_at
       ) values (
         ${input.reviewRecordId}, ${input.workRef.kind}, ${input.workRef.id}, ${input.attemptId},
-        'integrative_review', ${input.targetSha}, ${input.targetBaseSha}, ${input.patchIdentity},
+        ${input.reviewerRole}, ${input.targetSha}, ${input.targetBaseSha}, ${input.patchIdentity},
         ${input.result.decision}, ${JSON.stringify(input.result.findings)}, ${input.endedAt}
       )
     `.execute(transaction);
@@ -259,7 +263,7 @@ export async function finishReviewAttempt(
         id: input.terminalResultId,
         kind: "review_result",
         payload: input.result,
-        role: "integrative_review",
+        role: input.reviewerRole,
       },
       usage: input.usage,
       workRef: input.workRef,
@@ -408,6 +412,7 @@ function validateFinishInput(input: FinishReviewAttemptInput): void {
     !input.attemptId ||
     !input.patchIdentity ||
     !input.reviewRecordId ||
+    (input.reviewerRole !== "integrative_review" && input.reviewerRole !== "specialist_review") ||
     !input.targetBaseSha ||
     !input.targetSha ||
     !input.terminalResultId ||

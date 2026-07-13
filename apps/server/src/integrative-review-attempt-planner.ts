@@ -60,7 +60,9 @@ export interface PlannedIntegrativeReviewAttempt {
   route: ComputeRoute;
 }
 
-export async function planIntegrativeReviewAttempt(input: {
+export type PlannedSpecialistReviewAttempt = PlannedIntegrativeReviewAttempt;
+
+interface ReviewPlanningInput {
   adapter: AgentAdapter;
   configSnapshotId: string;
   configuration: IntegrativeReviewAttemptConfiguration;
@@ -71,7 +73,56 @@ export async function planIntegrativeReviewAttempt(input: {
   now(): string;
   serviceRunId: string;
   terminalResultSchema: Readonly<Record<string, unknown>>;
-}): Promise<PlannedIntegrativeReviewAttempt> {
+}
+
+interface SpecialistSelection {
+  specialist: {
+    concerns: readonly string[];
+    excludedContext: readonly string[];
+    name: string;
+    profile: ComputeProfile;
+    requiredEvidence: readonly string[];
+  };
+  triggeringRules: readonly string[];
+}
+
+export async function planIntegrativeReviewAttempt(
+  input: ReviewPlanningInput,
+): Promise<PlannedIntegrativeReviewAttempt> {
+  return planReviewAttempt(input, {
+    prompt: renderPrompt(input.issue, input.context),
+    role: "integrative_review",
+    routeProfiles: input.configuration.routeProfiles,
+    routingReasons: [],
+  });
+}
+
+export async function planSpecialistReviewAttempt(
+  input: ReviewPlanningInput & { selection: SpecialistSelection },
+): Promise<PlannedSpecialistReviewAttempt> {
+  return planReviewAttempt(input, {
+    prompt: renderSpecialistPrompt(input.issue, input.context, input.selection),
+    role: "specialist_review",
+    routeProfiles: {
+      ...input.configuration.routeProfiles,
+      specialist_review: input.selection.specialist.profile,
+    },
+    routingReasons: [
+      `specialist.name:${input.selection.specialist.name}`,
+      ...input.selection.triggeringRules.map((rule) => `specialist.trigger:${rule}`),
+    ],
+  });
+}
+
+async function planReviewAttempt(
+  input: ReviewPlanningInput,
+  mode: {
+    prompt: string;
+    role: "integrative_review" | "specialist_review";
+    routeProfiles: ComputeRouteProfiles;
+    routingReasons: readonly string[];
+  },
+): Promise<PlannedIntegrativeReviewAttempt> {
   assertTarget(input.issue, input.context);
   const manifest = await input.adapter.manifest();
   const requiredSkills = await resolveRequiredSkills({
@@ -81,7 +132,7 @@ export async function planIntegrativeReviewAttempt(input: {
   const preflight = await input.adapter.preflight({
     requiredCapabilities: ["terminal_result", "skills"],
     requiredSkills,
-    role: "integrative_review",
+    role: mode.role,
     terminalResultSchema: input.terminalResultSchema,
   });
   assertPreflightManifest(preflight, manifest);
@@ -92,8 +143,8 @@ export async function planIntegrativeReviewAttempt(input: {
     heuristicMinimum: null,
     resolvedProfiles: resolvedProfiles(manifest),
     riskFloorRules: input.configuration.riskFloorRules,
-    role: "integrative_review",
-    routeProfiles: input.configuration.routeProfiles,
+    role: mode.role,
+    routeProfiles: mode.routeProfiles,
   });
   const attemptId = requiredId(input.newId());
   const reservationId = requiredId(input.newId());
@@ -102,7 +153,7 @@ export async function planIntegrativeReviewAttempt(input: {
   const history = await listAttemptUsageHistory(input.database, {
     limit: input.configuration.historyWindowSamples,
     profile: route.profile,
-    role: "integrative_review",
+    role: mode.role,
   });
   const configuredTokens = input.configuration.estimateTokensByProfile[route.profile];
   const estimatedTokens = estimateUsage({
@@ -143,8 +194,8 @@ export async function planIntegrativeReviewAttempt(input: {
       model: route.model,
       priceTableVersion: manifest.price_table?.version ?? null,
       reasoningEffort: route.reasoningEffort,
-      role: "integrative_review",
-      routingReasons: route.reasons,
+      role: mode.role,
+      routingReasons: [...route.reasons, ...mode.routingReasons],
       startedAt: now,
       workspacePath: issueWorkspacePath(input.configuration.workspaceRoot, input.issue.identifier),
     },
@@ -153,7 +204,7 @@ export async function planIntegrativeReviewAttempt(input: {
       expiresAt: new Date(nowMs + input.configuration.leaseTtlMs).toISOString(),
       holder: input.serviceRunId,
       originStage: "In Progress",
-      reason: "integrative_review",
+      reason: mode.role,
     },
     reservation: {
       id: reservationId,
@@ -169,7 +220,7 @@ export async function planIntegrativeReviewAttempt(input: {
     estimatedTokens,
     estimatedUsd,
     preflight,
-    prompt: renderPrompt(input.issue, input.context),
+    prompt: mode.prompt,
     route,
   };
 }
@@ -193,6 +244,37 @@ function renderPrompt(issue: Issue, context: IntegrativeReviewContext): string {
     })}`,
     `Repository docs: ${JSON.stringify(context.repositoryDocs)}`,
     `Full diff:\n${context.diff}`,
+  ].join("\n");
+}
+
+function renderSpecialistPrompt(
+  issue: Issue,
+  context: IntegrativeReviewContext,
+  selection: SpecialistSelection,
+): string {
+  const required = new Set(selection.specialist.requiredEvidence);
+  return [
+    `You are the fresh-context ${selection.specialist.name} specialist reviewer.`,
+    "Review only the declared concerns using the supplied immutable evidence.",
+    "Report exactly one typed ReviewResult targeting the supplied target SHA.",
+    "Blocking findings require affected behavior, evidence, severity, and disposition.",
+    "Unsupported stylistic preferences are non-blocking.",
+    "",
+    `Concerns: ${JSON.stringify(selection.specialist.concerns)}`,
+    `Triggering rules: ${JSON.stringify(selection.triggeringRules)}`,
+    `Excluded context: ${JSON.stringify(selection.specialist.excludedContext)}`,
+    `Issue and acceptance criteria: ${JSON.stringify(issue)}`,
+    `Review target: ${JSON.stringify({
+      base_sha: context.baseSha,
+      changed_files: context.changedFiles,
+      patch_identity: context.patchIdentity,
+      target_sha: context.targetSha,
+      verification_record_id: context.verificationRecordId,
+    })}`,
+    ...(required.has("repository_docs")
+      ? [`Repository docs: ${JSON.stringify(context.repositoryDocs)}`]
+      : []),
+    ...(required.has("diff") ? [`Full diff:\n${context.diff}`] : []),
   ].join("\n");
 }
 

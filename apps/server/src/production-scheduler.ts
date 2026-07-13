@@ -59,8 +59,14 @@ import {
 import { startPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 import { createInitialPlanSubmissionHandler } from "./initial-plan-submission.js";
-import { startPlannedIntegrativeReviewAttemptLifecycle } from "./integrative-review-attempt-lifecycle.js";
-import { planIntegrativeReviewAttempt } from "./integrative-review-attempt-planner.js";
+import {
+  startPlannedIntegrativeReviewAttemptLifecycle,
+  startPlannedSpecialistReviewAttemptLifecycle,
+} from "./integrative-review-attempt-lifecycle.js";
+import {
+  planIntegrativeReviewAttempt,
+  planSpecialistReviewAttempt,
+} from "./integrative-review-attempt-planner.js";
 import { collectIntegrativeReviewContext } from "./integrative-review-evidence.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
@@ -184,6 +190,7 @@ export function createProductionScheduler(input: {
         const isPlanReview = claim.reason === "plan_review_required";
         const isIndependentVerification = claim.reason === "independent_verification_required";
         const isIntegrativeReview = claim.reason === "review_required";
+        const isSpecialistReview = claim.reason.startsWith("specialist_review_required:");
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
           claim.reason === "plan_revision_required";
@@ -192,6 +199,7 @@ export function createProductionScheduler(input: {
             !isIndependentVerification &&
             !isIntegrativeReview &&
             !isReviewCoordination &&
+            !isSpecialistReview &&
             !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
         ) {
@@ -345,6 +353,99 @@ export function createProductionScheduler(input: {
                 input.logger?.error(
                   { attempt_id: reviewPlanned.attemptId, error },
                   "integrative review lifecycle failed",
+                ),
+            );
+            continue;
+          }
+          if (isSpecialistReview) {
+            const specialistName = decodeSpecialistName(claim.reason);
+            const pending = await loadPendingReviewCoordination(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!pending) throw new Error(`scheduler.specialist_target_missing:${issueId}`);
+            const context = await (
+              input.review?.collectEvidence ?? collectIntegrativeReviewContext
+            )({
+              baseSha: pending.targetBaseSha,
+              changeClass: pending.changeClass,
+              commandRunner: createNodeWorkspaceCommandRunner(),
+              sourceEnvironment: input.environment,
+              targetSha: pending.targetSha,
+              timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+              verificationRecordId: pending.verificationRecordId,
+              workspace: pending.workspacePath,
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            const facts = new Set(pending.riskFacts);
+            for (const label of stored.issue.labels) facts.add(`label:${label}`);
+            const selection = selectRequiredSpecialists(
+              parseReviewSpecialists(values["review.specialists"]),
+              {
+                acceptanceCriteriaPresent: stored.issue.acceptance_criteria.length > 0,
+                changedLines: context.changedLines,
+                changedPaths: context.changedFiles,
+                facts,
+                proposedPaths: pending.proposedPaths,
+              },
+            ).find((candidate) => candidate.specialist.name === specialistName);
+            if (!selection) {
+              throw new Error(`scheduler.specialist_no_longer_required:${specialistName}`);
+            }
+            const specialistPlanned = await planSpecialistReviewAttempt({
+              adapter: agent,
+              configSnapshotId: input.snapshot.id,
+              configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
+              context,
+              database: input.database,
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              selection,
+              serviceRunId: input.serviceRunId,
+              terminalResultSchema: ReviewResultSchema,
+            });
+            const specialistStarted = await startPlannedSpecialistReviewAttemptLifecycle({
+              adapter: agent,
+              agentCommand: stringValue(values, "agent.command"),
+              afterCreateCommand: nullableString(values, "hooks.after_create"),
+              allowlistedEnvironmentNames: stringList(values, "env.allowlist"),
+              attemptTokenCap: numberValue(values, "budget.per_attempt_tokens"),
+              beforeRunCommand: nullableString(values, "hooks.before_run"),
+              database: input.database,
+              hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
+              issue: stored.issue,
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              planned: specialistPlanned,
+              repositoryAdapter,
+              safety,
+              serviceRunId: input.serviceRunId,
+              sourceEnvironment: input.environment,
+              specialistName,
+              usdCap: positiveNumberValue(values, "budget.per_attempt_usd"),
+              workspaceRoot: stringValue(values, "workspace.root"),
+            });
+            availableSlots -= 1;
+            running.set(specialistPlanned.attemptId, {
+              attemptId: specialistPlanned.attemptId,
+              attemptLane: "In Progress",
+              expectedExpiresAt: specialistPlanned.dispatch.claim.expiresAt,
+              holder: input.serviceRunId,
+              issueId,
+              lastEventAt: specialistStarted.bound.started.timestamp,
+              processGroupId: specialistStarted.bound.session.processGroupId,
+              processId: specialistStarted.bound.session.processId,
+              workspacePath: specialistPlanned.dispatch.attempt.workspacePath,
+            });
+            trackCompletion(
+              completions,
+              specialistStarted.completion,
+              () => running.delete(specialistPlanned.attemptId),
+              (error) =>
+                input.logger?.error(
+                  { attempt_id: specialistPlanned.attemptId, error },
+                  "specialist review lifecycle failed",
                 ),
             );
             continue;
@@ -752,6 +853,17 @@ function requiredPositiveNumber(value: unknown, key: string): number {
 
 function positiveNumberValue(values: Readonly<Record<string, unknown>>, key: string): number {
   return requiredPositiveNumber(values[key], key);
+}
+
+function decodeSpecialistName(reason: string): string {
+  const encoded = reason.slice("specialist_review_required:".length);
+  try {
+    const name = decodeURIComponent(encoded);
+    if (!name || encodeURIComponent(name) !== encoded) throw new Error("invalid");
+    return name;
+  } catch {
+    throw new Error("scheduler.specialist_reason_invalid");
+  }
 }
 
 function issueRoutingFacts(issue: Issue): ReadonlySet<string> {

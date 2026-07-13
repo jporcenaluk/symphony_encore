@@ -1,9 +1,13 @@
 import type { AgentConsumptionResult } from "./agent-event-consumer.js";
 import { consumeAgentSession } from "./agent-event-consumer.js";
-import { closeIntegrativeReviewAttempt } from "./integrative-review-attempt-closure.js";
+import {
+  closeIntegrativeReviewAttempt,
+  closeSpecialistReviewAttempt,
+} from "./integrative-review-attempt-closure.js";
 import {
   type ExecutePlannedIntegrativeReviewAttemptInput,
   executePlannedIntegrativeReviewAttempt,
+  executePlannedSpecialistReviewAttempt,
 } from "./integrative-review-attempt-executor.js";
 
 type LifecycleInput = ExecutePlannedIntegrativeReviewAttemptInput & {
@@ -21,12 +25,26 @@ export async function startPlannedIntegrativeReviewAttemptLifecycle(
   input: LifecycleInput,
 ): Promise<StartedIntegrativeReviewAttemptLifecycle> {
   const started = await executePlannedIntegrativeReviewAttempt(input);
-  return { bound: started.bound, completion: consumeAndClose(input, started) };
+  return {
+    bound: started.bound,
+    completion: consumeAndClose(input, started, closeIntegrativeReviewAttempt),
+  };
+}
+
+export async function startPlannedSpecialistReviewAttemptLifecycle(
+  input: LifecycleInput & { specialistName: string },
+): Promise<StartedIntegrativeReviewAttemptLifecycle> {
+  const started = await executePlannedSpecialistReviewAttempt(input);
+  return {
+    bound: started.bound,
+    completion: consumeAndClose(input, started, closeSpecialistReviewAttempt),
+  };
 }
 
 async function consumeAndClose(
   input: LifecycleInput,
   started: Awaited<ReturnType<typeof executePlannedIntegrativeReviewAttempt>>,
+  close: typeof closeIntegrativeReviewAttempt,
 ): Promise<AgentConsumptionResult> {
   let consumption: AgentConsumptionResult;
   try {
@@ -57,7 +75,7 @@ async function consumeAndClose(
       providerReason: boundedErrorMessage(error),
     };
   }
-  return closeIntegrativeReviewAttempt({
+  return close({
     attemptId: input.planned.attemptId,
     consumption,
     context: input.planned.context,

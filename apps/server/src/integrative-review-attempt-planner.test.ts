@@ -7,7 +7,10 @@ import { type AgentAdapterManifest, type Issue, ReviewResultSchema } from "@symp
 import { applyMigrations, openDatabase } from "@symphony/persistence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { planIntegrativeReviewAttempt } from "./integrative-review-attempt-planner.js";
+import {
+  planIntegrativeReviewAttempt,
+  planSpecialistReviewAttempt,
+} from "./integrative-review-attempt-planner.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -124,6 +127,42 @@ describe("integrative review planning", () => {
       attempt: { changeClass: "standard", role: "integrative_review" },
       claim: { reason: "integrative_review" },
       workRef: { id: "issue-1", kind: "issue" },
+    });
+    const specialist = await planSpecialistReviewAttempt({
+      adapter,
+      configSnapshotId: "config-1",
+      configuration: configuration(),
+      context: planned.context,
+      database: opened.database,
+      issue,
+      newId: () => `review-${++sequence}`,
+      now: () => "2026-07-13T10:04:00Z",
+      selection: {
+        specialist: {
+          concerns: ["security", "failure_modes"],
+          excludedContext: ["builder_narrative", "self_review"],
+          name: "systems_security",
+          profile: "deep",
+          requiredEvidence: ["diff", "checks"],
+        },
+        triggeringRules: ["risk.security_auth"],
+      },
+      serviceRunId: "run-1",
+      terminalResultSchema: ReviewResultSchema,
+    });
+    expect(specialist).toMatchObject({
+      estimatedTokens: 300_000,
+      route: { profile: "deep", reasoningEffort: "high" },
+    });
+    expect(specialist.prompt).toContain("systems_security specialist reviewer");
+    expect(specialist.prompt).toContain("security");
+    expect(specialist.prompt).toContain("Full diff:");
+    expect(specialist.dispatch.attempt).toMatchObject({
+      role: "specialist_review",
+      routingReasons: expect.arrayContaining([
+        "specialist.name:systems_security",
+        "specialist.trigger:risk.security_auth",
+      ]),
     });
     await opened.close();
   });

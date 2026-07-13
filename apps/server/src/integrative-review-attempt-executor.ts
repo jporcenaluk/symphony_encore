@@ -37,9 +37,37 @@ export interface BoundIntegrativeReviewAttempt {
 export async function executePlannedIntegrativeReviewAttempt(
   input: ExecutePlannedIntegrativeReviewAttemptInput,
 ): Promise<BoundIntegrativeReviewAttempt> {
+  return executePlannedReviewAttempt(input, {
+    expectedReadyReason: "review_required",
+    launchFailureReason: "integrative_review_launch_failed",
+    role: "integrative_review",
+    title: `integrative-review:${input.issue.id}: ${input.issue.title}`,
+  });
+}
+
+export async function executePlannedSpecialistReviewAttempt(
+  input: ExecutePlannedIntegrativeReviewAttemptInput & { specialistName: string },
+): Promise<BoundIntegrativeReviewAttempt> {
+  return executePlannedReviewAttempt(input, {
+    expectedReadyReason: `specialist_review_required:${encodeURIComponent(input.specialistName)}`,
+    launchFailureReason: `specialist_review_launch_failed:${encodeURIComponent(input.specialistName)}`,
+    role: "specialist_review",
+    title: `specialist-review:${input.specialistName}:${input.issue.id}: ${input.issue.title}`,
+  });
+}
+
+async function executePlannedReviewAttempt(
+  input: ExecutePlannedIntegrativeReviewAttemptInput,
+  mode: {
+    expectedReadyReason: string;
+    launchFailureReason: string;
+    role: "integrative_review" | "specialist_review";
+    title: string;
+  },
+): Promise<BoundIntegrativeReviewAttempt> {
   await createContinuationDispatch(input.database, {
     dispatch: input.planned.dispatch,
-    expectedReadyReason: "review_required",
+    expectedReadyReason: mode.expectedReadyReason,
   });
   try {
     const prepared = await prepareIssueWorkspace({
@@ -70,14 +98,14 @@ export async function executePlannedIntegrativeReviewAttempt(
         preflight: input.planned.preflight,
         profile: input.planned.route.profile,
         prompt: input.planned.prompt,
-        title: `integrative-review:${input.issue.id}: ${input.issue.title}`,
+        title: mode.title,
         workspacePath: prepared.population.workspacePath,
       },
       safety: input.safety,
     });
     return { bound };
   } catch (error) {
-    await closeLaunchFailure(input, error);
+    await closeLaunchFailure(input, error, mode);
     throw error;
   }
 }
@@ -85,6 +113,7 @@ export async function executePlannedIntegrativeReviewAttempt(
 async function closeLaunchFailure(
   input: ExecutePlannedIntegrativeReviewAttemptInput,
   error: unknown,
+  mode: { launchFailureReason: string; role: "integrative_review" | "specialist_review" },
 ): Promise<void> {
   const resultId = input.newId();
   if (!resultId) throw new Error("review.launch_failure_identity_invalid");
@@ -95,7 +124,7 @@ async function closeLaunchFailure(
       costUsd: input.planned.dispatch.attempt.costUsd,
       endedAt: input.now(),
       failureClass,
-      nextClaim: { mode: "Ready", reason: "integrative_review_launch_failed" },
+      nextClaim: { mode: "Ready", reason: mode.launchFailureReason },
       reservationId: input.planned.dispatch.reservation.id,
       settledLedgers: input.planned.dispatch.reservation.ledgers.map((ledger) => ({
         actualAmount: 0,
@@ -116,11 +145,11 @@ async function closeLaunchFailure(
             open_items: input.issue.acceptance_criteria,
             revision: input.planned.context.targetSha,
           },
-          role: "integrative_review",
+          role: mode.role,
           status: "failed",
-          summary: "Integrative-review launch failed before a session was bound.",
+          summary: `${mode.role} launch failed before a session was bound.`,
         },
-        role: "integrative_review",
+        role: mode.role,
       },
       usage: { inputTokens: 0, outputTokens: 0 },
       workRef: { id: input.issue.id, kind: "issue" },

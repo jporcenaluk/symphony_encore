@@ -18,7 +18,7 @@ import {
 import type { AgentConsumptionResult } from "./agent-event-consumer.js";
 import type { IntegrativeReviewContext } from "./integrative-review-attempt-planner.js";
 
-export async function closeIntegrativeReviewAttempt(input: {
+interface CloseReviewAttemptInput {
   attemptId: string;
   consumption: AgentConsumptionResult;
   context: IntegrativeReviewContext;
@@ -28,7 +28,24 @@ export async function closeIntegrativeReviewAttempt(input: {
   newId(): string;
   reservationId: string;
   safety: PersistenceSafetyController;
-}): Promise<AgentConsumptionResult> {
+}
+
+export async function closeIntegrativeReviewAttempt(
+  input: CloseReviewAttemptInput,
+): Promise<AgentConsumptionResult> {
+  return closeReviewAttempt(input, "integrative_review");
+}
+
+export async function closeSpecialistReviewAttempt(
+  input: CloseReviewAttemptInput,
+): Promise<AgentConsumptionResult> {
+  return closeReviewAttempt(input, "specialist_review");
+}
+
+async function closeReviewAttempt(
+  input: CloseReviewAttemptInput,
+  reviewerRole: "integrative_review" | "specialist_review",
+): Promise<AgentConsumptionResult> {
   try {
     const settlement = await loadAttemptSettlementState(input.database, {
       attemptId: input.attemptId,
@@ -52,6 +69,7 @@ export async function closeIntegrativeReviewAttempt(input: {
         reservationId: input.reservationId,
         result: consumption.result,
         reviewRecordId: requiredId(input.newId()),
+        reviewerRole,
         settledLedgers,
         targetBaseSha: input.context.baseSha,
         targetSha: input.context.targetSha,
@@ -85,14 +103,14 @@ export async function closeIntegrativeReviewAttempt(input: {
             open_items: input.issue.acceptance_criteria,
             revision: input.context.targetSha,
           },
-          role: "integrative_review",
+          role: reviewerRole,
           status:
             AGENT_ERROR_FAILURE_CLASS[consumption.errorCode] === "budget_exhausted"
               ? "budget_exhausted"
               : "failed",
-          summary: `Integrative reviewer ended with ${consumption.errorCode}: ${consumption.providerReason}`,
+          summary: `${reviewerRole} ended with ${consumption.errorCode}: ${consumption.providerReason}`,
         },
-        role: "integrative_review",
+        role: reviewerRole,
       },
       usage: { inputTokens: settlement.inputTokens, outputTokens: settlement.outputTokens },
       workRef: { id: input.issue.id, kind: "issue" },

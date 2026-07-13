@@ -807,7 +807,9 @@ describe("production reconciliation scheduler", () => {
       fetchStatesByIds: vi.fn(),
       updateIssueLane: vi.fn(),
     };
+    const agent = createSpecialistAgent();
     const scheduler = createProductionScheduler({
+      agent,
       database: opened.database,
       environment: {},
       prompt: "Implement {{ issue.title }}.",
@@ -839,10 +841,93 @@ describe("production reconciliation scheduler", () => {
         reason: "specialist_review_required:systems_security",
       }),
     );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledOnce());
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "review_coordination_required",
+      }),
+    );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "pull_request_required",
+      }),
+    );
     await scheduler.close();
-    expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
-      count: 0,
+    expect(agent.preflight).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "specialist_review" }),
+    );
+    expect(
+      opened.sqlite
+        .prepare("select reviewer_role from review_records order by reviewer_role")
+        .all(),
+    ).toEqual([{ reviewer_role: "integrative_review" }, { reviewer_role: "specialist_review" }]);
+    expect(
+      opened.sqlite
+        .prepare("select decision, required_specialist_names_json from review_sets")
+        .get(),
+    ).toEqual({
+      decision: "approve",
+      required_specialist_names_json: '["systems_security"]',
     });
     await opened.close();
   });
 });
+
+function createSpecialistAgent(): AgentAdapter {
+  return {
+    launch: vi.fn(async (request: AgentLaunchRequest) => ({
+      cancel: vi.fn(async () => undefined),
+      events: {
+        async *[Symbol.asyncIterator]() {
+          yield {
+            attempt_id: request.attemptId,
+            event: "session_started" as const,
+            model: "gpt-test",
+            reasoning_effort: "high",
+            session_id: "specialist-session",
+            thread_id: "specialist-thread",
+            timestamp: "2026-07-13T10:08:00Z",
+            turn_id: "specialist-turn",
+          };
+          yield {
+            attempt_id: request.attemptId,
+            event: "terminal_result_reported" as const,
+            result: {
+              decision: "approve",
+              evidence: [{ kind: "commit", sha: "def5678" }],
+              findings: [],
+              target_sha: "def5678",
+            },
+            session_id: "specialist-session",
+            timestamp: "2026-07-13T10:08:01Z",
+          };
+          yield {
+            attempt_id: request.attemptId,
+            event: "turn_completed" as const,
+            provider_reason: "completed",
+            session_id: "specialist-session",
+            timestamp: "2026-07-13T10:08:02Z",
+          };
+        },
+      },
+      processGroupId: 7320,
+      processId: 7321,
+      waitForExit: vi.fn(async () => ({ code: 0, signal: null })),
+    })),
+    manifest: vi.fn(async () => manifest),
+    preflight: vi.fn(async (request: AgentPreflightRequest) => ({
+      adapterVersion: manifest.adapter_version,
+      manifest,
+      protocolSchemaHash: manifest.protocol.schema_hash,
+      resolvedSkills: request.requiredSkills,
+      role: request.role,
+      submitPlanSchema: null,
+      terminalResultSchema: request.terminalResultSchema,
+    })),
+  };
+}
