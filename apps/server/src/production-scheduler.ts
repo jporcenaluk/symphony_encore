@@ -116,6 +116,7 @@ import {
 } from "./repository-publication.js";
 import {
   createPersistentRunningIssueReconciler,
+  createPersistentRunningSystemJobReconciler,
   type RunningIssueRecord,
 } from "./running-issue-reconciler.js";
 
@@ -217,6 +218,32 @@ export function createProductionScheduler(input: {
     tracker,
     workspaceRoot: stringValue(values, "workspace.root"),
   });
+  const reconcileSystemJobs = createPersistentRunningSystemJobReconciler({
+    config: {
+      leaseTtlMs: numberValue(values, "persistence.lease_ttl_ms"),
+      retryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
+      stallTimeoutMs: numberValue(values, "agent.stall_timeout_ms"),
+    },
+    database: input.database,
+    killWaitMs: 5_000,
+    newId: randomUUID,
+    now: () => new Date().toISOString(),
+    onRunningLoaded(records) {
+      const loaded = new Set(records.map((record) => record.attemptId));
+      for (const attemptId of runningSystemJobAttempts) {
+        if (!loaded.has(attemptId)) {
+          runningSystemJobAttempts.delete(attemptId);
+          running.delete(attemptId);
+        }
+      }
+      for (const record of records) {
+        runningSystemJobAttempts.add(record.attemptId);
+        running.set(record.attemptId, record);
+      }
+    },
+    safety,
+    terminateWaitMs: 1_000,
+  });
   const agent = input.agent ?? createLazyProductionAgent(values, input.environment);
   const repositoryAdapter =
     input.repositoryAdapter ?? createLazyGitHubWorkspaceAdapter(values, input.environment);
@@ -251,6 +278,7 @@ export function createProductionScheduler(input: {
     },
     async tick() {
       await reconcile();
+      await reconcileSystemJobs();
       if (!safety.canDispatch()) return;
       let availableSlots = Math.max(
         0,

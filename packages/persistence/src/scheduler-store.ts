@@ -33,6 +33,7 @@ interface ReconciliationAttemptRow {
   input_tokens: number;
   output_tokens: number;
   role: string;
+  system_job_status: string | null;
   work_ref_id: string;
   work_ref_kind: "issue" | "system_job";
 }
@@ -66,10 +67,23 @@ export async function isWorkClaimed(
 export async function listRunningIssueAttempts(
   database: Kysely<DatabaseSchema>,
 ): Promise<RunningIssueAttemptRecord[]> {
+  return listRunningAttempts(database, "issue");
+}
+
+export async function listRunningSystemJobAttempts(
+  database: Kysely<DatabaseSchema>,
+): Promise<RunningIssueAttemptRecord[]> {
+  return listRunningAttempts(database, "system_job");
+}
+
+async function listRunningAttempts(
+  database: Kysely<DatabaseSchema>,
+  workRefKind: "issue" | "system_job",
+): Promise<RunningIssueAttemptRecord[]> {
   return database.transaction().execute(async (transaction) => {
     const expected = await sql<{ count: number }>`
       select count(*) as count from claims
-      where mode = 'Running' and work_ref_kind = 'issue'
+      where mode = 'Running' and work_ref_kind = ${workRefKind}
     `.execute(transaction);
     const rows = await sql<RunningIssueAttemptRow>`
       select attempts.id as attempt_id, attempts.work_ref_id, attempts.workspace_path,
@@ -86,11 +100,11 @@ export async function listRunningIssueAttempts(
         on stage_transitions.work_ref_kind = claims.work_ref_kind
         and stage_transitions.work_ref_id = claims.work_ref_id
         and stage_transitions.exited_at is null
-      where claims.mode = 'Running' and claims.work_ref_kind = 'issue'
+      where claims.mode = 'Running' and claims.work_ref_kind = ${workRefKind}
       order by attempts.started_at, attempts.id
     `.execute(transaction);
     if (rows.rows.length !== (expected.rows[0]?.count ?? 0)) {
-      throw new Error("scheduler.running_issue_identity_incomplete");
+      throw new Error(`scheduler.running_${workRefKind}_identity_incomplete`);
     }
     return rows.rows.map((row) => ({
       attemptId: row.attempt_id,
@@ -122,11 +136,18 @@ export async function closeRunningAttemptForReconciliation(
 ): Promise<void> {
   if (!input.summary) throw new Error("scheduler.reconciliation_summary_missing");
   const attempts = await sql<ReconciliationAttemptRow>`
-    select role, work_ref_kind, work_ref_id, input_tokens, output_tokens, cost_usd
-    from attempts where id = ${input.attemptId} and status = 'running'
+    select attempt.role, attempt.work_ref_kind, attempt.work_ref_id, attempt.input_tokens,
+           attempt.output_tokens, attempt.cost_usd, job.status as system_job_status
+    from attempts attempt
+    left join system_jobs job
+      on attempt.work_ref_kind = 'system_job' and job.id = attempt.work_ref_id
+    where attempt.id = ${input.attemptId} and attempt.status = 'running'
   `.execute(database);
   const attempt = attempts.rows[0];
   if (!attempt) throw new Error(`scheduler.running_attempt_missing:${input.attemptId}`);
+  if (attempt.work_ref_kind === "system_job" && !attempt.system_job_status) {
+    throw new Error(`scheduler.running_system_job_missing:${input.attemptId}`);
+  }
   const handoff = await loadLatestHandoffForAttempt(database, input.attemptId);
   const ledgers = await sql<ReconciliationLedgerRow>`
     select reservation.id as reservation_id, ledger.id as ledger_id, ledger.unit
@@ -158,6 +179,21 @@ export async function closeRunningAttemptForReconciliation(
     nextClaim: input.nextClaim,
     reservationId: reservationIds.values().next().value as string,
     settledLedgers,
+    ...(attempt.work_ref_kind === "system_job"
+      ? {
+          systemJobStageTransition: {
+            attemptId: input.attemptId,
+            confirmedExternalRevision: null,
+            enteredAt: input.endedAt,
+            expectedFromStage: attempt.system_job_status as string,
+            id: `${input.terminalResultId}:stage`,
+            reason: `reconciliation.${input.nextClaim.reason}`,
+            timestampSource: "observed_estimate" as const,
+            toStage: input.nextClaim.mode === "Released" ? "failed" : "rework",
+            workRef: { id: attempt.work_ref_id, kind: "system_job" as const },
+          },
+        }
+      : {}),
     terminalResult: {
       id: input.terminalResultId,
       kind: "execution_failure",

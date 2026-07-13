@@ -15,6 +15,7 @@ import {
 import {
   closeRunningAttemptForReconciliation,
   listRunningIssueAttempts,
+  listRunningSystemJobAttempts,
   type OpenedDatabase,
   observeIssue,
   renewRunningClaim,
@@ -222,6 +223,63 @@ export function createPersistentRunningIssueReconciler(input: {
       }),
     tracker: input.tracker,
   });
+}
+
+export function createPersistentRunningSystemJobReconciler(input: {
+  config: Pick<
+    RunningIssueReconcilerInput["config"],
+    "leaseTtlMs" | "retryBackoffMs" | "stallTimeoutMs"
+  >;
+  database: OpenedDatabase["database"];
+  killWaitMs: number;
+  newId(): string;
+  now(): string;
+  onRunningLoaded?: (records: readonly RunningIssueRecord[]) => void;
+  safety: PersistenceSafetyController;
+  terminateWaitMs: number;
+}) {
+  return async (): Promise<void> => {
+    const records = await listRunningSystemJobAttempts(input.database);
+    input.onRunningLoaded?.(records);
+    const now = input.now();
+    const nowMs = parseTime(now, "scheduler.invalid_now");
+    for (const record of records) {
+      const stalled =
+        nowMs - parseTime(record.lastEventAt, "scheduler.invalid_last_event") >=
+        input.config.stallTimeoutMs;
+      if (stalled) {
+        await terminateLinuxProcessGroup({
+          killWaitMs: input.killWaitMs,
+          processGroupId: record.processGroupId,
+          processId: record.processId,
+          terminateWaitMs: input.terminateWaitMs,
+        });
+        await closeRunningAttemptForReconciliation(input.database, {
+          attemptId: record.attemptId,
+          endedAt: now,
+          failureClass: "agent_process",
+          nextClaim: {
+            dueAt: new Date(nowMs + input.config.retryBackoffMs).toISOString(),
+            mode: "RetryQueued",
+            reason: "stall_timeout",
+          },
+          summary: "Repair SystemJob agent session stalled during execution",
+          terminalResultId: input.newId(),
+        });
+        continue;
+      }
+      const expectedMs = parseTime(record.expectedExpiresAt, "scheduler.invalid_expected_expiry");
+      await renewRunningClaim(input.database, {
+        expectedExpiresAt: record.expectedExpiresAt,
+        holder: record.holder,
+        newExpiresAt: new Date(
+          Math.max(expectedMs + 1, nowMs + input.config.leaseTtlMs),
+        ).toISOString(),
+        renewedAt: now,
+        workRef: { id: record.issueId, kind: "system_job" },
+      });
+    }
+  };
 }
 
 function closeDecision(
