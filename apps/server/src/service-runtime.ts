@@ -18,6 +18,7 @@ import {
   loadAcknowledgedCandidateHashes,
   loadActiveOverrides,
   loadLatestConfigurationSnapshot,
+  type OpenedDatabase,
   openDatabase,
   readControlState,
   readServiceStatus,
@@ -55,6 +56,11 @@ export interface ProductionServiceInput {
   now?: () => string;
   options: RuntimeOptions;
   output?: (line: string) => void;
+  schedulerFactory?: (input: {
+    database: OpenedDatabase["database"];
+    serviceRunId: string;
+    snapshot: ConfigurationSnapshot;
+  }) => { close(): Promise<void>; start(): Promise<void> };
   serviceRunId?: () => string;
   startupConfiguration?: {
     environment: Readonly<Record<string, string | undefined>>;
@@ -70,6 +76,7 @@ export async function startProductionService(input: ProductionServiceInput) {
   await mkdir(path.dirname(input.options.databasePath), { recursive: true });
   const opened = openDatabase(input.options.databasePath);
   let httpRuntime: Awaited<ReturnType<typeof startHttpRuntime>> | undefined;
+  let scheduler: { close(): Promise<void>; start(): Promise<void> } | undefined;
   let workflowMonitor: WorkflowFileMonitor | undefined;
   try {
     await applyMigrations(opened.database);
@@ -244,6 +251,12 @@ export async function startProductionService(input: ProductionServiceInput) {
       });
       serviceRunId = nextServiceRunId;
       await startWorkflowMonitor(snapshot);
+      scheduler = input.schedulerFactory?.({
+        database: opened.database,
+        serviceRunId: nextServiceRunId,
+        snapshot,
+      });
+      await scheduler?.start();
     }
 
     const auth = createLocalSessionAuth({
@@ -305,8 +318,18 @@ export async function startProductionService(input: ProductionServiceInput) {
       async close() {
         if (closed) return;
         closed = true;
+        let closeError: unknown;
+        try {
+          await scheduler?.close();
+        } catch (error) {
+          closeError = error;
+        }
         try {
           await workflowMonitor?.close();
+        } catch (error) {
+          closeError ??= error;
+        }
+        try {
           if (serviceRunId !== undefined) {
             await stopServiceRun(opened.database, {
               endedAt: now(),
@@ -314,13 +337,20 @@ export async function startProductionService(input: ProductionServiceInput) {
               serviceRunId,
             });
           }
-        } finally {
-          try {
-            await httpRuntime?.close();
-          } finally {
-            await opened.close();
-          }
+        } catch (error) {
+          closeError ??= error;
         }
+        try {
+          await httpRuntime?.close();
+        } catch (error) {
+          closeError ??= error;
+        }
+        try {
+          await opened.close();
+        } catch (error) {
+          closeError ??= error;
+        }
+        if (closeError) throw closeError;
       },
       server,
       get serviceRunId() {
@@ -329,9 +359,10 @@ export async function startProductionService(input: ProductionServiceInput) {
       url: httpRuntime.url,
     };
   } catch (error) {
-    await workflowMonitor?.close();
-    await httpRuntime?.close();
-    await opened.close();
+    await scheduler?.close().catch(() => undefined);
+    await workflowMonitor?.close().catch(() => undefined);
+    await httpRuntime?.close().catch(() => undefined);
+    await opened.close().catch(() => undefined);
     throw error;
   }
 }

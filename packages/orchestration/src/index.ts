@@ -11,4 +11,5 @@ export * from "./scheduler/persistence-safety.js";
 export * from "./scheduler/policy.js";
 export * from "./scheduler/poll-loop.js";
 export * from "./scheduler/poll-tick.js";
+export * from "./scheduler/service.js";
 export * from "./workflow-loader.js";

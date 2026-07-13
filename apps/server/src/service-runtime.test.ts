@@ -54,6 +54,7 @@ describe("production service lifecycle", () => {
   it("opens an initialized store, recovers before readiness, and closes durably", async () => {
     const fixture = await initializedFixture();
     const listen = vi.fn(async () => "http://127.0.0.1:48080");
+    const schedulerCalls: string[] = [];
     let workflowMonitorInput: WorkflowFileMonitorInput | undefined;
     const service = await startProductionService({
       hostId: "host-1",
@@ -74,6 +75,14 @@ describe("production service lifecycle", () => {
         workspaceRoot: fixture.workspaceRoot,
       },
       output: () => undefined,
+      schedulerFactory: () => ({
+        async close() {
+          schedulerCalls.push("close");
+        },
+        async start() {
+          schedulerCalls.push("start");
+        },
+      }),
       serviceRunId: () => "service-run-1",
       startupConfiguration: {
         environment: {},
@@ -117,6 +126,7 @@ describe("production service lifecycle", () => {
       service_run_id: "service-run-1",
       status: "ready",
     });
+    expect(schedulerCalls).toEqual(["start"]);
     expect(
       (await service.server.inject({ headers: { accept: "text/html" }, url: "/operations" })).body,
     ).toContain("production UI");
@@ -151,6 +161,7 @@ Updated prompt for {{ issue.title }}.
     });
 
     await service.close();
+    expect(schedulerCalls).toEqual(["start", "close"]);
     const reopened = openDatabase(fixture.databasePath);
     expect(
       reopened.sqlite

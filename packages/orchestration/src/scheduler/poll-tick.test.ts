@@ -105,4 +105,30 @@ describe("ordered poll tick", () => {
     expect(calls).toEqual(["running", "human", "merge", "config", "learning"]);
     expect(result).toEqual({ dispatched: [], skippedDispatch: true });
   });
+
+  it("keeps reconciliation active while a persistence latch suppresses new dispatch", async () => {
+    const calls: string[] = [];
+    const result = await runPollTick({
+      advanceMergeQueue: async () => calls.push("merge"),
+      canDispatch: () => false,
+      checkLearningAndFleetBudgets: async () => calls.push("learning"),
+      dispatch: async () => {
+        calls.push("dispatch");
+        return "dispatched";
+      },
+      fetchCandidates: async () => {
+        calls.push("fetch");
+        return [];
+      },
+      isClaimed: async () => false,
+      preflight: async () => true,
+      reconcileAwaitingHuman: async () => calls.push("human"),
+      reconcileRunning: async () => calls.push("running"),
+      runningSlots: async () => 0,
+      validateConfig: async () => validConfig(),
+    });
+
+    expect(calls).toEqual(["running", "human", "merge", "learning"]);
+    expect(result).toEqual({ dispatched: [], skippedDispatch: true });
+  });
 });

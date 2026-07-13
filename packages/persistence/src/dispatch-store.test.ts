@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
 import { createDispatch } from "./dispatch-store.js";
+import { openBaselineStage } from "./stage-transition.js";
 
 let directory: string;
 let opened: OpenedDatabase;
@@ -196,6 +197,68 @@ describe("dispatch transaction", () => {
     });
     expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
       count: 0,
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from side_effect_intents").get(),
+    ).toEqual({
+      count: 0,
+    });
+  });
+
+  it("atomically moves a SystemJob from queued to running without a tracker intent", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, parent_work_ref_kind, parent_work_ref_id, repository, goal,
+          acceptance_criteria_json, config_snapshot_id, status, workspace_path,
+          created_at, started_at, ended_at, final_result_id, input_tokens,
+          output_tokens, cost_usd
+        ) values (?, 'repair', 'issue', 'issue-parent', 'owner/repo', 'repair',
+          '[]', 'config-1', 'queued', '/tmp/work/job-1', ?, null, null, null, 0, 0, null)`,
+      )
+      .run("job-1", "2026-07-13T09:59:00Z");
+    await openBaselineStage(opened.database, {
+      enteredAt: "2026-07-13T09:59:00Z",
+      id: "stage-job-queued",
+      reason: "job_created",
+      timestampSource: "observed_estimate",
+      toStage: "queued",
+      workRef: { id: "job-1", kind: "system_job" },
+    });
+
+    await createDispatch(opened.database, {
+      ...dispatch,
+      attempt: {
+        ...dispatch.attempt,
+        id: "attempt-job-1",
+        workspacePath: "/tmp/work/job-1",
+      },
+      reservation: { ...dispatch.reservation, id: "reservation-job-1" },
+      systemJobTransition: {
+        attemptId: "attempt-job-1",
+        confirmedExternalRevision: null,
+        enteredAt: "2026-07-13T10:00:00Z",
+        expectedFromStage: "queued",
+        id: "stage-job-running",
+        reason: "dispatch",
+        timestampSource: "observed_estimate",
+        toStage: "running",
+        workRef: { id: "job-1", kind: "system_job" },
+      },
+      workRef: { id: "job-1", kind: "system_job" },
+    });
+
+    expect(
+      opened.sqlite
+        .prepare(
+          "select from_stage, to_stage, attempt_id from stage_transitions where id = 'stage-job-running'",
+        )
+        .get(),
+    ).toEqual({ attempt_id: "attempt-job-1", from_stage: "queued", to_stage: "running" });
+    expect(
+      opened.sqlite.prepare("select status from system_jobs where id = 'job-1'").get(),
+    ).toEqual({
+      status: "running",
     });
     expect(
       opened.sqlite.prepare("select count(*) as count from side_effect_intents").get(),

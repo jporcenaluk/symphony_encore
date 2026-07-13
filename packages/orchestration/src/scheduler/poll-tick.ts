@@ -13,6 +13,7 @@ export type DispatchDecision = "dispatched" | "budget_denied" | "claim_conflict"
 
 export interface PollTickPorts {
   advanceMergeQueue(): Promise<unknown>;
+  canDispatch?(): boolean;
   checkLearningAndFleetBudgets(): Promise<unknown>;
   dispatch(candidate: Issue): Promise<DispatchDecision>;
   fetchCandidates(): Promise<readonly Issue[]>;
@@ -36,7 +37,8 @@ export async function runPollTick(ports: PollTickPorts): Promise<PollTickResult>
   const validation = await ports.validateConfig();
   const dispatched: string[] = [];
 
-  if (validation.ok) {
+  const dispatchAllowed = validation.ok && (ports.canDispatch?.() ?? true);
+  if (dispatchAllowed) {
     const runningSlots = await ports.runningSlots();
     let availableSlots = Math.max(0, validation.config.maxConcurrent - runningSlots);
     if (availableSlots > 0) {
@@ -64,5 +66,5 @@ export async function runPollTick(ports: PollTickPorts): Promise<PollTickResult>
   }
 
   await ports.checkLearningAndFleetBudgets();
-  return { dispatched, skippedDispatch: !validation.ok };
+  return { dispatched, skippedDispatch: !dispatchAllowed };
 }

@@ -4,6 +4,7 @@ import { type Kysely, sql } from "kysely";
 import type { DatabaseSchema } from "./database.js";
 import { type AppendEventRecordInput, appendEventRecordInTransaction } from "./event-store.js";
 import { createAuthorizedIntentInTransaction } from "./side-effect-store.js";
+import { type StageTransitionInput, transitionStageInTransaction } from "./stage-transition.js";
 
 export interface DispatchInput {
   attempt: {
@@ -43,6 +44,7 @@ export interface DispatchInput {
     id: string;
     ledgers: readonly { amount: number; id: string; version: number }[];
   };
+  systemJobTransition?: StageTransitionInput;
   workRef: { kind: "issue" | "system_job"; id: string };
 }
 
@@ -107,6 +109,9 @@ export async function createDispatch(
       `.execute(transaction);
     }
 
+    if (input.issueMutation && input.systemJobTransition) {
+      throw new Error("dispatch.multiple_stage_mutations");
+    }
     if (input.issueMutation) {
       if (input.workRef.kind !== "issue") {
         throw new Error("dispatch.issue_mutation_requires_issue_work_ref");
@@ -116,6 +121,27 @@ export async function createDispatch(
         intent: input.issueMutation.intent,
       });
       await appendEventRecordInTransaction(transaction, input.issueMutation.event);
+    }
+    if (input.systemJobTransition) {
+      if (
+        input.workRef.kind !== "system_job" ||
+        input.systemJobTransition.workRef.kind !== "system_job" ||
+        input.systemJobTransition.workRef.id !== input.workRef.id ||
+        input.systemJobTransition.attemptId !== input.attempt.id ||
+        input.systemJobTransition.expectedFromStage !== "queued" ||
+        input.systemJobTransition.toStage !== "running"
+      ) {
+        throw new Error("dispatch.invalid_system_job_transition");
+      }
+      const update = await sql`
+        update system_jobs
+        set status = 'running', started_at = ${input.systemJobTransition.enteredAt}
+        where id = ${input.workRef.id} and status = 'queued' and started_at is null
+      `.execute(transaction);
+      if (update.numAffectedRows !== 1n) {
+        throw new Error("dispatch.system_job_not_queued");
+      }
+      await transitionStageInTransaction(transaction, input.systemJobTransition);
     }
   });
 }

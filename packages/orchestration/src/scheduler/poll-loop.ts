@@ -21,6 +21,10 @@ export class PollLoop {
     return this.active !== null;
   }
 
+  waitForIdle(): Promise<void> {
+    return this.active ?? Promise.resolve();
+  }
+
   private async drain(): Promise<void> {
     while (this.queued) {
       this.queued = false;
