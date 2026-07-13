@@ -4229,6 +4229,1028 @@
         }
       }
     },
+    "CoreAdapterKind": {
+      "anyOf": [
+        {
+          "const": "tracker",
+          "type": "string"
+        },
+        {
+          "const": "repository_host",
+          "type": "string"
+        },
+        {
+          "const": "agent",
+          "type": "string"
+        },
+        {
+          "const": "authentication",
+          "type": "string"
+        }
+      ]
+    },
+    "CoreConformanceCategory": {
+      "anyOf": [
+        {
+          "const": "workflow_configuration",
+          "type": "string"
+        },
+        {
+          "const": "durable_control_plane_recovery",
+          "type": "string"
+        },
+        {
+          "const": "plans_attempts_routing",
+          "type": "string"
+        },
+        {
+          "const": "budgets_tokens_cost_time",
+          "type": "string"
+        },
+        {
+          "const": "review_merge_quality_learning",
+          "type": "string"
+        },
+        {
+          "const": "ui_api_durable_history",
+          "type": "string"
+        },
+        {
+          "const": "workspace_security",
+          "type": "string"
+        }
+      ]
+    },
+    "CoreConformanceExecution": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "artifact_digest",
+        "arch",
+        "ci_provider",
+        "command",
+        "exit_code",
+        "kind",
+        "node_version",
+        "observed_tests",
+        "platform",
+        "producer_version",
+        "status",
+        "test_selectors"
+      ],
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifact_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "arch": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ci_provider": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "kind": {
+          "const": "core_execution",
+          "type": "string"
+        },
+        "node_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "observed_tests": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "const": "linux",
+              "type": "string"
+            },
+            {
+              "const": "macos",
+              "type": "string"
+            }
+          ]
+        },
+        "producer_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
+        },
+        "test_selectors": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CoreConformanceId": {
+      "anyOf": [
+        {
+          "const": "C-WF-01",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-02",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-03",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-04",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-05",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-06",
+          "type": "string"
+        },
+        {
+          "const": "C-WF-07",
+          "type": "string"
+        },
+        {
+          "const": "C-DUR-01",
+          "type": "string"
+        },
+        {
+          "const": "C-DUR-02",
+          "type": "string"
+        },
+        {
+          "const": "C-DUR-03",
+          "type": "string"
+        },
+        {
+          "const": "C-DUR-04",
+          "type": "string"
+        },
+        {
+          "const": "C-DUR-05",
+          "type": "string"
+        },
+        {
+          "const": "C-PLAN-01",
+          "type": "string"
+        },
+        {
+          "const": "C-PLAN-02",
+          "type": "string"
+        },
+        {
+          "const": "C-PLAN-03",
+          "type": "string"
+        },
+        {
+          "const": "C-PLAN-04",
+          "type": "string"
+        },
+        {
+          "const": "C-BUD-01",
+          "type": "string"
+        },
+        {
+          "const": "C-BUD-02",
+          "type": "string"
+        },
+        {
+          "const": "C-BUD-03",
+          "type": "string"
+        },
+        {
+          "const": "C-BUD-04",
+          "type": "string"
+        },
+        {
+          "const": "C-REV-01",
+          "type": "string"
+        },
+        {
+          "const": "C-REV-02",
+          "type": "string"
+        },
+        {
+          "const": "C-REV-03",
+          "type": "string"
+        },
+        {
+          "const": "C-REV-04",
+          "type": "string"
+        },
+        {
+          "const": "C-REV-05",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-01",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-02",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-03",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-04",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-05",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-06",
+          "type": "string"
+        },
+        {
+          "const": "C-UI-07",
+          "type": "string"
+        },
+        {
+          "const": "C-SEC-01",
+          "type": "string"
+        },
+        {
+          "const": "C-SEC-02",
+          "type": "string"
+        },
+        {
+          "const": "C-SEC-03",
+          "type": "string"
+        }
+      ]
+    },
+    "CoreConformanceResult": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "executions",
+        "id",
+        "requirement_sha256",
+        "revision",
+        "status"
+      ],
+      "properties": {
+        "executions": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "artifact_digest",
+              "arch",
+              "ci_provider",
+              "command",
+              "exit_code",
+              "kind",
+              "node_version",
+              "observed_tests",
+              "platform",
+              "producer_version",
+              "status",
+              "test_selectors"
+            ],
+            "properties": {
+              "artifact_digest": {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "artifact_ref": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "arch": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "ci_provider": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "command": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "exit_code": {
+                "type": "integer"
+              },
+              "kind": {
+                "const": "core_execution",
+                "type": "string"
+              },
+              "node_version": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "observed_tests": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "platform": {
+                "anyOf": [
+                  {
+                    "const": "linux",
+                    "type": "string"
+                  },
+                  {
+                    "const": "macos",
+                    "type": "string"
+                  }
+                ]
+              },
+              "producer_version": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "passed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "skipped",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              },
+              "test_selectors": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "id": {
+          "anyOf": [
+            {
+              "const": "C-WF-01",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-02",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-03",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-04",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-05",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-06",
+              "type": "string"
+            },
+            {
+              "const": "C-WF-07",
+              "type": "string"
+            },
+            {
+              "const": "C-DUR-01",
+              "type": "string"
+            },
+            {
+              "const": "C-DUR-02",
+              "type": "string"
+            },
+            {
+              "const": "C-DUR-03",
+              "type": "string"
+            },
+            {
+              "const": "C-DUR-04",
+              "type": "string"
+            },
+            {
+              "const": "C-DUR-05",
+              "type": "string"
+            },
+            {
+              "const": "C-PLAN-01",
+              "type": "string"
+            },
+            {
+              "const": "C-PLAN-02",
+              "type": "string"
+            },
+            {
+              "const": "C-PLAN-03",
+              "type": "string"
+            },
+            {
+              "const": "C-PLAN-04",
+              "type": "string"
+            },
+            {
+              "const": "C-BUD-01",
+              "type": "string"
+            },
+            {
+              "const": "C-BUD-02",
+              "type": "string"
+            },
+            {
+              "const": "C-BUD-03",
+              "type": "string"
+            },
+            {
+              "const": "C-BUD-04",
+              "type": "string"
+            },
+            {
+              "const": "C-REV-01",
+              "type": "string"
+            },
+            {
+              "const": "C-REV-02",
+              "type": "string"
+            },
+            {
+              "const": "C-REV-03",
+              "type": "string"
+            },
+            {
+              "const": "C-REV-04",
+              "type": "string"
+            },
+            {
+              "const": "C-REV-05",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-01",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-02",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-03",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-04",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-05",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-06",
+              "type": "string"
+            },
+            {
+              "const": "C-UI-07",
+              "type": "string"
+            },
+            {
+              "const": "C-SEC-01",
+              "type": "string"
+            },
+            {
+              "const": "C-SEC-02",
+              "type": "string"
+            },
+            {
+              "const": "C-SEC-03",
+              "type": "string"
+            }
+          ]
+        },
+        "requirement_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    "CoreEvidenceBundle": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "manifest_digest",
+        "producer_version",
+        "results",
+        "revision",
+        "schema_version",
+        "selected_adapters",
+        "source_date_epoch"
+      ],
+      "properties": {
+        "kind": {
+          "const": "core_evidence_bundle",
+          "type": "string"
+        },
+        "manifest_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "producer_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "results": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "executions",
+              "id",
+              "requirement_sha256",
+              "revision",
+              "status"
+            ],
+            "properties": {
+              "executions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "artifact_digest",
+                    "arch",
+                    "ci_provider",
+                    "command",
+                    "exit_code",
+                    "kind",
+                    "node_version",
+                    "observed_tests",
+                    "platform",
+                    "producer_version",
+                    "status",
+                    "test_selectors"
+                  ],
+                  "properties": {
+                    "artifact_digest": {
+                      "pattern": "^sha256:[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "artifact_ref": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "arch": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "ci_provider": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "command": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "exit_code": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "const": "core_execution",
+                      "type": "string"
+                    },
+                    "node_version": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "observed_tests": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "platform": {
+                      "anyOf": [
+                        {
+                          "const": "linux",
+                          "type": "string"
+                        },
+                        {
+                          "const": "macos",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "producer_version": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "const": "passed",
+                          "type": "string"
+                        },
+                        {
+                          "const": "failed",
+                          "type": "string"
+                        },
+                        {
+                          "const": "skipped",
+                          "type": "string"
+                        },
+                        {
+                          "const": "partial",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "test_selectors": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "id": {
+                "anyOf": [
+                  {
+                    "const": "C-WF-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-05",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-06",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-WF-07",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-DUR-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-DUR-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-DUR-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-DUR-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-DUR-05",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-PLAN-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-PLAN-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-PLAN-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-PLAN-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-BUD-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-BUD-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-BUD-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-BUD-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-REV-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-REV-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-REV-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-REV-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-REV-05",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-03",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-04",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-05",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-06",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-UI-07",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-SEC-01",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-SEC-02",
+                    "type": "string"
+                  },
+                  {
+                    "const": "C-SEC-03",
+                    "type": "string"
+                  }
+                ]
+              },
+              "requirement_sha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "revision": {
+                "pattern": "^[a-f0-9]{40}$",
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "passed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "skipped",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1",
+          "type": "string"
+        },
+        "selected_adapters": {
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "adapter_kind",
+              "adapter_version",
+              "artifact_digest",
+              "artifact_ref",
+              "implementation",
+              "kind",
+              "revision",
+              "status"
+            ],
+            "properties": {
+              "adapter_kind": {
+                "anyOf": [
+                  {
+                    "const": "tracker",
+                    "type": "string"
+                  },
+                  {
+                    "const": "repository_host",
+                    "type": "string"
+                  },
+                  {
+                    "const": "agent",
+                    "type": "string"
+                  },
+                  {
+                    "const": "authentication",
+                    "type": "string"
+                  }
+                ]
+              },
+              "adapter_version": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "artifact_digest": {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "artifact_ref": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "implementation": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "const": "selected_adapter",
+                "type": "string"
+              },
+              "revision": {
+                "pattern": "^[a-f0-9]{40}$",
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "passed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  {
+                    "const": "skipped",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "source_date_epoch": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      }
+    },
+    "CorePlatform": {
+      "anyOf": [
+        {
+          "const": "linux",
+          "type": "string"
+        },
+        {
+          "const": "macos",
+          "type": "string"
+        }
+      ]
+    },
     "ErrorEnvelope": {
       "additionalProperties": false,
       "type": "object",
@@ -5283,6 +6305,261 @@
           "type": "string"
         }
       }
+    },
+    "ExternalEvidence": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "artifact_digest",
+        "artifact_ref",
+        "environment",
+        "evidence_id",
+        "expires_at",
+        "kind",
+        "observed_at",
+        "observed_state",
+        "repository",
+        "revision",
+        "status",
+        "target"
+      ],
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifact_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "environment": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "evidence_id": {
+          "anyOf": [
+            {
+              "const": "ci.linux",
+              "type": "string"
+            },
+            {
+              "const": "ci.macos",
+              "type": "string"
+            },
+            {
+              "const": "platform.wsl",
+              "type": "string"
+            },
+            {
+              "const": "container.build",
+              "type": "string"
+            },
+            {
+              "const": "container.non_root_read_only",
+              "type": "string"
+            },
+            {
+              "const": "container.lifecycle_persistence",
+              "type": "string"
+            },
+            {
+              "const": "security.codeql",
+              "type": "string"
+            },
+            {
+              "const": "security.dependency_review",
+              "type": "string"
+            },
+            {
+              "const": "security.gitleaks",
+              "type": "string"
+            },
+            {
+              "const": "security.trivy",
+              "type": "string"
+            },
+            {
+              "const": "security.workflow",
+              "type": "string"
+            },
+            {
+              "const": "repository.branch_protection",
+              "type": "string"
+            },
+            {
+              "const": "repository.squash_policy",
+              "type": "string"
+            },
+            {
+              "const": "repository.required_checks",
+              "type": "string"
+            },
+            {
+              "const": "repository.merge_queue",
+              "type": "string"
+            },
+            {
+              "const": "artifact.image",
+              "type": "string"
+            },
+            {
+              "const": "artifact.sbom",
+              "type": "string"
+            },
+            {
+              "const": "artifact.provenance",
+              "type": "string"
+            },
+            {
+              "const": "release.promotion_without_rebuild",
+              "type": "string"
+            },
+            {
+              "const": "release.rollback",
+              "type": "string"
+            }
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "const": "external",
+          "type": "string"
+        },
+        "observed_at": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "observed_state": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
+        },
+        "target": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "ExternalEvidenceId": {
+      "anyOf": [
+        {
+          "const": "ci.linux",
+          "type": "string"
+        },
+        {
+          "const": "ci.macos",
+          "type": "string"
+        },
+        {
+          "const": "platform.wsl",
+          "type": "string"
+        },
+        {
+          "const": "container.build",
+          "type": "string"
+        },
+        {
+          "const": "container.non_root_read_only",
+          "type": "string"
+        },
+        {
+          "const": "container.lifecycle_persistence",
+          "type": "string"
+        },
+        {
+          "const": "security.codeql",
+          "type": "string"
+        },
+        {
+          "const": "security.dependency_review",
+          "type": "string"
+        },
+        {
+          "const": "security.gitleaks",
+          "type": "string"
+        },
+        {
+          "const": "security.trivy",
+          "type": "string"
+        },
+        {
+          "const": "security.workflow",
+          "type": "string"
+        },
+        {
+          "const": "repository.branch_protection",
+          "type": "string"
+        },
+        {
+          "const": "repository.squash_policy",
+          "type": "string"
+        },
+        {
+          "const": "repository.required_checks",
+          "type": "string"
+        },
+        {
+          "const": "repository.merge_queue",
+          "type": "string"
+        },
+        {
+          "const": "artifact.image",
+          "type": "string"
+        },
+        {
+          "const": "artifact.sbom",
+          "type": "string"
+        },
+        {
+          "const": "artifact.provenance",
+          "type": "string"
+        },
+        {
+          "const": "release.promotion_without_rebuild",
+          "type": "string"
+        },
+        {
+          "const": "release.rollback",
+          "type": "string"
+        }
+      ]
     },
     "GuardDecision": {
       "additionalProperties": false,
@@ -9020,6 +10297,97 @@
         }
       ]
     },
+    "NormativeDocument": {
+      "anyOf": [
+        {
+          "const": "SPEC",
+          "type": "string"
+        },
+        {
+          "const": "TECH_STACK",
+          "type": "string"
+        },
+        {
+          "const": "CICD",
+          "type": "string"
+        }
+      ]
+    },
+    "NormativeRequirementEvidence": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "artifact_digest",
+        "document",
+        "kind",
+        "requirement_id",
+        "requirement_sha256",
+        "revision",
+        "status"
+      ],
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifact_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "document": {
+          "anyOf": [
+            {
+              "const": "SPEC",
+              "type": "string"
+            },
+            {
+              "const": "TECH_STACK",
+              "type": "string"
+            },
+            {
+              "const": "CICD",
+              "type": "string"
+            }
+          ]
+        },
+        "kind": {
+          "const": "normative_requirement",
+          "type": "string"
+        },
+        "requirement_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requirement_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
     "OperatorAction": {
       "additionalProperties": false,
       "type": "object",
@@ -11133,6 +12501,120 @@
         }
       }
     },
+    "RealIntegrationCaseId": {
+      "anyOf": [
+        {
+          "const": "smoke_lifecycle",
+          "type": "string"
+        },
+        {
+          "const": "human_question",
+          "type": "string"
+        },
+        {
+          "const": "stale_ui_mutation",
+          "type": "string"
+        },
+        {
+          "const": "privileged_acknowledgment",
+          "type": "string"
+        },
+        {
+          "const": "budget_denial",
+          "type": "string"
+        },
+        {
+          "const": "idempotent_mutation_replay",
+          "type": "string"
+        },
+        {
+          "const": "repair_pr",
+          "type": "string"
+        }
+      ]
+    },
+    "RealIntegrationEvidence": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "artifact_digest",
+        "artifact_ref",
+        "case_id",
+        "kind",
+        "revision",
+        "status"
+      ],
+      "properties": {
+        "artifact_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifact_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "case_id": {
+          "anyOf": [
+            {
+              "const": "smoke_lifecycle",
+              "type": "string"
+            },
+            {
+              "const": "human_question",
+              "type": "string"
+            },
+            {
+              "const": "stale_ui_mutation",
+              "type": "string"
+            },
+            {
+              "const": "privileged_acknowledgment",
+              "type": "string"
+            },
+            {
+              "const": "budget_denial",
+              "type": "string"
+            },
+            {
+              "const": "idempotent_mutation_replay",
+              "type": "string"
+            },
+            {
+              "const": "repair_pr",
+              "type": "string"
+            }
+          ]
+        },
+        "kind": {
+          "const": "real_integration",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
     "RepositoryLink": {
       "additionalProperties": false,
       "type": "object",
@@ -13229,6 +14711,86 @@
         "text": {
           "minLength": 1,
           "type": "string"
+        }
+      }
+    },
+    "SelectedAdapterEvidence": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "adapter_kind",
+        "adapter_version",
+        "artifact_digest",
+        "artifact_ref",
+        "implementation",
+        "kind",
+        "revision",
+        "status"
+      ],
+      "properties": {
+        "adapter_kind": {
+          "anyOf": [
+            {
+              "const": "tracker",
+              "type": "string"
+            },
+            {
+              "const": "repository_host",
+              "type": "string"
+            },
+            {
+              "const": "agent",
+              "type": "string"
+            },
+            {
+              "const": "authentication",
+              "type": "string"
+            }
+          ]
+        },
+        "adapter_version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "artifact_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "artifact_ref": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "implementation": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "const": "selected_adapter",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-f0-9]{40}$",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "passed",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            },
+            {
+              "const": "partial",
+              "type": "string"
+            }
+          ]
         }
       }
     },
