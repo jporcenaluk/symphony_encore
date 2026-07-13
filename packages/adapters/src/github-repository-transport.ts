@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { EvidenceRef, PullRequestSnapshot, WorkRef } from "@symphony/contracts";
 
-import type { ProviderMutationResult, PublishedBranch } from "./contracts.js";
+import type {
+  ProviderMutationResult,
+  PublishedBranch,
+  RepositorySystemJobKind,
+} from "./contracts.js";
 import type { GhCliApiClient } from "./gh-cli-api.js";
 import type { GitHubRepositoryHostingTransport } from "./github-repository-hosting.js";
 import type { WorkspaceCommandRunner } from "./github-workspace.js";
@@ -312,8 +316,16 @@ export function createGitHubRepositoryTransport(options: {
       };
     },
 
-    async ensurePullRequest(workRef, headSha, baseRef, bodyProjection, idempotencyKey) {
-      const branch = githubBranchForWorkRef(workRef);
+    async ensurePullRequest(
+      workRef,
+      headSha,
+      baseRef,
+      bodyProjection,
+      idempotencyKey,
+      systemJobKind,
+      title,
+    ) {
+      const branch = githubBranchForWorkRef(workRef, systemJobKind);
       const existing = await findOpenPullRequest(options.api, owner, name, branch);
       const response = existing
         ? await options.api.rest<PullRequestResponse>({
@@ -326,7 +338,7 @@ export function createGitHubRepositoryTransport(options: {
               base: baseRef,
               body: bodyProjection,
               head: branch,
-              title: pullRequestTitle(workRef),
+              title: title ?? pullRequestTitle(workRef),
             },
             method: "POST",
             path: `repos/${owner}/${name}/pulls`,
@@ -353,9 +365,15 @@ export function createGitHubRepositoryTransport(options: {
       };
     },
 
-    async fetchBranchSha(workRef) {
-      return (await fetchBranchReference(options.api, owner, name, githubBranchForWorkRef(workRef)))
-        .data.object.sha;
+    async fetchBranchSha(workRef, systemJobKind) {
+      return (
+        await fetchBranchReference(
+          options.api,
+          owner,
+          name,
+          githubBranchForWorkRef(workRef, systemJobKind),
+        )
+      ).data.object.sha;
     },
 
     async fetchCommitSha(sha) {
@@ -388,12 +406,12 @@ export function createGitHubRepositoryTransport(options: {
       return normalizePostMergeStatus(response.data, mergeSha);
     },
 
-    async fetchPullRequestSnapshot(workRef: WorkRef) {
+    async fetchPullRequestSnapshot(workRef: WorkRef, systemJobKind?: RepositorySystemJobKind) {
       const pullRequest = await loadPullRequestBasic(
         options.api,
         owner,
         name,
-        githubBranchForWorkRef(workRef),
+        githubBranchForWorkRef(workRef, systemJobKind),
       );
       const evidence = await options.api.graphql<PullRequestEvidenceResponse>(
         PULL_REQUEST_EVIDENCE_QUERY,
@@ -411,13 +429,14 @@ export function createGitHubRepositoryTransport(options: {
       expectedHeadSha: string,
       landingPolicy: string,
       idempotencyKey: string,
+      systemJobKind?: RepositorySystemJobKind,
     ) {
       if (!isLandingPolicy(landingPolicy)) throw new Error("github.landing_policy_invalid");
       const pullRequest = await loadPullRequestBasic(
         options.api,
         owner,
         name,
-        githubBranchForWorkRef(workRef),
+        githubBranchForWorkRef(workRef, systemJobKind),
       );
       if (pullRequest.headRefOid !== expectedHeadSha) throw new Error("github.stale_head");
       const response = await options.api.rest<MergePullRequestResponse>({
@@ -439,8 +458,8 @@ export function createGitHubRepositoryTransport(options: {
       };
     },
 
-    async publishBranch(workRef, workspace, _expectedBaseSha, idempotencyKey) {
-      const branch = githubBranchForWorkRef(workRef);
+    async publishBranch(workRef, workspace, _expectedBaseSha, idempotencyKey, systemJobKind) {
+      const branch = githubBranchForWorkRef(workRef, systemJobKind);
       const headSha = (
         await runGit(options.commandRunner, {
           arguments: ["-C", workspace, "rev-parse", "HEAD"],
@@ -489,8 +508,9 @@ export function createGitHubRepositoryTransport(options: {
       expectedHeadSha: string,
       expectedBaseSha: string,
       idempotencyKey: string,
+      systemJobKind?: RepositorySystemJobKind,
     ) {
-      const branch = githubBranchForWorkRef(workRef);
+      const branch = githubBranchForWorkRef(workRef, systemJobKind);
       const pullRequest = await loadPullRequestBasic(options.api, owner, name, branch);
       if (pullRequest.headRefOid !== expectedHeadSha) throw new Error("github.stale_head");
       if (pullRequest.baseRef?.target.oid !== expectedBaseSha) throw new Error("github.stale_base");
@@ -519,8 +539,11 @@ export function createGitHubRepositoryTransport(options: {
   };
 }
 
-export function githubBranchForWorkRef(workRef: WorkRef): string {
-  const kind = "issue_id" in workRef ? "issue" : "system-repair";
+export function githubBranchForWorkRef(
+  workRef: WorkRef,
+  systemJobKind: RepositorySystemJobKind = "repair",
+): string {
+  const kind = "issue_id" in workRef ? "issue" : `system-${systemJobKind}`;
   const id = "issue_id" in workRef ? workRef.issue_id : workRef.system_job_id;
   const digest = createHash("sha256").update(`${kind}:${id}`).digest("hex").slice(0, 16);
   return `symphony/${kind}-${digest}`;

@@ -203,6 +203,10 @@ export const SynthesisResultSchema = Type.Union([
 ]);
 export type SynthesisResult = Static<typeof SynthesisResultSchema>;
 
+export function isSynthesisResult(value: unknown): value is SynthesisResult {
+  return Value.Check(SynthesisResultSchema, value);
+}
+
 export const ExecutionFailureSchema = Type.Object(
   {
     evidence: Type.Array(EvidenceRefSchema),

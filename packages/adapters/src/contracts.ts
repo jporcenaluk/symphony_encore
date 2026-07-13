@@ -79,6 +79,8 @@ export interface MergeResult {
   mutation: ProviderMutationResult;
 }
 
+export type RepositorySystemJobKind = "repair" | "synthesis";
+
 export interface RepositoryHostingAdapter {
   createRepairPullRequest(
     workRef: WorkRef,
@@ -92,26 +94,34 @@ export interface RepositoryHostingAdapter {
     baseRef: string,
     bodyProjection: string,
     authority: ProviderMutationAuthority,
+    systemJobKind?: RepositorySystemJobKind,
+    title?: string,
   ): Promise<PullRequestIdentity>;
   fetchPostMergeStatus(repository: string, mergeSha: string): Promise<PullRequestSnapshot>;
-  fetchPullRequestSnapshot(workRef: WorkRef): Promise<PullRequestSnapshot>;
+  fetchPullRequestSnapshot(
+    workRef: WorkRef,
+    systemJobKind?: RepositorySystemJobKind,
+  ): Promise<PullRequestSnapshot>;
   mergePullRequest(
     workRef: WorkRef,
     expectedHeadSha: string,
     landingPolicy: string,
     authority: ProviderMutationAuthority,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<MergeResult>;
   publishBranch(
     workRef: WorkRef,
     workspace: string,
     expectedBaseSha: string,
     authority: ProviderMutationAuthority,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<PublishedBranch>;
   updateBranch(
     workRef: WorkRef,
     expectedHeadSha: string,
     expectedBaseSha: string,
     authority: ProviderMutationAuthority,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<PublishedBranch>;
 }
 

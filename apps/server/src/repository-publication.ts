@@ -10,12 +10,14 @@ import type {
   MutationAuthorization,
   SideEffectIntent,
   SideEffectReceipt,
+  SynthesisResult,
   SystemJob,
 } from "@symphony/contracts";
 import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   commitRepairRepositoryLink,
   commitRepositoryLinkAndReviewLane,
+  commitSystemJobRepositoryLink,
   createAuthorizedIntent,
   markIntentApplying,
   type OpenedDatabase,
@@ -26,6 +28,149 @@ import {
 interface AuthorizedMutation {
   authority: ProviderMutationAuthority & { authorization: MutationAuthorization };
   intent: SideEffectIntent;
+}
+
+export async function executeSynthesisRepositoryPublication(input: {
+  database: OpenedDatabase["database"];
+  expiresAt: string;
+  job: Extract<SystemJob, { kind: "synthesis" }>;
+  newId(): string;
+  now(): string;
+  proposal: Extract<SynthesisResult, { decision: "propose_changes" }>;
+  readWorkspaceRevision(): Promise<string>;
+  repository: RepositoryHostingAdapter;
+  safety: PersistenceSafetyController;
+  serviceRunId: string;
+  target: PendingRepositoryPublication;
+}): Promise<void> {
+  if (input.target.repository !== input.job.repository) {
+    throw new Error("publication.repository_mismatch");
+  }
+  if (
+    input.proposal.repository_revision !== input.target.targetSha ||
+    input.proposal.handoff.revision !== input.target.targetSha ||
+    input.proposal.pull_request.base_ref !== input.target.baseRef ||
+    input.proposal.branch !== input.target.localBranch
+  ) {
+    throw new Error("publication.synthesis_proposal_mismatch");
+  }
+  if ((await input.readWorkspaceRevision()) !== input.target.targetSha) {
+    throw new Error("publication.workspace_revision_mismatch");
+  }
+  const [repoOwner, repoName, extra] = input.job.repository.split("/");
+  if (!repoOwner || !repoName || extra !== undefined) {
+    throw new Error("publication.repository_invalid");
+  }
+  const workRef = { system_job_id: input.job.id } as const;
+  const repositoryTarget = `${input.job.repository}:system_job:${input.job.id}`;
+  const publish = composeSystemJobAuthorizedMutation(input, {
+    action: "repository.publish_branch",
+    decisionRuleIds: ["publication.verified", "repository.base_revision_exact"],
+    observedStateRef: `repository:${input.job.repository}:base:${input.target.baseSha}`,
+    payload: {
+      expected_base_sha: input.target.baseSha,
+      system_job_kind: "synthesis",
+      workspace: input.target.workspacePath,
+    },
+    target: repositoryTarget,
+    targetRevision: input.target.baseSha,
+  });
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: publish.authority.authorization,
+      intent: publish.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, publish.intent.id, input.now()),
+  );
+  const published = await input.repository.publishBranch(
+    workRef,
+    input.target.workspacePath,
+    input.target.baseSha,
+    publish.authority,
+    "synthesis",
+  );
+  if (
+    published.headSha !== input.target.targetSha ||
+    !published.branch ||
+    published.mutation.resultRevision !== input.target.targetSha
+  ) {
+    throw new Error("publication.published_branch_mismatch");
+  }
+  await durable(input.safety, () =>
+    recordSideEffectReceipt(
+      input.database,
+      receipt(publish.intent.id, published.mutation, input.now()),
+    ),
+  );
+
+  const bodyProjection = renderSynthesisPullRequestBody(input.job, input.proposal, input.target);
+  const pullRequestMutation = composeSystemJobAuthorizedMutation(input, {
+    action: "repository.ensure_pull_request",
+    decisionRuleIds: ["publication.verified", "repository.head_revision_exact"],
+    observedStateRef: `repository:${input.job.repository}:head:${published.headSha}`,
+    payload: {
+      base_ref: input.target.baseRef,
+      body_projection_hash: sha256(bodyProjection),
+      head_sha: published.headSha,
+      title: input.proposal.pull_request.title,
+    },
+    target: repositoryTarget,
+    targetRevision: published.headSha,
+  });
+  await durable(input.safety, () =>
+    createAuthorizedIntent(input.database, {
+      authorization: pullRequestMutation.authority.authorization,
+      intent: pullRequestMutation.intent,
+    }),
+  );
+  await durable(input.safety, () =>
+    markIntentApplying(input.database, pullRequestMutation.intent.id, input.now()),
+  );
+  const pullRequest = await input.repository.ensurePullRequest(
+    workRef,
+    published.headSha,
+    input.target.baseRef,
+    bodyProjection,
+    pullRequestMutation.authority,
+    "synthesis",
+    input.proposal.pull_request.title,
+  );
+  if (
+    !Number.isSafeInteger(pullRequest.number) ||
+    pullRequest.number < 1 ||
+    !pullRequest.url ||
+    pullRequest.mutation.resultRevision !== published.headSha
+  ) {
+    throw new Error("publication.pull_request_identity_invalid");
+  }
+  const appliedAt = input.now();
+  await durable(input.safety, () =>
+    commitSystemJobRepositoryLink(input.database, {
+      expectedReadyReason: "pull_request_required",
+      jobKind: "synthesis",
+      link: {
+        base_ref: input.target.baseRef,
+        base_sha: input.target.baseSha,
+        branch: published.branch,
+        created_at: appliedAt,
+        cycle: input.target.cycle,
+        head_sha: published.headSha,
+        id: requiredId(input.newId()),
+        kind: "primary",
+        pull_request_number: pullRequest.number,
+        pull_request_url: pullRequest.url,
+        repo_name: repoName,
+        repo_owner: repoOwner,
+        state: "open",
+        updated_at: appliedAt,
+        work_ref: workRef,
+      },
+      nextReadyReason: "pull_request_hygiene_required",
+      receipt: receipt(pullRequestMutation.intent.id, pullRequest.mutation, appliedAt),
+    }),
+  );
 }
 
 export async function executeRepositoryPublication(input: {
@@ -405,7 +550,7 @@ function composeAuthorizedMutation(
 function composeSystemJobAuthorizedMutation(
   input: {
     expiresAt: string;
-    job: Pick<SystemJob, "id">;
+    job: Pick<SystemJob, "id" | "kind">;
     newId(): string;
     now(): string;
     serviceRunId: string;
@@ -431,7 +576,7 @@ function composeSystemJobAuthorizedMutation(
     action: mutation.action,
     actor_id: "orchestrator",
     actor_kind: "orchestrator_policy",
-    attempt_role: "implementation",
+    attempt_role: input.job.kind === "synthesis" ? "synthesis" : "implementation",
     authorized_at: authorizedAt,
     config_snapshot_id: input.target.configSnapshotId,
     decision_rule_ids: [...mutation.decisionRuleIds],
@@ -494,6 +639,23 @@ function renderPullRequestBody(issue: Issue, target: PendingRepositoryPublicatio
     "",
     `- Target revision: ${target.targetSha}`,
     `- Verification record: ${target.verificationRecordId}`,
+  ].join("\n");
+}
+
+function renderSynthesisPullRequestBody(
+  job: Extract<SystemJob, { kind: "synthesis" }>,
+  proposal: Extract<SynthesisResult, { decision: "propose_changes" }>,
+  target: PendingRepositoryPublication,
+): string {
+  return [
+    `Synthesis SystemJob ${job.id}`,
+    "",
+    "## Symphony synthesis",
+    "",
+    `- Target revision: ${target.targetSha}`,
+    `- Verification record: ${target.verificationRecordId}`,
+    `- Cited lessons: ${proposal.cited_lesson_ids.join(", ")}`,
+    `- Proposed rule changes: ${proposal.rule_changes.length}`,
   ].join("\n");
 }
 

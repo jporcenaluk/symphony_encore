@@ -90,6 +90,66 @@ describe("pending independent verification", () => {
     });
     await opened.close();
   });
+
+  it("rejects synthesis verification when workspace HEAD differs from the reported revision", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-synthesis-verification-"));
+    directories.push(directory);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    const execute = vi.fn();
+
+    await expect(
+      runPendingIndependentVerification({
+        allowlistedEnvironmentNames: [],
+        command: "make verify-fast",
+        database: opened.database,
+        execute,
+        expectedReadyReason: "synthesis_verification_required",
+        newId: () => "verification-1",
+        readRevision: vi.fn(async () => "def5678"),
+        reworkReadyReason: "synthesis_rework",
+        safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+        sourceEnvironment: {},
+        target: {
+          attemptId: "attempt-synthesis",
+          configSnapshotId: "config-1",
+          result: {
+            branch: "symphony/system-synthesis-1",
+            cited_lesson_ids: ["lesson-1"],
+            decision: "propose_changes",
+            evidence: [{ kind: "commit", sha: "abc1234" }],
+            handoff: {
+              acceptance_criteria: ["cite lessons"],
+              commands: [],
+              decisions_fixed: [],
+              files_changed: ["WORKFLOW.md"],
+              goal: "Synthesize lessons",
+              open_items: [],
+              revision: "abc1234",
+            },
+            pull_request: { base_ref: "main", title: "Improve workflow rules" },
+            repository_revision: "abc1234",
+            rule_changes: [
+              {
+                action: "add",
+                lesson_ids: ["lesson-1"],
+                rationale: "Prevent recurrence",
+                rule_id: "rule-new",
+                text: "Require current-head verification",
+              },
+            ],
+          },
+          workspacePath: "/work/synthesis-1",
+        },
+        timeoutMs: 60_000,
+        verifiedReadyReason: "pull_request_required",
+        workRef: { id: "synthesis-1", kind: "system_job" },
+        workspaceRoot: directory,
+      }),
+    ).rejects.toThrow("verification.reported_revision_mismatch");
+    expect(execute).not.toHaveBeenCalled();
+    await opened.close();
+  });
 });
 
 function seedPendingVerification(sqlite: OpenedDatabase["sqlite"]): void {

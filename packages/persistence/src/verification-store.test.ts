@@ -7,6 +7,7 @@ import { applyMigrations, openDatabase } from "./database.js";
 import {
   findPassingVerification,
   loadPendingIndependentVerification,
+  loadPendingSynthesisVerification,
   loadVerificationEvidence,
   recordVerification,
   recordVerificationAndRoute,
@@ -206,6 +207,96 @@ describe("independent verification repository", () => {
     expect(
       opened.sqlite.prepare("select count(*) as count from verification_records").get(),
     ).toEqual({ count: 1 });
+    await opened.close();
+  });
+
+  it("recovers a revision-pinned synthesis proposal for independent verification", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-synthesis-verification-"));
+    directories.push(directory);
+    const opened = openDatabase(path.join(directory, "symphony.sqlite3"));
+    await applyMigrations(opened.database);
+    opened.sqlite
+      .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+    opened.sqlite
+      .prepare(
+        `insert into system_jobs (
+          id, kind, repository, workspace_path, goal, acceptance_criteria_json,
+          config_snapshot_id, status, created_at
+        ) values (
+          'synthesis-1', 'synthesis', 'owner/repo', '/work/synthesis-1',
+          'Synthesize lessons', '["cite lessons"]', 'config-1', 'review', 't0'
+        )`,
+      )
+      .run();
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort,
+          routing_reasons_json, change_class, started_at, ended_at, status,
+          terminal_result_id
+        ) values (
+          'attempt-synthesis', 'system_job', 'synthesis-1', 'synthesis', 1,
+          '/work/synthesis-1', 'config-1', 'deep', 'model', 'high', '[]',
+          'standard', 't0', 't1', 'closed', 'result-synthesis'
+        )`,
+      )
+      .run();
+    const proposal = {
+      branch: "symphony/system-synthesis-1",
+      cited_lesson_ids: ["lesson-1"],
+      decision: "propose_changes",
+      evidence: [{ kind: "commit", sha: "def5678" }],
+      handoff: {
+        acceptance_criteria: ["cite lessons"],
+        commands: [{ command: "make verify-fast", exit_code: 0 }],
+        decisions_fixed: [],
+        files_changed: ["WORKFLOW.md"],
+        goal: "Synthesize lessons",
+        open_items: [],
+        revision: "def5678",
+      },
+      pull_request: { base_ref: "main", title: "Improve workflow rules" },
+      repository_revision: "def5678",
+      rule_changes: [
+        {
+          action: "add",
+          lesson_ids: ["lesson-1"],
+          rationale: "Prevent recurrence",
+          rule_id: "rule-new",
+          text: "Require current-head verification",
+        },
+      ],
+    };
+    opened.sqlite
+      .prepare(
+        `insert into terminal_results (
+          id, attempt_id, role, result_kind, payload_json, created_at
+        ) values ('result-synthesis', 'attempt-synthesis', 'synthesis',
+          'synthesis_result', ?, 't1')`,
+      )
+      .run(JSON.stringify(proposal));
+    opened.sqlite
+      .prepare(
+        `insert into claims (
+          work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at,
+          expires_at, origin_stage, reason
+        ) values (
+          'system_job', 'synthesis-1', 'run-1', 'Ready', 't0', 't1', null,
+          'review', 'synthesis_verification_required'
+        )`,
+      )
+      .run();
+
+    await expect(loadPendingSynthesisVerification(opened.database, "synthesis-1")).resolves.toEqual(
+      {
+        attemptId: "attempt-synthesis",
+        configSnapshotId: "config-1",
+        result: proposal,
+        workspacePath: "/work/synthesis-1",
+      },
+    );
     await opened.close();
   });
 });

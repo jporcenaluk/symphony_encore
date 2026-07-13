@@ -10,6 +10,17 @@ import type { WorkspaceCommandRunner } from "./github-workspace.js";
 const workRef = { issue_id: "issue-node-1" } as const;
 
 describe("GitHub repository transport", () => {
+  it("uses distinct deterministic branches for repair and synthesis SystemJobs", () => {
+    const systemRef = { system_job_id: "system-job-1" } as const;
+    const repair = githubBranchForWorkRef(systemRef, "repair");
+    const synthesis = githubBranchForWorkRef(systemRef, "synthesis");
+
+    expect(repair).toMatch(/^symphony\/system-repair-[a-f0-9]{16}$/u);
+    expect(synthesis).toMatch(/^symphony\/system-synthesis-[a-f0-9]{16}$/u);
+    expect(synthesis).not.toBe(repair);
+    expect(githubBranchForWorkRef(systemRef, "synthesis")).toBe(synthesis);
+  });
+
   it("publishes the exact local head with a remote lease and confirms the provider revision", async () => {
     const branch = githubBranchForWorkRef(workRef);
     const run = vi.fn<WorkspaceCommandRunner["run"]>(async (request) => {

@@ -171,12 +171,14 @@ describe("GitHub repository-hosting adapter", () => {
       "/tmp/work/issue-1",
       "aaaaaaa",
       "intent:repository.publish_branch",
+      undefined,
     );
     expect(boundary.mergePullRequest).toHaveBeenCalledWith(
       workRef,
       "bbbbbbb",
       "squash",
       "intent:repository.merge_pull_request",
+      undefined,
     );
   });
 

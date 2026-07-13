@@ -8,12 +8,16 @@ import {
   applyMigrations,
   loadIssue,
   loadPendingRepositoryPublication,
+  loadSystemJob,
   type OpenedDatabase,
   openDatabase,
 } from "@symphony/persistence";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { executeRepositoryPublication } from "./repository-publication.js";
+import {
+  executeRepositoryPublication,
+  executeSynthesisRepositoryPublication,
+} from "./repository-publication.js";
 
 const directories: string[] = [];
 
@@ -141,6 +145,94 @@ describe("verified repository publication", () => {
     );
     await opened.close();
   });
+
+  it("publishes a synthesis proposal as an ordinary SystemJob PR without tracker mutation", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-synthesis-publication-"));
+    directories.push(directory);
+    const opened = openDatabase(path.join(directory, "state.sqlite3"));
+    await applyMigrations(opened.database);
+    const proposal = seedSynthesis(opened.sqlite);
+    const target = await loadPendingRepositoryPublication(opened.database, {
+      id: "synthesis-1",
+      kind: "system_job",
+    });
+    const job = await loadSystemJob(opened.database, "synthesis-1");
+    if (!target || job?.kind !== "synthesis") throw new Error("synthesis fixture invalid");
+    const repository: RepositoryHostingAdapter = {
+      createRepairPullRequest: vi.fn(),
+      ensurePullRequest: vi.fn(
+        async (_workRef, headSha, baseRef, body, authority, systemJobKind, title) => {
+          expect({ baseRef, systemJobKind, title }).toEqual({
+            baseRef: "main",
+            systemJobKind: "synthesis",
+            title: "Improve workflow rules",
+          });
+          expect(body).toContain("Cited lessons: lesson-1");
+          expect(authority.authorization.attempt_role).toBe("synthesis");
+          return {
+            mutation: mutation("REQ-SYNTHESIS-PR", "created", headSha),
+            number: 43,
+            url: "https://github.com/owner/repo/pull/43",
+          };
+        },
+      ),
+      fetchPostMergeStatus: vi.fn(),
+      fetchPullRequestSnapshot: vi.fn(),
+      mergePullRequest: vi.fn(),
+      publishBranch: vi.fn(
+        async (_workRef, workspace, expectedBaseSha, authority, systemJobKind) => {
+          expect({ expectedBaseSha, systemJobKind, workspace }).toEqual({
+            expectedBaseSha: "abc1234",
+            systemJobKind: "synthesis",
+            workspace: "/work/synthesis-1",
+          });
+          expect(authority.authorization.attempt_role).toBe("synthesis");
+          return {
+            branch: "symphony/system-synthesis-deadbeefdeadbeef",
+            headSha: "def5678",
+            mutation: mutation("REQ-SYNTHESIS-PUBLISH", "published", "def5678"),
+          };
+        },
+      ),
+      updateBranch: vi.fn(),
+    };
+
+    await executeSynthesisRepositoryPublication({
+      database: opened.database,
+      expiresAt: "2026-07-13T10:20:00Z",
+      job,
+      newId: (() => {
+        let id = 0;
+        return () => `synthesis-publication-${++id}`;
+      })(),
+      now: (() => {
+        let minute = 3;
+        return () => new Date(Date.UTC(2026, 6, 13, 10, minute++)).toISOString();
+      })(),
+      proposal,
+      readWorkspaceRevision: vi.fn(async () => "def5678"),
+      repository,
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+      serviceRunId: "run-1",
+      target,
+    });
+
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "pull_request_hygiene_required",
+    });
+    expect(
+      opened.sqlite.prepare("select kind, branch, pull_request_number from repository_links").get(),
+    ).toEqual({
+      branch: "symphony/system-synthesis-deadbeefdeadbeef",
+      kind: "primary",
+      pull_request_number: 43,
+    });
+    expect(
+      opened.sqlite.prepare("select count(*) as count from side_effect_receipts").get(),
+    ).toEqual({ count: 2 });
+    await opened.close();
+  });
 });
 
 function mutation(providerRequestId: string, result: string, resultRevision: string) {
@@ -242,4 +334,110 @@ function seed(sqlite: OpenedDatabase["sqlite"]): void {
       )`,
     )
     .run();
+}
+
+function seedSynthesis(sqlite: OpenedDatabase["sqlite"]) {
+  const proposal = {
+    branch: "symphony/system-synthesis-local",
+    cited_lesson_ids: ["lesson-1"],
+    decision: "propose_changes" as const,
+    evidence: [{ kind: "commit" as const, sha: "def5678" }],
+    handoff: {
+      acceptance_criteria: ["cite lessons"],
+      commands: [{ command: "make verify-fast", exit_code: 0 }],
+      decisions_fixed: [],
+      files_changed: ["WORKFLOW.md"],
+      goal: "Synthesize lessons",
+      open_items: [],
+      revision: "def5678",
+    },
+    pull_request: { base_ref: "main", title: "Improve workflow rules" },
+    repository_revision: "def5678",
+    rule_changes: [
+      {
+        action: "add" as const,
+        lesson_ids: ["lesson-1"],
+        rationale: "Prevent recurrence",
+        rule_id: "rule-new",
+        text: "Require current-head verification",
+      },
+    ],
+  };
+  sqlite
+    .prepare(
+      `insert into service_runs (
+        id, service_version, host_id, started_at, status, start_reason
+      ) values ('run-1', 'test', 'host-1', '2026-07-13T10:00:00Z', 'ready', 'test')`,
+    )
+    .run();
+  sqlite
+    .prepare("insert into config_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run("config-1", "t0", "wf", 0, "{}", "{}", "{}", "{}", "prompt", "{}");
+  sqlite
+    .prepare(
+      `insert into system_jobs (
+        id, kind, repository, workspace_path, goal, acceptance_criteria_json,
+        config_snapshot_id, status, created_at
+      ) values (
+        'synthesis-1', 'synthesis', 'owner/repo', '/work/synthesis-1',
+        'Synthesize lessons', '["cite lessons"]', 'config-1', 'review', 't0'
+      )`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into terminal_results (
+        id, attempt_id, role, result_kind, payload_json, created_at
+      ) values ('result-synthesis', 'attempt-synthesis', 'synthesis',
+        'synthesis_result', ?, 't1')`,
+    )
+    .run(JSON.stringify(proposal));
+  sqlite
+    .prepare(
+      `insert into attempts (
+        id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+        config_snapshot_id, compute_profile, model, reasoning_effort, routing_reasons_json,
+        change_class, started_at, ended_at, status, terminal_result_id
+      ) values (
+        'attempt-synthesis', 'system_job', 'synthesis-1', 'synthesis', 1,
+        '/work/synthesis-1', 'config-1', 'deep', 'model', 'high', '[]', 'standard',
+        't0', 't1', 'closed', 'result-synthesis'
+      )`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into workspace_checkouts (
+        work_ref_kind, work_ref_id, workspace_path, repository, base_sha,
+        checkout_method, local_branch, created_at, base_ref
+      ) values (
+        'system_job', 'synthesis-1', '/work/synthesis-1', 'owner/repo', 'abc1234',
+        'trusted_repository_adapter', 'symphony/system-synthesis-local', 't0', 'main'
+      )`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into verification_records (
+        id, work_ref_kind, work_ref_id, attempt_id, config_snapshot_id, target_revision,
+        command_hash, started_at, ended_at, exit_code, result, environment_policy_hash
+      ) values (
+        'verification-synthesis', 'system_job', 'synthesis-1', 'attempt-synthesis',
+        'config-1', 'def5678', 'sha256:command', 't1', 't2', 0, 'passed',
+        'sha256:environment'
+      )`,
+    )
+    .run();
+  sqlite
+    .prepare(
+      `insert into claims (
+        work_ref_kind, work_ref_id, holder, mode, acquired_at, updated_at, expires_at,
+        origin_stage, reason
+      ) values (
+        'system_job', 'synthesis-1', 'run-1', 'Ready', 't0', 't2', null,
+        'review', 'pull_request_required'
+      )`,
+    )
+    .run();
+  return proposal;
 }

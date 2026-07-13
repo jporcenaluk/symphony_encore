@@ -209,8 +209,22 @@ export async function commitRepairRepositoryLink(
     receipt: SideEffectReceipt;
   },
 ): Promise<void> {
-  if (!("system_job_id" in input.link.work_ref) || input.link.kind !== "repair") {
-    throw new Error("publication.repair_link_required");
+  return commitSystemJobRepositoryLink(database, { ...input, jobKind: "repair" });
+}
+
+export async function commitSystemJobRepositoryLink(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    expectedReadyReason: string;
+    jobKind: "repair" | "synthesis";
+    link: RepositoryLink;
+    nextReadyReason: string;
+    receipt: SideEffectReceipt;
+  },
+): Promise<void> {
+  const expectedLinkKind = input.jobKind === "repair" ? "repair" : "primary";
+  if (!("system_job_id" in input.link.work_ref) || input.link.kind !== expectedLinkKind) {
+    throw new Error("publication.system_job_link_invalid");
   }
   if (input.receipt.result_revision !== input.link.head_sha) {
     throw new Error("publication.repair_revision_mismatch");
@@ -219,7 +233,7 @@ export async function commitRepairRepositoryLink(
   await database.transaction().execute(async (transaction) => {
     await recordSideEffectReceiptInTransaction(transaction, input.receipt);
     const job = await sql<{ status: string }>`
-      select status from system_jobs where id = ${systemJobId} and kind = 'repair'
+      select status from system_jobs where id = ${systemJobId} and kind = ${input.jobKind}
     `.execute(transaction);
     if (job.rows[0]?.status !== "review") throw new Error("publication.repair_stage_mismatch");
     const [existing] = (
@@ -229,7 +243,7 @@ export async function commitRepairRepositoryLink(
         where work_ref_kind = 'system_job'
           and work_ref_id = ${systemJobId}
           and cycle = ${input.link.cycle}
-          and kind = 'repair'
+          and kind = ${input.link.kind}
       `.execute(transaction)
     ).rows;
     if (existing) {
@@ -247,7 +261,7 @@ export async function commitRepairRepositoryLink(
           branch, pull_request_number, pull_request_url, head_sha, base_ref, base_sha,
           state, created_at, updated_at
         ) values (
-          ${input.link.id}, 'system_job', ${systemJobId}, ${input.link.cycle}, 'repair',
+          ${input.link.id}, 'system_job', ${systemJobId}, ${input.link.cycle}, ${input.link.kind},
           ${input.link.repo_owner}, ${input.link.repo_name}, ${input.link.branch},
           ${input.link.pull_request_number}, ${input.link.pull_request_url},
           ${input.link.head_sha}, ${input.link.base_ref}, ${input.link.base_sha},

@@ -6,6 +6,7 @@ import type {
   PublishedBranch,
   PullRequestIdentity,
   RepositoryHostingAdapter,
+  RepositorySystemJobKind,
 } from "./contracts.js";
 import {
   assertProviderMutationAuthorization,
@@ -27,29 +28,37 @@ export interface GitHubRepositoryHostingTransport {
     baseRef: string,
     bodyProjection: string,
     idempotencyKey: string,
+    systemJobKind?: RepositorySystemJobKind,
+    title?: string,
   ): Promise<PullRequestIdentity>;
-  fetchBranchSha(workRef: WorkRef): Promise<string>;
+  fetchBranchSha(workRef: WorkRef, systemJobKind?: RepositorySystemJobKind): Promise<string>;
   fetchCommitSha(sha: string): Promise<string>;
   fetchDefaultBranchSha(): Promise<string>;
   fetchPostMergeStatus(repository: string, mergeSha: string): Promise<unknown>;
-  fetchPullRequestSnapshot(workRef: WorkRef): Promise<unknown>;
+  fetchPullRequestSnapshot(
+    workRef: WorkRef,
+    systemJobKind?: RepositorySystemJobKind,
+  ): Promise<unknown>;
   mergePullRequest(
     workRef: WorkRef,
     expectedHeadSha: string,
     landingPolicy: string,
     idempotencyKey: string,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<MergeResult>;
   publishBranch(
     workRef: WorkRef,
     workspace: string,
     expectedBaseSha: string,
     idempotencyKey: string,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<PublishedBranch>;
   updateBranch(
     workRef: WorkRef,
     expectedHeadSha: string,
     expectedBaseSha: string,
     idempotencyKey: string,
+    systemJobKind?: RepositorySystemJobKind,
   ): Promise<PublishedBranch>;
 }
 
@@ -78,8 +87,16 @@ export function createGitHubRepositoryHostingAdapter(
       );
     },
 
-    async ensurePullRequest(workRef, headSha, baseRef, bodyProjection, authority) {
-      if ((await transport.fetchBranchSha(workRef)) !== headSha)
+    async ensurePullRequest(
+      workRef,
+      headSha,
+      baseRef,
+      bodyProjection,
+      authority,
+      systemJobKind,
+      title,
+    ) {
+      if ((await transport.fetchBranchSha(workRef, systemJobKind)) !== headSha)
         throw new Error("github.stale_head");
       assertRepositoryAuthority(
         authority,
@@ -95,6 +112,8 @@ export function createGitHubRepositoryHostingAdapter(
         baseRef,
         bodyProjection,
         authority.expectation.idempotencyKey,
+        systemJobKind,
+        title,
       );
     },
 
@@ -103,12 +122,14 @@ export function createGitHubRepositoryHostingAdapter(
       return requireSnapshot(await transport.fetchPostMergeStatus(repository, mergeSha));
     },
 
-    async fetchPullRequestSnapshot(workRef) {
-      return requireSnapshot(await transport.fetchPullRequestSnapshot(workRef));
+    async fetchPullRequestSnapshot(workRef, systemJobKind) {
+      return requireSnapshot(await transport.fetchPullRequestSnapshot(workRef, systemJobKind));
     },
 
-    async mergePullRequest(workRef, expectedHeadSha, landingPolicy, authority) {
-      const snapshot = requireSnapshot(await transport.fetchPullRequestSnapshot(workRef));
+    async mergePullRequest(workRef, expectedHeadSha, landingPolicy, authority, systemJobKind) {
+      const snapshot = requireSnapshot(
+        await transport.fetchPullRequestSnapshot(workRef, systemJobKind),
+      );
       if (snapshot.head_sha !== expectedHeadSha) throw new Error("github.stale_head");
       assertRepositoryAuthority(
         authority,
@@ -123,10 +144,11 @@ export function createGitHubRepositoryHostingAdapter(
         expectedHeadSha,
         landingPolicy,
         authority.expectation.idempotencyKey,
+        systemJobKind,
       );
     },
 
-    async publishBranch(workRef, workspace, expectedBaseSha, authority) {
+    async publishBranch(workRef, workspace, expectedBaseSha, authority, systemJobKind) {
       if ((await transport.fetchDefaultBranchSha()) !== expectedBaseSha) {
         throw new Error("github.stale_base");
       }
@@ -143,11 +165,14 @@ export function createGitHubRepositoryHostingAdapter(
         workspace,
         expectedBaseSha,
         authority.expectation.idempotencyKey,
+        systemJobKind,
       );
     },
 
-    async updateBranch(workRef, expectedHeadSha, expectedBaseSha, authority) {
-      const snapshot = requireSnapshot(await transport.fetchPullRequestSnapshot(workRef));
+    async updateBranch(workRef, expectedHeadSha, expectedBaseSha, authority, systemJobKind) {
+      const snapshot = requireSnapshot(
+        await transport.fetchPullRequestSnapshot(workRef, systemJobKind),
+      );
       if (snapshot.head_sha !== expectedHeadSha) throw new Error("github.stale_head");
       if (snapshot.observed_base_sha !== expectedBaseSha) throw new Error("github.stale_base");
       assertRepositoryAuthority(
@@ -163,6 +188,7 @@ export function createGitHubRepositoryHostingAdapter(
         expectedHeadSha,
         expectedBaseSha,
         authority.expectation.idempotencyKey,
+        systemJobKind,
       );
     },
   };

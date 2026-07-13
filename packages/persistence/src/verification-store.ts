@@ -3,6 +3,8 @@ import {
   type AgentVerification,
   type ImplementationOutcome,
   isImplementationOutcome,
+  isSynthesisResult,
+  type SynthesisResult,
 } from "@symphony/contracts";
 import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
@@ -148,6 +150,13 @@ export interface PendingIndependentVerification {
   workspacePath: string;
 }
 
+export interface PendingSynthesisVerification {
+  attemptId: string;
+  configSnapshotId: string;
+  result: Extract<SynthesisResult, { decision: "propose_changes" }>;
+  workspacePath: string;
+}
+
 export async function loadPendingIndependentVerification(
   database: Kysely<DatabaseSchema>,
   workRef: WorkRef,
@@ -196,6 +205,49 @@ export async function loadPendingIndependentVerification(
     attemptId: row.attempt_id,
     configSnapshotId: row.config_snapshot_id,
     outcome: outcome as PendingIndependentVerification["outcome"],
+    workspacePath: row.workspace_path,
+  };
+}
+
+export async function loadPendingSynthesisVerification(
+  database: Kysely<DatabaseSchema>,
+  systemJobId: string,
+): Promise<PendingSynthesisVerification | null> {
+  const query = await sql<PendingVerificationRow>`
+    select attempt.id as attempt_id, attempt.config_snapshot_id,
+           attempt.workspace_path, result.payload_json
+    from claims claim
+    join attempts attempt
+      on attempt.work_ref_kind = claim.work_ref_kind
+      and attempt.work_ref_id = claim.work_ref_id
+      and attempt.role = 'synthesis'
+      and attempt.status = 'closed'
+    join terminal_results result
+      on result.id = attempt.terminal_result_id
+      and result.attempt_id = attempt.id
+      and result.role = 'synthesis'
+      and result.result_kind = 'synthesis_result'
+    join system_jobs job
+      on job.id = claim.work_ref_id
+      and job.kind = 'synthesis'
+      and job.status = 'review'
+    where claim.work_ref_kind = 'system_job'
+      and claim.work_ref_id = ${systemJobId}
+      and claim.mode = 'Ready'
+      and claim.reason = 'synthesis_verification_required'
+    order by attempt.attempt_number desc
+    limit 1
+  `.execute(database);
+  const row = query.rows[0];
+  if (!row) return null;
+  const result: unknown = JSON.parse(row.payload_json);
+  if (!isSynthesisResult(result) || result.decision !== "propose_changes") {
+    throw new Error("verification.synthesis_result_invalid");
+  }
+  return {
+    attemptId: row.attempt_id,
+    configSnapshotId: row.config_snapshot_id,
+    result,
     workspacePath: row.workspace_path,
   };
 }

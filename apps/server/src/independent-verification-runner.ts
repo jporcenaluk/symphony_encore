@@ -10,6 +10,7 @@ import type { PersistenceSafetyController } from "@symphony/orchestration";
 import {
   type OpenedDatabase,
   type PendingIndependentVerification,
+  type PendingSynthesisVerification,
   recordVerificationAndRoute,
 } from "@symphony/persistence";
 
@@ -38,9 +39,10 @@ export async function runPendingIndependentVerification(input: {
   expectedReadyReason?: string;
   newId(): string;
   readRevision?: RevisionReader;
+  reworkReadyReason?: string;
   safety: PersistenceSafetyController;
   sourceEnvironment: Readonly<Record<string, string | undefined>>;
-  target: PendingIndependentVerification;
+  target: PendingIndependentVerification | PendingSynthesisVerification;
   timeoutMs: number;
   verifyNoneReason?: string | null;
   verifiedReadyReason?: string;
@@ -56,6 +58,9 @@ export async function runPendingIndependentVerification(input: {
   const targetRevision = await (input.readRevision ?? defaultRevisionReader)(request);
   if (!/^[A-Fa-f0-9]{7,64}$/u.test(targetRevision)) {
     throw new Error("verification.target_revision_invalid");
+  }
+  if ("result" in input.target && input.target.result.repository_revision !== targetRevision) {
+    throw new Error("verification.reported_revision_mismatch");
   }
   const execution =
     input.command === "none"
@@ -77,7 +82,7 @@ export async function runPendingIndependentVerification(input: {
       nextReadyReason:
         execution.result === "passed"
           ? (input.verifiedReadyReason ?? "pull_request_required")
-          : "verification_rework",
+          : (input.reworkReadyReason ?? "verification_rework"),
       targetRevision,
       workRef: input.workRef,
     });

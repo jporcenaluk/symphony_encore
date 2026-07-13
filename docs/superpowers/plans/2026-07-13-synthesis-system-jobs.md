@@ -91,20 +91,20 @@ agent/workspace/repository adapters, production scheduler.
 - Modify: `apps/server/src/repository-publication.ts`
 - Modify: `apps/server/src/repository-publication.test.ts`
 
-- [ ] Write failing adapter tests for deterministic `symphony/system-synthesis-<short-id>` branches
+- [x] Write failing adapter tests for deterministic `symphony/system-synthesis-<short-id>` branches
   distinct from repair branches.
-- [ ] Add an explicit SystemJob kind to the branch-publication adapter request without changing the
+- [x] Add an explicit SystemJob kind to the branch-publication adapter request without changing the
   durable `WorkRef` contract; keep issue publication backward compatible.
-- [ ] Write failing verification tests that recover a closed synthesis proposal result and pin the
+- [x] Write failing verification tests that recover a closed synthesis proposal result and pin the
   verification record to its reported repository revision and actual workspace HEAD.
-- [ ] Add synthesis verification recovery and route pass to `pull_request_required`, failure to
+- [x] Add synthesis verification recovery and route pass to `pull_request_required`, failure to
   `synthesis_rework`/human according to bounded retry policy.
-- [ ] Write failing publication tests for branch receipt, ordinary SystemJob PR receipt,
+- [x] Write failing publication tests for branch receipt, ordinary SystemJob PR receipt,
   RepositoryLink persistence, and `pull_request_hygiene_required` without tracker mutation.
-- [ ] Implement the synthesis publication coordinator with exact revision checks and supervised PR
+- [x] Implement the synthesis publication coordinator with exact revision checks and supervised PR
   metadata from the typed result.
-- [ ] Run the adapter, verification, and publication test files and expect all tests to pass.
-- [ ] Commit with `feat(synthesis): publish verified synthesis proposals`.
+- [x] Run the adapter, verification, and publication test files and expect all tests to pass.
+- [x] Commit with `feat(synthesis): publish verified synthesis proposals`.
 
 ## Task 5: Shared review, merge, and scheduler integration
 
