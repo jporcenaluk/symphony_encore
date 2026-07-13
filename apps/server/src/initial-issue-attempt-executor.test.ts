@@ -27,6 +27,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { executePlannedInitialIssueAttempt } from "./initial-issue-attempt-executor.js";
+import { runPlannedInitialIssueAttemptLifecycle } from "./initial-issue-attempt-lifecycle.js";
 import { planInitialIssueAttempt } from "./initial-issue-attempt-planner.js";
 
 let directory: string;
@@ -63,6 +64,42 @@ const issue: Issue = {
   url: "https://example.test/issues/8",
 };
 
+function planningConfiguration() {
+  return {
+    budgetLimits: {
+      attemptTokens: 400_000,
+      attemptUsd: 5,
+      fleetTokens: 10_000_000,
+      fleetUsd: 50,
+      issueTokens: 2_000_000,
+      issueUsd: 10,
+    },
+    enabledProfiles: ["economy", "standard", "deep"] as const,
+    estimateTokensByProfile: { deep: 300_000, economy: 100_000, standard: 200_000 },
+    historyMinSamples: 10,
+    historyWindowSamples: 50,
+    leaseTtlMs: 120_000,
+    prompt: "Implement {{ issue.title }}.",
+    requiredSkills: [],
+    riskFloorRules: [],
+    routeProfiles: {
+      adjudication: "deep" as const,
+      implementation: {
+        high_risk: "deep" as const,
+        standard: "standard" as const,
+        trivial: "economy" as const,
+      },
+      integrative_review: "standard" as const,
+      plan_review: "economy" as const,
+      specialist_review: "deep" as const,
+      synthesis: "deep" as const,
+    },
+    rules: "",
+    skillRoots: [],
+    workspaceRoot,
+  };
+}
+
 beforeEach(async () => {
   directory = await mkdtemp(path.join(tmpdir(), "symphony-attempt-executor-"));
   workspaceRoot = path.join(directory, "workspaces");
@@ -93,7 +130,7 @@ afterEach(async () => {
   await rm(directory, { force: true, recursive: true });
 });
 
-function createAgent(order: string[]): AgentAdapter {
+function createAgent(order: string[], terminalResult?: unknown): AgentAdapter {
   return {
     launch: vi.fn(async (request: AgentLaunchRequest) => {
       order.push("launch");
@@ -111,6 +148,22 @@ function createAgent(order: string[]): AgentAdapter {
               timestamp: "2026-07-13T10:00:03.000Z",
               turn_id: "turn-1",
             };
+            if (terminalResult !== undefined) {
+              yield {
+                attempt_id: request.attemptId,
+                event: "terminal_result_reported" as const,
+                result: terminalResult,
+                session_id: "thread-1-turn-1",
+                timestamp: "2026-07-13T10:00:04.000Z",
+              };
+              yield {
+                attempt_id: request.attemptId,
+                event: "turn_completed" as const,
+                provider_reason: "completed",
+                session_id: "thread-1-turn-1",
+                timestamp: "2026-07-13T10:00:05.000Z",
+              };
+            }
           },
         },
         processGroupId: 4320,
@@ -140,35 +193,7 @@ describe("planned initial issue attempt execution", () => {
     const planned = await planInitialIssueAttempt({
       adapter: agent,
       configSnapshotId: "config-1",
-      configuration: {
-        budgetLimits: {
-          attemptTokens: 400_000,
-          attemptUsd: 5,
-          fleetTokens: 10_000_000,
-          fleetUsd: 50,
-          issueTokens: 2_000_000,
-          issueUsd: 10,
-        },
-        enabledProfiles: ["economy", "standard", "deep"],
-        estimateTokensByProfile: { deep: 300_000, economy: 100_000, standard: 200_000 },
-        historyMinSamples: 10,
-        historyWindowSamples: 50,
-        leaseTtlMs: 120_000,
-        prompt: "Implement {{ issue.title }}.",
-        requiredSkills: [],
-        riskFloorRules: [],
-        routeProfiles: {
-          adjudication: "deep",
-          implementation: { high_risk: "deep", standard: "standard", trivial: "economy" },
-          integrative_review: "standard",
-          plan_review: "economy",
-          specialist_review: "deep",
-          synthesis: "deep",
-        },
-        rules: "",
-        skillRoots: [],
-        workspaceRoot,
-      },
+      configuration: planningConfiguration(),
       database: opened.database,
       issue,
       newId: () => `id-${++sequence}`,
@@ -259,35 +284,7 @@ describe("planned initial issue attempt execution", () => {
     const planned = await planInitialIssueAttempt({
       adapter: agent,
       configSnapshotId: "config-1",
-      configuration: {
-        budgetLimits: {
-          attemptTokens: 400_000,
-          attemptUsd: 5,
-          fleetTokens: 10_000_000,
-          fleetUsd: 50,
-          issueTokens: 2_000_000,
-          issueUsd: 10,
-        },
-        enabledProfiles: ["economy", "standard", "deep"],
-        estimateTokensByProfile: { deep: 300_000, economy: 100_000, standard: 200_000 },
-        historyMinSamples: 10,
-        historyWindowSamples: 50,
-        leaseTtlMs: 120_000,
-        prompt: "Implement {{ issue.title }}.",
-        requiredSkills: [],
-        riskFloorRules: [],
-        routeProfiles: {
-          adjudication: "deep",
-          implementation: { high_risk: "deep", standard: "standard", trivial: "economy" },
-          integrative_review: "standard",
-          plan_review: "economy",
-          specialist_review: "deep",
-          synthesis: "deep",
-        },
-        rules: "",
-        skillRoots: [],
-        workspaceRoot,
-      },
+      configuration: planningConfiguration(),
       database: opened.database,
       issue,
       newId: () => `failed-${++sequence}`,
@@ -356,6 +353,103 @@ describe("planned initial issue attempt execution", () => {
     ).toEqual({
       payload_json: expect.stringContaining('"status":"failed"'),
       result_kind: "execution_failure",
+    });
+  });
+
+  it("runs the planned attempt through stream consumption and atomic closure", async () => {
+    const order: string[] = [];
+    const outcome = {
+      actions_requested: [],
+      confusions: [],
+      evidence: [],
+      handoff: {
+        acceptance_criteria: issue.acceptance_criteria,
+        commands: [],
+        decisions_fixed: [],
+        files_changed: [],
+        goal: issue.title,
+        open_items: issue.acceptance_criteria,
+        revision: "abc1234",
+      },
+      status: "needs_rework",
+      summary: "More work is needed.",
+    };
+    const agent = createAgent(order, outcome);
+    let sequence = 0;
+    const planned = await planInitialIssueAttempt({
+      adapter: agent,
+      configSnapshotId: "config-1",
+      configuration: planningConfiguration(),
+      database: opened.database,
+      issue,
+      newId: () => `lifecycle-${++sequence}`,
+      now: () => "2026-07-13T10:00:00.000Z",
+      providerRevision: "revision-7",
+      routingFacts: new Set(),
+      serviceRunId: "run-1",
+      submitPlanSchema: PlanSchema,
+      terminalResultSchema: ImplementationOutcomeSchema,
+    });
+    const tracker = {
+      updateIssueLane: vi.fn(async () => {
+        order.push("lane");
+        return {
+          providerRequestId: "request-1",
+          responsePayloadHash: "sha256:receipt",
+          result: "updated",
+          resultRevision: "revision-8",
+        };
+      }),
+    } as unknown as TrackerAdapter;
+    const repositoryAdapter: WorkspaceRepositoryAdapter = {
+      async populateIssueWorkspace(input) {
+        order.push("populate");
+        const workspacePath = issueWorkspacePath(input.workspaceRoot, input.identifier);
+        await mkdir(workspacePath);
+        return {
+          baseSha: "abc1234",
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt: "2026-07-13T10:00:01.000Z",
+          localBranch: "symphony/org-8",
+          repository: input.repository,
+          workspacePath,
+        };
+      },
+    };
+
+    const consumption = await runPlannedInitialIssueAttemptLifecycle({
+      adapter: agent,
+      agentCommand: "codex app-server",
+      afterCreateCommand: null,
+      allowlistedEnvironmentNames: [],
+      attemptTokenCap: 400_000,
+      beforeRunCommand: null,
+      database: opened.database,
+      hookTimeoutMs: 60_000,
+      issue,
+      newId: () => "lifecycle-result-1",
+      now: () => "2026-07-13T10:01:00.000Z",
+      planned,
+      repositoryAdapter,
+      safety: new PersistenceSafetyController(vi.fn(async () => undefined)),
+      serviceRunId: "run-1",
+      sourceEnvironment: {},
+      tracker,
+      usdCap: 5,
+      workspaceRoot,
+    });
+
+    expect(consumption).toEqual({ kind: "terminal_result", result: outcome });
+    expect(order).toEqual(["lane", "populate", "launch"]);
+    expect(opened.sqlite.prepare("select status from attempts").get()).toEqual({
+      status: "closed",
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "implementation_rework",
+    });
+    expect(opened.sqlite.prepare("select status from budget_reservations").get()).toEqual({
+      status: "settled",
     });
   });
 });

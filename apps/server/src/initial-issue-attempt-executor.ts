@@ -9,7 +9,7 @@ import type { PlannedInitialIssueAttempt } from "./initial-issue-attempt-planner
 import { executeInitialIssueDispatch } from "./issue-dispatch-executor.js";
 import { prepareIssueWorkspace } from "./issue-workspace-manager.js";
 
-export async function executePlannedInitialIssueAttempt(input: {
+export interface ExecutePlannedInitialIssueAttemptInput {
   adapter: AgentAdapter;
   agentCommand: string;
   afterCreateCommand: string | null;
@@ -26,7 +26,11 @@ export async function executePlannedInitialIssueAttempt(input: {
   sourceEnvironment: Readonly<Record<string, string | undefined>>;
   tracker: TrackerAdapter;
   workspaceRoot: string;
-}): Promise<BoundAgentSession> {
+}
+
+export async function executePlannedInitialIssueAttempt(
+  input: ExecutePlannedInitialIssueAttemptInput,
+): Promise<BoundAgentSession> {
   return executeInitialIssueDispatch({
     database: input.database,
     async launchWorker() {
@@ -76,7 +80,7 @@ export async function executePlannedInitialIssueAttempt(input: {
 }
 
 async function closeLaunchFailure(
-  input: Parameters<typeof executePlannedInitialIssueAttempt>[0],
+  input: ExecutePlannedInitialIssueAttemptInput,
   error: unknown,
 ): Promise<void> {
   const terminalResultId = input.newId();
