@@ -676,14 +676,35 @@ describe("production reconciliation scheduler", () => {
       }),
     );
     await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "implementation_rework",
+      }),
+    );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "AwaitingHuman",
+        reason: "human_review",
+      }),
+    );
     await scheduler.close();
 
-    expect(tracker.fetchCandidates).toHaveBeenCalledTimes(2);
+    expect(tracker.fetchCandidates).toHaveBeenCalledTimes(3);
     expect(agent.preflight).toHaveBeenCalledWith(expect.objectContaining({ role: "plan_review" }));
     expect(agent.preflight).toHaveBeenCalledWith(
       expect.objectContaining({ role: "implementation", submitPlanSchema: PlanSchema }),
     );
-    expect(agent.launch).toHaveBeenCalledTimes(2);
+    expect(agent.launch).toHaveBeenCalledTimes(3);
+    expect(agent.launch).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        prompt: expect.stringContaining(
+          "Resume from the factual handoff after implementation_rework: Continue implementation.",
+        ),
+      }),
+    );
     expect(opened.sqlite.prepare("select status, approved_by_attempt_id from plans").get()).toEqual(
       {
         approved_by_attempt_id: expect.any(String),
@@ -691,8 +712,12 @@ describe("production reconciliation scheduler", () => {
       },
     );
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-      mode: "Ready",
-      reason: "implementation_rework",
+      mode: "AwaitingHuman",
+      reason: "human_review",
+    });
+    expect(opened.sqlite.prepare("select origin_stage, reason from parked_work").get()).toEqual({
+      origin_stage: "In Progress",
+      reason: "human_review",
     });
     await opened.close();
   });

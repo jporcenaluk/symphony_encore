@@ -17,6 +17,7 @@ import {
   AdjudicationResultSchema,
   ImplementationOutcomeSchema,
   type Issue,
+  type Plan,
   type PlanReviewResult,
   PlanReviewResultSchema,
   PlanSchema,
@@ -40,12 +41,14 @@ import {
   type ConfigurationSnapshot,
   commitOrdinaryReviewSet,
   countRunningClaims,
+  isImplementationRetryReason,
   isWorkClaimed,
   loadClaimRecoveryState,
   loadIssue,
   loadLatestPlanByStatus,
   loadLatestPlanReviewResult,
   loadLatestValidatedPlan,
+  loadPendingImplementationRetry,
   loadPendingIndependentVerification,
   loadPendingIntegrativeReview,
   loadPendingReviewCoordination,
@@ -57,7 +60,10 @@ import {
 
 import { syncTrackerCandidates } from "./candidate-sync.js";
 import { startPlannedImplementationContinuationLifecycle } from "./implementation-continuation-lifecycle.js";
-import { planImplementationContinuation } from "./implementation-continuation-planner.js";
+import {
+  type ImplementationContinuationSource,
+  planImplementationContinuation,
+} from "./implementation-continuation-planner.js";
 import {
   type RevisionReader,
   runPendingIndependentVerification,
@@ -201,11 +207,13 @@ export function createProductionScheduler(input: {
         const isIntegrativeReview = claim.reason === "review_required";
         const isAdjudication = claim.reason === "adjudication_required";
         const isReviewRework = claim.reason === "review_rework";
+        const isImplementationRetry = isImplementationRetryReason(claim.reason);
         const isSpecialistReview = claim.reason.startsWith("specialist_review_required:");
         const isImplementationContinuation =
           claim.reason === "implementation_after_plan_approval" ||
           claim.reason === "plan_revision_required" ||
-          isReviewRework;
+          isReviewRework ||
+          isImplementationRetry;
         if (
           (!isPlanReview &&
             !isIndependentVerification &&
@@ -630,24 +638,29 @@ export function createProductionScheduler(input: {
                 ? ("approved_plan" as const)
                 : claim.reason === "plan_revision_required"
                   ? ("plan_revision" as const)
-                  : ("review_rework" as const);
+                  : isReviewRework
+                    ? ("review_rework" as const)
+                    : ("implementation_retry" as const);
             const workRef = { id: issueId, kind: "issue" as const };
-            const plan =
-              mode === "review_rework"
+            const plan: Plan | null =
+              mode === "review_rework" || mode === "implementation_retry"
                 ? ((await loadLatestPlanByStatus(input.database, workRef, "approved")) ??
-                  (await loadLatestPlanByStatus(input.database, workRef, "validated")))
+                  (await loadLatestPlanByStatus(input.database, workRef, "validated")) ??
+                  (mode === "implementation_retry"
+                    ? await loadLatestPlanByStatus(input.database, workRef, "rejected")
+                    : null))
                 : await loadLatestPlanByStatus(
                     input.database,
                     workRef,
                     mode === "approved_plan" ? "approved" : "rejected",
                   );
-            if (!plan) {
+            if (!plan && mode !== "implementation_retry") {
               throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
             }
             let changeClass: "standard" | "high_risk" = "high_risk";
-            let reviewResult: PlanReviewResult;
+            let source: ImplementationContinuationSource;
             if (mode === "review_rework") {
-              const source = await loadReviewReworkSource({
+              const reviewSource = await loadReviewReworkSource({
                 collectEvidence: input.review?.collectEvidence,
                 database: input.database,
                 environment: input.environment,
@@ -655,17 +668,34 @@ export function createProductionScheduler(input: {
                 timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
                 workspaceRoot: stringValue(values, "workspace.root"),
               });
-              if (!source) {
+              if (!reviewSource || !plan) {
                 throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
               }
-              changeClass = source.changeClass;
-              reviewResult = reviewResultForRework(stored.issue, plan.revision, source);
+              changeClass = reviewSource.changeClass;
+              source = {
+                kind: "review",
+                result: reviewResultForRework(stored.issue, plan.revision, reviewSource),
+              };
+            } else if (mode === "implementation_retry") {
+              const retry = await loadPendingImplementationRetry(input.database, workRef);
+              if (!retry) {
+                throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
+              }
+              changeClass = retry.changeClass;
+              source = {
+                findings: retryFindings(retry.source),
+                handoff: retry.handoff,
+                kind: "retry",
+                reason: retry.reason,
+                routingFacts: retry.routingFacts,
+                summary: retry.source.summary,
+              };
             } else {
               const review = await loadLatestPlanReviewResult(input.database, workRef);
               if (!review) {
                 throw new Error(`scheduler.ready_implementation_handoff_missing:${issueId}`);
               }
-              reviewResult = review.result;
+              source = { kind: "review", result: review.result };
             }
             const implementationPlanned = await planImplementationContinuation({
               adapter: agent,
@@ -678,7 +708,7 @@ export function createProductionScheduler(input: {
               newId: randomUUID,
               now: () => new Date().toISOString(),
               plan,
-              reviewResult,
+              source,
               serviceRunId: input.serviceRunId,
               submitPlanSchema: PlanSchema,
               terminalResultSchema: ImplementationOutcomeSchema,
@@ -707,7 +737,9 @@ export function createProductionScheduler(input: {
                   reasons: [
                     mode === "review_rework"
                       ? "classification.review_rework"
-                      : "classification.reviewed_high_risk_plan",
+                      : mode === "implementation_retry" && source.kind === "retry"
+                        ? `classification.retry:${source.reason}`
+                        : "classification.reviewed_high_risk_plan",
                   ],
                 },
                 riskPathPatterns: stringList(values, "class.risk_paths"),
@@ -892,6 +924,20 @@ export function createProductionScheduler(input: {
 }
 
 type ReworkReviewResult = Extract<PlanReviewResult, { decision: "needs_rework" }>;
+
+function retryFindings(source: {
+  evidence: readonly unknown[];
+  status: string;
+  summary: string;
+}): readonly unknown[] {
+  return [
+    {
+      evidence: source.evidence,
+      status: source.status,
+      summary: source.summary,
+    },
+  ];
+}
 
 interface ReviewReworkSource {
   changeClass: "standard" | "high_risk";

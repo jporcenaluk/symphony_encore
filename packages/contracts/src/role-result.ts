@@ -230,6 +230,10 @@ export const ExecutionFailureSchema = Type.Object(
 );
 export type ExecutionFailure = Static<typeof ExecutionFailureSchema>;
 
+export function isExecutionFailure(value: unknown): value is ExecutionFailure {
+  return Value.Check(ExecutionFailureSchema, value);
+}
+
 export type AdjudicationValidation =
   | { ok: true }
   | { ok: false; reason: "adjudication.invalid" | "adjudication.resolution_set_mismatch" };

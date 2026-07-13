@@ -126,6 +126,21 @@ describe("implementation continuation planning", () => {
     },
     {
       changeClass: "standard" as const,
+      expectedReadyReason: "no_progress_retry",
+      expectedProfile: "standard",
+      mode: "implementation_retry" as const,
+      retrySource: {
+        findings: [],
+        handoff: reviewResult.handoff,
+        kind: "retry" as const,
+        reason: "no_progress_retry" as const,
+        routingFacts: ["risk.concurrency"],
+        summary: "The previous attempt made no progress.",
+      },
+      sourcePlan: null,
+    },
+    {
+      changeClass: "standard" as const,
       expectedReadyReason: "review_rework",
       expectedProfile: "standard",
       mode: "review_rework" as const,
@@ -219,7 +234,10 @@ describe("implementation continuation planning", () => {
       newId: () => `continuation-${++sequence}`,
       now: () => "2026-07-13T10:03:00Z",
       plan: source.sourcePlan,
-      reviewResult: source.sourceResult,
+      source:
+        "retrySource" in source
+          ? source.retrySource
+          : { kind: "review", result: source.sourceResult },
       serviceRunId: "run-1",
       submitPlanSchema: PlanSchema,
       terminalResultSchema: ImplementationOutcomeSchema,
@@ -247,10 +265,14 @@ describe("implementation continuation planning", () => {
     } else if (source.mode === "plan_revision") {
       expect(planned.prompt).toContain("Rollback evidence is missing");
       expect(planned.prompt).not.toContain(plan.approach);
-    } else {
+    } else if (source.mode === "review_rework") {
       expect(planned.prompt).toContain("Retry cleanup can discard a committed result");
       expect(planned.prompt).toContain("Resolve every blocking review finding");
       expect(planned.prompt).toContain(plan.approach);
+    } else {
+      expect(planned.prompt).toContain('"status":"not_submitted"');
+      expect(planned.prompt).toContain("previous attempt made no progress");
+      expect(planned.prompt).not.toContain(plan.approach);
     }
     expect(planned.dispatch).toMatchObject({
       attempt: { changeClass: source.changeClass, role: "implementation" },

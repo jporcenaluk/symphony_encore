@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AdjudicationResultSchema,
+  isExecutionFailure,
   PlanReviewResultSchema,
   ReviewResultSchema,
   SynthesisResultSchema,
@@ -159,5 +160,20 @@ describe("synthesis results", () => {
         rule_changes: [],
       }),
     ).toBe(false);
+  });
+});
+
+describe("execution failures", () => {
+  it("exposes a strict runtime type guard", () => {
+    const failure = {
+      evidence: [],
+      failure_class: "agent_process",
+      handoff,
+      role: "implementation",
+      status: "failed",
+      summary: "The worker exited before reporting a result.",
+    };
+    expect(isExecutionFailure(failure)).toBe(true);
+    expect(isExecutionFailure({ ...failure, unexpected: true })).toBe(false);
   });
 });

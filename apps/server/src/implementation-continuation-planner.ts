@@ -4,7 +4,13 @@ import {
   issueWorkspacePath,
   resolveRequiredSkills,
 } from "@symphony/adapters";
-import type { AgentAdapterManifest, Issue, Plan, PlanReviewResult } from "@symphony/contracts";
+import type {
+  AgentAdapterManifest,
+  Handoff,
+  Issue,
+  Plan,
+  PlanReviewResult,
+} from "@symphony/contracts";
 import {
   type ComputeProfile,
   type ComputeRiskFloorRule,
@@ -16,13 +22,29 @@ import {
 import {
   type DispatchBudgetLimits,
   type DispatchInput,
+  type ImplementationRetryReason,
   listAttemptUsageHistory,
   nextAttemptNumber,
   type OpenedDatabase,
   prepareDispatchBudget,
 } from "@symphony/persistence";
 
-export type ImplementationContinuationMode = "approved_plan" | "plan_revision" | "review_rework";
+export type ImplementationContinuationMode =
+  | "approved_plan"
+  | "plan_revision"
+  | "review_rework"
+  | "implementation_retry";
+
+export type ImplementationContinuationSource =
+  | { kind: "review"; result: PlanReviewResult }
+  | {
+      findings: readonly unknown[];
+      handoff: Handoff;
+      kind: "retry";
+      reason: ImplementationRetryReason;
+      routingFacts: readonly string[];
+      summary: string;
+    };
 
 export interface ImplementationContinuationConfiguration {
   attemptTokenCap: number;
@@ -47,6 +69,7 @@ export interface PlannedImplementationContinuation {
   estimatedTokens: number;
   estimatedUsd: number | null;
   expectedReadyReason:
+    | ImplementationRetryReason
     | "implementation_after_plan_approval"
     | "plan_revision_required"
     | "review_rework";
@@ -65,13 +88,13 @@ export async function planImplementationContinuation(input: {
   mode: ImplementationContinuationMode;
   newId(): string;
   now(): string;
-  plan: Plan;
-  reviewResult: PlanReviewResult;
+  plan: Plan | null;
+  source: ImplementationContinuationSource;
   serviceRunId: string;
   submitPlanSchema: Readonly<Record<string, unknown>>;
   terminalResultSchema: Readonly<Record<string, unknown>>;
 }): Promise<PlannedImplementationContinuation> {
-  assertSource(input.issue, input.plan, input.reviewResult, input.mode);
+  assertSource(input.issue, input.plan, input.source, input.mode);
   const manifest = await input.adapter.manifest();
   const resolvedSkills = await resolveRequiredSkills({
     names: input.configuration.requiredSkills,
@@ -88,7 +111,9 @@ export async function planImplementationContinuation(input: {
   const route = selectComputeRoute({
     changeClass: input.changeClass,
     enabledProfiles: input.configuration.enabledProfiles,
-    facts: new Set(input.plan.risk_facts),
+    facts: new Set(
+      input.plan?.risk_facts ?? (input.source.kind === "retry" ? input.source.routingFacts : []),
+    ),
     heuristicMinimum: null,
     resolvedProfiles: resolvedProfiles(manifest),
     riskFloorRules: input.configuration.riskFloorRules,
@@ -136,7 +161,7 @@ export async function planImplementationContinuation(input: {
     updatedAt: now,
   });
   const prompt = renderPrompt(input);
-  const expectedReadyReason = expectedReason(input.mode);
+  const expectedReadyReason = expectedReason(input.mode, input.source);
   const dispatch: DispatchInput = {
     attempt: {
       attemptNumber,
@@ -181,10 +206,23 @@ export async function planImplementationContinuation(input: {
 
 function assertSource(
   issue: Issue,
-  plan: Plan,
-  reviewResult: PlanReviewResult,
+  plan: Plan | null,
+  source: ImplementationContinuationSource,
   mode: ImplementationContinuationMode,
 ): void {
+  if (mode === "implementation_retry") {
+    if (issue.state !== "In Progress" || source.kind !== "retry") {
+      throw new Error("implementation_continuation.source_invalid");
+    }
+    if (plan && (!("issue_id" in plan.work_ref) || plan.work_ref.issue_id !== issue.id)) {
+      throw new Error("implementation_continuation.source_invalid");
+    }
+    return;
+  }
+  if (!plan || source.kind !== "review") {
+    throw new Error("implementation_continuation.source_invalid");
+  }
+  const reviewResult = source.result;
   const workMatches = "issue_id" in plan.work_ref && plan.work_ref.issue_id === issue.id;
   const reviewMatches = reviewResult.plan_revision === plan.revision;
   const modeMatches =
@@ -204,41 +242,54 @@ function assertSource(
 function renderPrompt(input: {
   configuration: Pick<ImplementationContinuationConfiguration, "attemptTokenCap" | "maxTurns">;
   mode: ImplementationContinuationMode;
-  plan: Plan;
-  reviewResult: PlanReviewResult;
+  plan: Plan | null;
+  source: ImplementationContinuationSource;
 }): string {
+  const findings =
+    input.source.kind === "review" ? input.source.result.findings : input.source.findings;
+  const handoff =
+    input.source.kind === "review" ? input.source.result.handoff : input.source.handoff;
   const currentPlanState =
-    input.mode === "plan_revision"
-      ? { revision: input.plan.revision, status: input.plan.status }
-      : input.plan;
+    input.mode === "plan_revision" ||
+    (input.mode === "implementation_retry" && input.plan?.status === "rejected")
+      ? { revision: input.plan?.revision, status: input.plan?.status }
+      : (input.plan ?? { status: "not_submitted" });
   return [
     "Continue implementation from durable orchestrator state in this existing workspace.",
     `Current Plan state: ${JSON.stringify(currentPlanState)}`,
-    `Review findings: ${JSON.stringify(input.reviewResult.findings)}`,
-    `Factual handoff: ${JSON.stringify(input.reviewResult.handoff)}`,
-    `Last verification output: ${JSON.stringify(input.reviewResult.handoff.commands)}`,
-    `Unmet acceptance criteria: ${JSON.stringify(input.reviewResult.handoff.open_items)}`,
+    `Review findings: ${JSON.stringify(findings)}`,
+    `Factual handoff: ${JSON.stringify(handoff)}`,
+    `Last verification output: ${JSON.stringify(handoff.commands)}`,
+    `Unmet acceptance criteria: ${JSON.stringify(handoff.open_items)}`,
     `Remaining turn budget: ${input.configuration.maxTurns}`,
     `Remaining token budget: ${input.configuration.attemptTokenCap}`,
     "You must submit a Plan revision before further action when planned paths, verification, size, or risks change.",
-    modeInstruction(input.mode),
+    modeInstruction(input.mode, input.source),
   ].join("\n");
 }
 
 function expectedReason(
   mode: ImplementationContinuationMode,
+  source: ImplementationContinuationSource,
 ): PlannedImplementationContinuation["expectedReadyReason"] {
   if (mode === "approved_plan") return "implementation_after_plan_approval";
   if (mode === "plan_revision") return "plan_revision_required";
+  if (mode === "implementation_retry" && source.kind === "retry") return source.reason;
   return "review_rework";
 }
 
-function modeInstruction(mode: ImplementationContinuationMode): string {
+function modeInstruction(
+  mode: ImplementationContinuationMode,
+  source: ImplementationContinuationSource,
+): string {
   if (mode === "plan_revision") {
     return "First submit a revised Plan that resolves every blocking review finding; do not change code before it is accepted.";
   }
   if (mode === "review_rework") {
     return "Resolve every blocking review finding, re-run verification, and report a typed implementation outcome.";
+  }
+  if (mode === "implementation_retry" && source.kind === "retry") {
+    return `Resume from the factual handoff after ${source.reason}: ${source.summary}`;
   }
   return "Implement the approved Plan and report a typed implementation outcome.";
 }
