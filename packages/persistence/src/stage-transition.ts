@@ -32,6 +32,13 @@ export async function openBaselineStage(
   database: Kysely<DatabaseSchema>,
   input: BaselineStageInput,
 ): Promise<void> {
+  await openBaselineStageInTransaction(database, input);
+}
+
+export async function openBaselineStageInTransaction(
+  database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
+  input: BaselineStageInput,
+): Promise<void> {
   await sql`
     insert into stage_transitions (
       id, work_ref_kind, work_ref_id, from_stage, to_stage, reason, attempt_id,
@@ -53,7 +60,7 @@ export async function transitionStage(
 }
 
 export async function transitionStageInTransaction(
-  transaction: Transaction<DatabaseSchema>,
+  transaction: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
   input: StageTransitionInput,
 ): Promise<void> {
   if (input.attemptId !== null) {

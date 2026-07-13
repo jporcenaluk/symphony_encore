@@ -36,6 +36,19 @@ async function fixture(): Promise<OpenedDatabase> {
       ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
     )
     .run();
+  opened.sqlite
+    .prepare(
+      `insert into issues (
+        id, identifier, title, description, acceptance_criteria_json, state,
+        labels_json, priority, blocked_by_json, assignee_id, repo_owner,
+        repo_name, url, provider_revision, created_at, updated_at
+      ) values (
+        'issue-1', 'ORG-1', 'Issue', '', '[]', 'Todo', '[]', null, '[]', null,
+        'owner', 'repo', 'https://example.test/issues/1', 'revision-1',
+        '2026-07-13T09:00:00Z', '2026-07-13T10:00:00Z'
+      )`,
+    )
+    .run();
   await openBaselineStage(opened.database, {
     enteredAt: "2026-07-13T10:00:00Z",
     id: "stage-1",
@@ -122,6 +135,10 @@ describe("receipt-confirmed lane transitions", () => {
       { from_stage: null, to_stage: "Todo" },
       { from_stage: "Todo", to_stage: "In Progress" },
     ]);
+    expect(opened.sqlite.prepare("select state, provider_revision from issues").get()).toEqual({
+      provider_revision: "revision-2",
+      state: "In Progress",
+    });
   });
 
   it("rolls back the receipt when the confirmed transition is invalid", async () => {

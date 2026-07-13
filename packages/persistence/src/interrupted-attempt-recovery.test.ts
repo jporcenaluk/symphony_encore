@@ -7,6 +7,7 @@ import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.j
 import { createDispatch } from "./dispatch-store.js";
 import {
   listInterruptedAttempts,
+  loadLatestHandoffForAttempt,
   recoverInterruptedAttempt,
 } from "./interrupted-attempt-recovery.js";
 
@@ -109,6 +110,79 @@ const handoff = {
 };
 
 describe("interrupted attempt recovery", () => {
+  it("builds a factual first-attempt handoff from the durable issue snapshot", async () => {
+    opened.sqlite
+      .prepare(
+        `insert into issues (
+          id, identifier, title, description, acceptance_criteria_json, state,
+          labels_json, priority, blocked_by_json, assignee_id, repo_owner,
+          repo_name, url, provider_revision, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "issue-1",
+        "jporc/repo#1",
+        "Recover the interrupted work",
+        "Durable issue body",
+        JSON.stringify(["State remains recoverable"]),
+        "In Progress",
+        "[]",
+        null,
+        "[]",
+        "agent-1",
+        "jporc",
+        "repo",
+        "https://github.example/issues/1",
+        "tracker-revision-4",
+        "2026-07-13T09:00:00Z",
+        "2026-07-13T10:00:00Z",
+      );
+
+    await expect(loadLatestHandoffForAttempt(opened.database, "attempt-1")).resolves.toEqual({
+      acceptance_criteria: ["State remains recoverable"],
+      commands: [],
+      decisions_fixed: [],
+      files_changed: [],
+      goal: "Recover the interrupted work",
+      open_items: ["Resume work from the durable workspace after process interruption"],
+      revision: "tracker-revision-4",
+    });
+  });
+
+  it("prefers the latest valid durable handoff from a prior attempt", async () => {
+    await recoverInterruptedAttempt(opened.database, {
+      attemptId: "attempt-1",
+      endedAt: "2026-07-13T10:03:00Z",
+      latestHandoff: handoff,
+      ownership: {
+        kind: "terminated",
+        processGroupId: 1230,
+        processId: 1234,
+        verifiedAt: "2026-07-13T10:02:59Z",
+      },
+      terminalResultId: "result-interrupted-1",
+    });
+    opened.sqlite
+      .prepare(
+        `insert into attempts (
+          id, work_ref_kind, work_ref_id, role, attempt_number, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, price_table_version,
+          routing_reasons_json, change_class, started_at, ended_at, status,
+          terminal_result_id, failure_class, input_tokens, output_tokens, total_tokens, cost_usd
+        ) select
+          'attempt-2', work_ref_kind, work_ref_id, role, 2, workspace_path,
+          config_snapshot_id, compute_profile, model, reasoning_effort, price_table_version,
+          routing_reasons_json, change_class, '2026-07-13T10:04:00Z', null, 'created',
+          null, null, 0, 0, 0, null
+        from attempts where id = 'attempt-1'`,
+      )
+      .run();
+
+    await expect(loadLatestHandoffForAttempt(opened.database, "attempt-2")).resolves.toEqual(
+      handoff,
+    );
+  });
+
   it("lists every open attempt with its recorded process identity", async () => {
     await expect(listInterruptedAttempts(opened.database)).resolves.toEqual([
       {

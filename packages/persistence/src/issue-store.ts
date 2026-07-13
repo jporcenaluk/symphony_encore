@@ -1,8 +1,12 @@
 import type { Issue } from "@symphony/contracts";
 import { validateIssueNormalization } from "@symphony/contracts";
-import { type Kysely, sql } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
+import {
+  openBaselineStageInTransaction,
+  transitionStageInTransaction,
+} from "./stage-transition.js";
 
 interface IssueRow {
   acceptance_criteria_json: string;
@@ -35,6 +39,14 @@ export async function upsertIssue(
 ): Promise<void> {
   const validation = validateIssueNormalization(issue);
   if (!validation.ok) throw new Error(validation.reason);
+  await upsertIssueInTransaction(database, issue, providerRevision);
+}
+
+async function upsertIssueInTransaction(
+  database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
+  issue: Issue,
+  providerRevision: string,
+): Promise<void> {
   await sql`
     insert into issues (
       id, identifier, title, description, acceptance_criteria_json, state,
@@ -61,6 +73,52 @@ export async function upsertIssue(
       provider_revision = excluded.provider_revision,
       updated_at = excluded.updated_at
   `.execute(database);
+}
+
+export async function observeIssue(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    issue: Issue;
+    observedAt: string;
+    providerRevision: string;
+    transitionId: string;
+  },
+): Promise<{ firstObservation: boolean; laneChanged: boolean }> {
+  const validation = validateIssueNormalization(input.issue);
+  if (!validation.ok) throw new Error(validation.reason);
+  return database.transaction().execute(async (transaction) => {
+    const current = await sql<{ state: Issue["state"] }>`
+      select state from issues where id = ${input.issue.id}
+    `.execute(transaction);
+    const previousState = current.rows[0]?.state;
+    await upsertIssueInTransaction(transaction, input.issue, input.providerRevision);
+    if (previousState === undefined) {
+      await openBaselineStageInTransaction(transaction, {
+        enteredAt: input.observedAt,
+        id: input.transitionId,
+        reason: "tracker.first_observation",
+        timestampSource: "observed_estimate",
+        toStage: input.issue.state,
+        workRef: { id: input.issue.id, kind: "issue" },
+      });
+      return { firstObservation: true, laneChanged: false };
+    }
+    if (previousState === input.issue.state) {
+      return { firstObservation: false, laneChanged: false };
+    }
+    await transitionStageInTransaction(transaction, {
+      attemptId: null,
+      confirmedExternalRevision: input.providerRevision,
+      enteredAt: input.observedAt,
+      expectedFromStage: previousState,
+      id: input.transitionId,
+      reason: "tracker.external_lane_observed",
+      timestampSource: "observed_estimate",
+      toStage: input.issue.state,
+      workRef: { id: input.issue.id, kind: "issue" },
+    });
+    return { firstObservation: false, laneChanged: true };
+  });
 }
 
 export async function loadIssue(

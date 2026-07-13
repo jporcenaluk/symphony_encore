@@ -5,7 +5,7 @@ import type { Issue } from "@symphony/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, openDatabase } from "./database.js";
-import { loadIssue, upsertIssue } from "./issue-store.js";
+import { loadIssue, observeIssue, upsertIssue } from "./issue-store.js";
 
 const directories: string[] = [];
 
@@ -68,6 +68,72 @@ describe("issue repository", () => {
       issue: { identifier: "WS-1", state: "In Progress" },
       providerRevision: "provider-revision-2",
     });
+    await opened.close();
+  });
+
+  it("atomically opens a baseline and records only observed external lane changes", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "symphony-issue-observation-"));
+    directories.push(directory);
+    const opened = openDatabase(path.join(directory, "symphony.sqlite3"));
+    await applyMigrations(opened.database);
+
+    await expect(
+      observeIssue(opened.database, {
+        issue,
+        observedAt: "2026-07-13T10:02:00Z",
+        providerRevision: "provider-revision-1",
+        transitionId: "stage-baseline",
+      }),
+    ).resolves.toEqual({ firstObservation: true, laneChanged: false });
+    await expect(
+      observeIssue(opened.database, {
+        issue: { ...issue, title: "Updated title" },
+        observedAt: "2026-07-13T10:02:30Z",
+        providerRevision: "provider-revision-2",
+        transitionId: "stage-unused",
+      }),
+    ).resolves.toEqual({ firstObservation: false, laneChanged: false });
+    await expect(
+      observeIssue(opened.database, {
+        issue: { ...issue, state: "Human", updated_at: "2026-07-13T10:03:00Z" },
+        observedAt: "2026-07-13T10:03:00Z",
+        providerRevision: "provider-revision-3",
+        transitionId: "stage-human",
+      }),
+    ).resolves.toEqual({ firstObservation: false, laneChanged: true });
+
+    expect(
+      opened.sqlite
+        .prepare(
+          `select id, from_stage, to_stage, attempt_id, entered_at, exited_at,
+                  duration_ms, timestamp_source, confirmed_external_revision
+           from stage_transitions order by rowid`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        attempt_id: null,
+        confirmed_external_revision: null,
+        duration_ms: 60_000,
+        entered_at: "2026-07-13T10:02:00Z",
+        exited_at: "2026-07-13T10:03:00Z",
+        from_stage: null,
+        id: "stage-baseline",
+        timestamp_source: "observed_estimate",
+        to_stage: "Todo",
+      },
+      {
+        attempt_id: null,
+        confirmed_external_revision: "provider-revision-3",
+        duration_ms: null,
+        entered_at: "2026-07-13T10:03:00Z",
+        exited_at: null,
+        from_stage: "Todo",
+        id: "stage-human",
+        timestamp_source: "observed_estimate",
+        to_stage: "Human",
+      },
+    ]);
     await opened.close();
   });
 });

@@ -18,6 +18,7 @@ import {
   loadAcknowledgedCandidateHashes,
   loadActiveOverrides,
   loadLatestConfigurationSnapshot,
+  loadLatestHandoffForAttempt,
   type OpenedDatabase,
   openDatabase,
   readControlState,
@@ -241,9 +242,7 @@ export async function startProductionService(input: ProductionServiceInput) {
       await recoverLinuxStartupState({
         completedAt: now(),
         database: opened.database,
-        async loadLatestHandoff(attemptId) {
-          throw new Error(`recovery.handoff_missing:${attemptId}`);
-        },
+        loadLatestHandoff: (attemptId) => loadLatestHandoffForAttempt(opened.database, attemptId),
         quarantineId: nextServiceRunId,
         serviceRunId: nextServiceRunId,
         terminalResultId: (attemptId) => `interrupted:${attemptId}:${nextServiceRunId}`,

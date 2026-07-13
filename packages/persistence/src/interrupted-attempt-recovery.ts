@@ -1,4 +1,4 @@
-import type { Handoff } from "@symphony/contracts";
+import { type Handoff, isHandoff } from "@symphony/contracts";
 import { type Kysely, sql } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
@@ -48,6 +48,28 @@ interface InterruptedAttemptRow {
   process_id: number | null;
 }
 
+interface AttemptWorkRow {
+  attempt_number: number;
+  work_ref_id: string;
+  work_ref_kind: "issue" | "system_job";
+}
+
+interface HandoffPayloadRow {
+  payload_json: string;
+}
+
+interface IssueHandoffRow {
+  acceptance_criteria_json: string;
+  provider_revision: string;
+  title: string;
+}
+
+interface SystemJobHandoffRow {
+  acceptance_criteria_json: string;
+  config_snapshot_id: string;
+  goal: string;
+}
+
 export interface InterruptedAttempt {
   attemptId: string;
   processGroupId: number | null;
@@ -69,6 +91,73 @@ export async function listInterruptedAttempts(
     processGroupId: row.process_group_id,
     processId: row.process_id,
   }));
+}
+
+export async function loadLatestHandoffForAttempt(
+  database: Kysely<DatabaseSchema>,
+  attemptId: string,
+): Promise<Handoff> {
+  const attempts = await sql<AttemptWorkRow>`
+    select work_ref_kind, work_ref_id, attempt_number
+    from attempts where id = ${attemptId}
+  `.execute(database);
+  const attempt = attempts.rows[0];
+  if (!attempt) throw new Error(`recovery.attempt_not_found:${attemptId}`);
+
+  const prior = await sql<HandoffPayloadRow>`
+    select terminal_results.payload_json
+    from attempts prior
+    join terminal_results on terminal_results.attempt_id = prior.id
+    where prior.work_ref_kind = ${attempt.work_ref_kind}
+      and prior.work_ref_id = ${attempt.work_ref_id}
+      and prior.attempt_number < ${attempt.attempt_number}
+      and json_type(terminal_results.payload_json, '$.handoff') = 'object'
+    order by prior.attempt_number desc, terminal_results.created_at desc
+    limit 1
+  `.execute(database);
+  const payload = prior.rows[0];
+  if (payload) {
+    const parsed = JSON.parse(payload.payload_json) as { handoff?: unknown };
+    if (!isHandoff(parsed.handoff)) {
+      throw new Error(`recovery.invalid_handoff:${attemptId}`);
+    }
+    return parsed.handoff;
+  }
+
+  const openItems = ["Resume work from the durable workspace after process interruption"];
+  if (attempt.work_ref_kind === "issue") {
+    const issues = await sql<IssueHandoffRow>`
+      select title, acceptance_criteria_json, provider_revision
+      from issues where id = ${attempt.work_ref_id}
+    `.execute(database);
+    const issue = issues.rows[0];
+    if (!issue) throw new Error(`recovery.issue_snapshot_missing:${attempt.work_ref_id}`);
+    return {
+      acceptance_criteria: parseCriteria(issue.acceptance_criteria_json, attemptId),
+      commands: [],
+      decisions_fixed: [],
+      files_changed: [],
+      goal: issue.title,
+      open_items: openItems,
+      revision: issue.provider_revision,
+    };
+  }
+
+  const jobs = await sql<SystemJobHandoffRow>`
+    select goal, acceptance_criteria_json, config_snapshot_id
+    from system_jobs where id = ${attempt.work_ref_id}
+  `.execute(database);
+  const job = jobs.rows[0];
+  if (!job) throw new Error(`recovery.system_job_missing:${attempt.work_ref_id}`);
+  return {
+    acceptance_criteria: parseCriteria(job.acceptance_criteria_json, attemptId),
+    commands: [],
+    decisions_fixed: [],
+    files_changed: [],
+    goal: job.goal,
+    open_items: openItems,
+    revision: job.config_snapshot_id,
+  };
 }
 
 export async function markLiveSessionOwnershipVerified(
@@ -184,4 +273,15 @@ export async function recoverInterruptedAttempt(
       workRef: { id: attempt.work_ref_id, kind: attempt.work_ref_kind },
     });
   });
+}
+
+function parseCriteria(value: string, attemptId: string): string[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some((criterion) => typeof criterion !== "string" || criterion.length === 0)
+  ) {
+    throw new Error(`recovery.invalid_acceptance_criteria:${attemptId}`);
+  }
+  return parsed;
 }

@@ -74,6 +74,10 @@ export const HandoffSchema = Type.Object(
 );
 export type Handoff = Static<typeof HandoffSchema>;
 
+export function isHandoff(value: unknown): value is Handoff {
+  return Value.Check(HandoffSchema, value);
+}
+
 export const ActionRequestSchema = Type.Union([
   Type.Object(
     { action: Type.Literal("update_issue_lane"), lane: NonEmptyString, reason: NonEmptyString },
