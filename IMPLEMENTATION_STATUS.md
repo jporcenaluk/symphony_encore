@@ -24,7 +24,7 @@ command. A green but narrower test does not complete a broader item.
 | S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
-| S06 | Workspace isolation, hooks, and independent verification | In progress | Realpath/symlink containment, isolated writable state, environment scrubbing, Linux/WSL mount boundary, and timeout process-group termination pass; macOS/hooks/full lifecycle pending |
+| S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, sandbox, process timeout, non-login hook semantics, independent verification, durable evidence, and exact passing lookup pass; macOS/full lifecycle pending |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
@@ -48,7 +48,7 @@ command. A green but narrower test does not complete a broader item.
 | T03 | React/Vite/TanStack/shadcn/Tailwind operator UI | Not started | Production build and Playwright suite |
 | T04 | Fastify, TypeBox, OpenAPI, generated client, and SSE cursors | Not started | Contract drift and reconnect tests |
 | T05 | Pure domain transitions and transactional orchestration | In progress | Pure policies plus atomic dispatch, closure, authorized intent/receipt, and receipt-confirmed stage transitions pass |
-| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Five checksummed migrations cover all durable entities; WAL, atomic core transactions, configuration history, and issue restart round-trip pass |
+| T06 | SQLite WAL, better-sqlite3, Kysely, immutable migrations | In progress | Six checksummed migrations cover all durable entities and content-addressed evidence; WAL, atomic core transactions, configuration history, and restart round-trips pass |
 | T07 | Pino structured logging and redaction | Not started | Log-schema and secret-redaction tests |
 | T08 | Vitest, Playwright, Biome, TypeScript, real boundary tests | In progress | Root and package-local Vitest, Biome, TypeScript, and generated-contract drift checks pass; Playwright and boundary suites pending |
 | T09 | Linux, macOS, WSL development commands and signal handling | In progress | Linux/WSL sandbox integration passes locally; macOS, CI matrix, signal, and documented WSL smoke test pending |
@@ -140,3 +140,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Workspace containment, credential scrubbing, Linux/WSL write boundary |
 | 2026-07-13 | working tree | `make verify-fast` | 167 tests; lint, generated-contract drift, and typecheck passed | Sandboxed timeout and process-group termination |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Sandboxed timeout and process-group termination |
+| 2026-07-13 | working tree | `make verify-fast` | 176 tests; lint, generated-contract drift, and typecheck passed | Non-login hooks, independent verifier, durable bounded evidence, exact guard lookup |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Non-login hooks, independent verifier, durable bounded evidence, exact guard lookup |

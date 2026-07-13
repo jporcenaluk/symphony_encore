@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
 const SENSITIVE_ENVIRONMENT_NAME =
@@ -37,6 +37,15 @@ export async function resolveAssignedWorkspace(
     throw new Error("workspace.outside_root");
   }
   return resolvedWorkspace;
+}
+
+export async function prepareWorkerStateDirectories(workspace: string): Promise<void> {
+  await mkdir(workspace, { recursive: true });
+  await Promise.all(
+    [".cache", ".codex", ".config", ".home", ".local/share", ".local/state", ".tmp"].map(
+      (directory) => mkdir(path.join(workspace, directory), { recursive: true }),
+    ),
+  );
 }
 
 export function buildScrubbedWorkerEnvironment(

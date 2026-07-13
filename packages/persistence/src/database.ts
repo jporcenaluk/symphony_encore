@@ -19,6 +19,7 @@ export interface DatabaseSchema {
   config_snapshots: Record<string, unknown>;
   configuration_acknowledgments: Record<string, unknown>;
   configuration_overrides: Record<string, unknown>;
+  evidence_blobs: Record<string, unknown>;
   guard_decisions: Record<string, unknown>;
   issues: Record<string, unknown>;
   lessons: Record<string, unknown>;
@@ -698,12 +699,31 @@ const durableDomainRecordsMigration: RepositoryMigration = {
   version: 5,
 };
 
+const verificationEvidenceMigration: RepositoryMigration = {
+  checksum: "sha256:fd6857c276cdf3cd13512a7f1ba7e6d58b7d3971ab151bf1f070036f91003ef7",
+  name: "verification_evidence_blobs",
+  async up(database) {
+    await sql`
+      create table evidence_blobs (
+        id text primary key,
+        media_type text not null,
+        byte_length integer not null check (byte_length >= 0),
+        content blob not null,
+        created_at text not null,
+        check (length(content) = byte_length)
+      ) strict
+    `.execute(database);
+  },
+  version: 6,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
   configurationOverrideMigration,
   configurationAcknowledgmentMigration,
   durableDomainRecordsMigration,
+  verificationEvidenceMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

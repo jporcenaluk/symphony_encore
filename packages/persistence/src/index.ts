@@ -12,3 +12,4 @@ export * from "./lane-mutation-receipt.js";
 export * from "./service-run-store.js";
 export * from "./side-effect-store.js";
 export * from "./stage-transition.js";
+export * from "./verification-store.js";

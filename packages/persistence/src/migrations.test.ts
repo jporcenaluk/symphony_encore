@@ -40,6 +40,7 @@ describe("production migrations", () => {
       { name: "configuration_overrides_and_operator_audit", version: 3 },
       { name: "exact_configuration_acknowledgments", version: 4 },
       { name: "durable_domain_records", version: 5 },
+      { name: "verification_evidence_blobs", version: 6 },
     ]);
   });
 
@@ -55,6 +56,7 @@ describe("production migrations", () => {
       expect.arrayContaining([
         "agent_approval_requests",
         "budget_adjustments",
+        "evidence_blobs",
         "guard_decisions",
         "issues",
         "lessons",
