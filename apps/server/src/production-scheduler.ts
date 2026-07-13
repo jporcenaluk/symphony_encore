@@ -45,6 +45,7 @@ import {
   type ConfigurationSnapshot,
   commitOrdinaryReviewSet,
   countRunningClaims,
+  hasActiveRepositoryMerge,
   isImplementationRetryReason,
   isWorkClaimed,
   loadClaimRecoveryState,
@@ -55,6 +56,8 @@ import {
   loadPendingImplementationRetry,
   loadPendingIndependentVerification,
   loadPendingIntegrativeReview,
+  loadPendingMergeQueue,
+  loadPendingPostMerge,
   loadPendingPullRequestGate,
   loadPendingRepositoryPublication,
   loadPendingReviewCoordination,
@@ -90,6 +93,7 @@ import {
   planSpecialistReviewAttempt,
 } from "./integrative-review-attempt-planner.js";
 import { collectIntegrativeReviewContext } from "./integrative-review-evidence.js";
+import { executeMergeQueueLanding, executePostMergeVerification } from "./merge-queue.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
 import { runPullRequestHygiene } from "./pull-request-hygiene.js";
@@ -231,6 +235,7 @@ export function createProductionScheduler(input: {
       const recoveryNow = new Date().toISOString();
       await promoteDueRetryClaims(input.database, recoveryNow);
       const recoveryState = await loadClaimRecoveryState(input.database, recoveryNow);
+      const repositoryMergeActive = await hasActiveRepositoryMerge(input.database, repositoryName);
       for (const claim of recoveryState.ready) {
         if (!safety.canDispatch()) break;
         const isReviewCoordination = claim.reason === "review_coordination_required";
@@ -239,11 +244,18 @@ export function createProductionScheduler(input: {
         const isPullRequestHygiene =
           claim.reason === "pull_request_hygiene_required" &&
           repositoryHostingAdapter !== undefined;
+        const isMergeQueue =
+          claim.reason === "merge_queue_required" && repositoryHostingAdapter !== undefined;
+        const isPostMerge =
+          claim.reason === "post_merge_verification_required" &&
+          repositoryHostingAdapter !== undefined;
         if (
           availableSlots < 1 &&
           !isReviewCoordination &&
           !isRepositoryPublication &&
-          !isPullRequestHygiene
+          !isPullRequestHygiene &&
+          !isMergeQueue &&
+          !isPostMerge
         )
           continue;
         const isPlanReview = claim.reason === "plan_review_required";
@@ -266,6 +278,8 @@ export function createProductionScheduler(input: {
             !isReviewCoordination &&
             !isRepositoryPublication &&
             !isPullRequestHygiene &&
+            !isMergeQueue &&
+            !isPostMerge &&
             !isSpecialistReview &&
             !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
@@ -336,6 +350,60 @@ export function createProductionScheduler(input: {
               workRef: { id: issueId, kind: "issue" },
             });
             continue;
+          }
+          if (isMergeQueue) {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            if (repositoryMergeActive) continue;
+            const target = await loadPendingMergeQueue(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.merge_queue_target_missing:${issueId}`);
+            await executeMergeQueueLanding({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              landingPolicy: "squash",
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              repository: repositoryHostingAdapter,
+              requiredChecks: stringList(values, "review.required_checks"),
+              safety,
+              serviceRunId: input.serviceRunId,
+              target,
+              workRef: { id: issueId, kind: "issue" },
+            });
+            break;
+          }
+          if (isPostMerge) {
+            if (!repositoryHostingAdapter) throw new Error("scheduler.repository_adapter_missing");
+            const target = await loadPendingPostMerge(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!target) throw new Error(`scheduler.post_merge_target_missing:${issueId}`);
+            await executePostMergeVerification({
+              acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
+              database: input.database,
+              expiresAt: new Date(
+                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+              ).toISOString(),
+              newId: randomUUID,
+              now: () => new Date().toISOString(),
+              pollIntervalMs: numberValue(values, "polling.interval_ms"),
+              repository: repositoryHostingAdapter,
+              requiredChecks: stringList(values, "review.required_checks"),
+              safety,
+              serviceRunId: input.serviceRunId,
+              settleTimeoutMs: numberValue(values, "review.settle_timeout_ms"),
+              target,
+              tracker,
+              workRef: { id: issueId, kind: "issue" },
+            });
+            break;
           }
           if (isReviewCoordination) {
             const pending = await loadPendingReviewCoordination(input.database, {

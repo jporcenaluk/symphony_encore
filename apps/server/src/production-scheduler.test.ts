@@ -189,6 +189,17 @@ describe("production reconciliation scheduler", () => {
         ) values ('run-1', '0.0.0', 'host-1', 't0', 'ready', 'config-1', 'startup')`,
       )
       .run();
+    opened.sqlite
+      .prepare(
+        `insert into operators (
+          id, auth_subject, capabilities_json, tracker_login, status,
+          version, created_at, updated_at
+        ) values (
+          'operator-1', 'subject-1', '["merge_queue.write"]', 'maintainer',
+          'active', 1, 't0', 't0'
+        )`,
+      )
+      .run();
     const outcome = {
       actions_requested: [],
       confusions: [],
@@ -365,7 +376,22 @@ describe("production reconciliation scheduler", () => {
         number: 42,
         url: "https://github.com/owner/repo/pull/42",
       })),
-      fetchPostMergeStatus: vi.fn(),
+      fetchPostMergeStatus: vi.fn(async () => ({
+        base_ref: "main",
+        checks: [],
+        head_sha: "fedcba9",
+        is_draft: false,
+        mergeable: true,
+        observed_base_sha: "fedcba9",
+        post_merge_checks: [],
+        pr_number: 42,
+        pr_state: "merged" as const,
+        pr_url: "https://github.com/owner/repo/pull/42",
+        required_check_source: "configured" as const,
+        review_decision: "none" as const,
+        reviews: [],
+        unresolved_threads: [],
+      })),
       fetchPullRequestSnapshot: vi.fn(async () => ({
         base_ref: "main",
         checks: [],
@@ -378,11 +404,26 @@ describe("production reconciliation scheduler", () => {
         pr_state: "open" as const,
         pr_url: "https://github.com/owner/repo/pull/42",
         required_check_source: "union" as const,
-        review_decision: "none" as const,
-        reviews: [],
+        review_decision: "approved" as const,
+        reviews: [
+          {
+            author: "maintainer",
+            commit_sha: "abc1234",
+            state: "approved",
+            submitted_at: "2026-07-13T10:00:08.000Z",
+          },
+        ],
         unresolved_threads: [],
       })),
-      mergePullRequest: vi.fn(),
+      mergePullRequest: vi.fn(async () => ({
+        mergeSha: "fedcba9",
+        mutation: {
+          providerRequestId: "request-merge",
+          responsePayloadHash: "sha256:merge",
+          result: "merged",
+          resultRevision: "fedcba9",
+        },
+      })),
       publishBranch: vi.fn(async () => ({
         branch: "symphony/org-9",
         headSha: "abc1234",
@@ -489,6 +530,20 @@ describe("production reconciliation scheduler", () => {
         reason: "merge_queue_required",
       }),
     );
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "RetryQueued",
+        reason: "post_merge_verification_required",
+      }),
+    );
+    opened.sqlite.prepare("update claims set retry_due_at = '2000-01-01T00:00:00.000Z'").run();
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select count(*) as count from claims").get()).toEqual({
+        count: 0,
+      }),
+    );
     await scheduler.close();
 
     expect(logger.warn).not.toHaveBeenCalled();
@@ -505,10 +560,16 @@ describe("production reconciliation scheduler", () => {
       { role: "implementation", status: "closed" },
       { role: "integrative_review", status: "closed" },
     ]);
-    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
-      mode: "Ready",
-      reason: "merge_queue_required",
-    });
+    expect(opened.sqlite.prepare("select state from issues").get()).toEqual({ state: "Done" });
+    expect(opened.sqlite.prepare("select state from repository_merge_queue_entries").get()).toEqual(
+      { state: "completed" },
+    );
+    expect(repositoryHostingAdapter.mergePullRequest).toHaveBeenCalledWith(
+      { issue_id: candidate.id },
+      "abc1234",
+      "squash",
+      expect.any(Object),
+    );
     expect(
       opened.sqlite.prepare("select target_revision, result from verification_records").get(),
     ).toEqual({

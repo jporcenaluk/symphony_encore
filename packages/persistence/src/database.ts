@@ -38,6 +38,7 @@ export interface DatabaseSchema {
   plans: Record<string, unknown>;
   pull_request_gate_states: Record<string, unknown>;
   repository_links: Record<string, unknown>;
+  repository_merge_queue_entries: Record<string, unknown>;
   retry_entries: Record<string, unknown>;
   review_records: Record<string, unknown>;
   review_sets: Record<string, unknown>;
@@ -898,6 +899,42 @@ const pullRequestGateStateMigration: RepositoryMigration = {
   version: 13,
 };
 
+const repositoryMergeQueueStateMigration: RepositoryMigration = {
+  checksum: "sha256:2f01bb5e4c93dd7d9d07a48771c71336b90e893ea8ebc8f16f55e11853497d30",
+  name: "repository_merge_queue_state",
+  async up(database) {
+    await sql`
+      create table repository_merge_queue_entries (
+        work_ref_kind text not null check (work_ref_kind in ('issue', 'system_job')),
+        work_ref_id text not null,
+        repository text not null,
+        state text not null check (state in ('landing', 'post_merge', 'failed', 'completed')),
+        head_sha text not null check (
+          length(head_sha) between 7 and 64 and head_sha not glob '*[^0-9A-Fa-f]*'
+        ),
+        base_sha text not null check (
+          length(base_sha) between 7 and 64 and base_sha not glob '*[^0-9A-Fa-f]*'
+        ),
+        merge_sha text check (
+          merge_sha is null or (
+            length(merge_sha) between 7 and 64 and merge_sha not glob '*[^0-9A-Fa-f]*'
+          )
+        ),
+        created_at text not null,
+        updated_at text not null,
+        primary key (work_ref_kind, work_ref_id),
+        check ((state = 'landing' and merge_sha is null) or (state != 'landing' and merge_sha is not null))
+      ) strict
+    `.execute(database);
+    await sql`
+      create unique index repository_one_active_merge
+      on repository_merge_queue_entries (repository)
+      where state in ('landing', 'post_merge')
+    `.execute(database);
+  },
+  version: 14,
+};
+
 export const CORE_MIGRATIONS = [
   coreControlPlaneMigration,
   stageTransitionMigration,
@@ -912,6 +949,7 @@ export const CORE_MIGRATIONS = [
   workspaceCheckoutMigration,
   workspaceCheckoutBaseRefMigration,
   pullRequestGateStateMigration,
+  repositoryMergeQueueStateMigration,
 ] as const satisfies readonly RepositoryMigration[];
 
 export function openDatabase(filename: string): OpenedDatabase {

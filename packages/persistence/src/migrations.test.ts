@@ -48,6 +48,7 @@ describe("production migrations", () => {
       { name: "workspace_checkout_provenance", version: 11 },
       { name: "workspace_checkout_base_ref", version: 12 },
       { name: "pull_request_gate_state", version: 13 },
+      { name: "repository_merge_queue_state", version: 14 },
     ]);
   });
 
@@ -80,6 +81,7 @@ describe("production migrations", () => {
         "plans",
         "pull_request_gate_states",
         "repository_links",
+        "repository_merge_queue_entries",
         "retry_entries",
         "review_records",
         "review_sets",
@@ -138,5 +140,41 @@ describe("production migrations", () => {
         "duplicate",
       ),
     ).toThrow(/UNIQUE constraint failed/u);
+  });
+
+  it("serializes active landing and post-merge work per repository", async () => {
+    const opened = await temporaryDatabase();
+    await applyMigrations(opened.database);
+    const insert = opened.sqlite.prepare(`
+      insert into repository_merge_queue_entries (
+        work_ref_kind, work_ref_id, repository, state, head_sha, base_sha,
+        merge_sha, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("issue", "issue-1", "owner/repo", "landing", "def5678", "abc1234", null, "t0", "t0");
+    expect(() =>
+      insert.run(
+        "issue",
+        "issue-2",
+        "owner/repo",
+        "post_merge",
+        "1234567",
+        "7654321",
+        "fedcba9",
+        "t0",
+        "t0",
+      ),
+    ).toThrow();
+    insert.run(
+      "issue",
+      "issue-2",
+      "other/repo",
+      "post_merge",
+      "1234567",
+      "7654321",
+      "fedcba9",
+      "t0",
+      "t0",
+    );
   });
 });
