@@ -1,3360 +1,1812 @@
 # Symphony Encore Service Specification
 
-Status: Draft v2 (language-agnostic core with implementation profiles)
-
-Purpose: Define a durable, cost-aware service that orchestrates coding agents to complete project
-work with explicit evidence, bounded autonomy, and independent review.
-
-This specification derives from `openai/symphony` and the extended `jporcenaluk/symphony` fork. It
-keeps portable behavior normative and marks Codex, GitHub SDLC, and TypeScript details as profiles.
-An implementation can replace any profile without changing the core orchestration contract.
-
-## Normative Language
-
-The key words `MUST`, `MUST NOT`, `REQUIRED`, `SHOULD`, `SHOULD NOT`, `RECOMMENDED`, `MAY`, and
-`OPTIONAL` in this document are to be interpreted as described in RFC 2119.
-
-`Implementation-defined` means the behavior is part of the implementation contract, but this
-specification does not prescribe one universal policy. Implementations MUST document the selected
-behavior.
-
-## 1. Problem Statement
-
-Symphony is a long-running automation service that continuously reads work from an issue tracker,
-creates an isolated workspace for each issue, and runs a
-coding agent session for that issue inside the workspace.
-
-The service solves four operational problems:
-
-- It turns issue execution into a repeatable daemon workflow instead of manual scripts.
-- It isolates agent execution in per-issue workspaces so agent commands run only inside per-issue
-  workspace directories.
-- It keeps the workflow policy in-repo (`WORKFLOW.md`) so teams version the agent prompt and runtime
-  settings with their code.
-- It provides enough observability to operate and debug multiple concurrent agent runs.
-
-Implementations are expected to document their trust and safety posture explicitly. This
-specification does not require a single approval, sandbox, or operator-confirmation policy; some
-implementations target trusted environments with a high-trust configuration, while others require
-stricter approvals or sandboxing.
-
-Important boundary:
-
-- Symphony Encore is a scheduler, durable control plane, policy enforcer, and agent runner.
-- The orchestrator owns deterministic workflow state and guarded side effects. Agents propose typed
-  outcomes and actions; policy code validates and applies them through narrow adapters.
-- Raw tracker, repository-hosting, or control-plane credentials SHOULD NOT be exposed to agents.
-  Broad pass-through tools are compatibility extensions, disabled by default.
-- A successful run can end at a workflow-defined handoff state (for example `Risk Review`), not
-  necessarily `Done`.
-
-## 2. Goals and Non-Goals
-
-### 2.1 Goals
-
-- Poll the issue tracker on a fixed cadence and dispatch work with bounded concurrency.
-- Maintain a single authoritative orchestrator state for dispatch, retries, and reconciliation.
-- Create deterministic per-issue workspaces and preserve them across runs.
-- Stop active runs when issue state changes make them ineligible.
-- Recover from transient failures with exponential backoff.
-- Load runtime behavior from a repository-owned `WORKFLOW.md` contract.
-- Expose operator-visible observability (at minimum structured logs).
-- Persist claims, attempts, retries, outcomes, configuration snapshots, and guard decisions so a
-  process restart does not erase control-plane truth.
-- Match model capability and reasoning effort to task phase and risk while preserving deterministic
-  quality floors.
-- Require independent integrative review and add specialist reviewers only when risk warrants their
-  cost.
-- Make every retry, escalation, side effect, and review decision bounded, attributable, and
-  observable.
-
-### 2.2 Non-Goals
-
-- Rich web UI or multi-tenant control plane.
-- Prescribing a specific dashboard or terminal UI implementation.
-- General-purpose workflow engine or distributed job scheduler.
-- Mandating one universal business process for how to edit tickets, PRs, or comments. Core Symphony
-  may be deployed with a read-only tracker adapter; when writes are enabled, they follow the guarded
-  mutation contract in Section 11.6.
-- Requiring a distributed workflow engine for a single-host deployment.
-- Treating more agents, more tokens, or a larger model as substitutes for tests and other objective
-  evidence.
-- Mandating a single default approval, sandbox, or operator-confirmation posture for all
-  implementations.
-
-### 2.3 Conformance and Profiles
-
-The document has four separable contracts:
-
-- `Core Conformance`: durable orchestration, workspaces, outcomes, retries, adaptive compute,
-  review coordination, safety, and observability. It is language-, tracker-, and provider-neutral.
-- `Agent Profile`: a versioned adapter for a coding-agent protocol. Section 10 defines the Codex
-  profile used by the first Encore implementation.
-- `Workflow Profile`: tracker and delivery policy. Sections 11.2 and 11.3 define Linear and GitHub
-  tracker profiles; Section 12.5 defines the GitHub SDLC profile.
-- `Implementation Profile`: a concrete language and process topology. Appendix B defines the
-  recommended TypeScript profile.
-
-Conformance reports MUST name the core version and every selected profile. A profile can add
-requirements but cannot weaken a core safety, durability, outcome, or review requirement.
-
-## 3. System Overview
-
-### 3.1 Main Components
-
-1. `Workflow Loader`
-   - Reads `WORKFLOW.md`.
-   - Parses YAML front matter and prompt body.
-   - Returns `{config, prompt_template}`.
-
-2. `Config Layer`
-   - Exposes typed getters for workflow config values.
-   - Applies defaults and environment variable indirection.
-   - Performs validation used by the orchestrator before dispatch.
-
-3. `Issue Tracker Client`
-   - Fetches candidate issues in active states.
-   - Fetches current states for specific issue IDs (reconciliation).
-   - Fetches terminal-state issues during startup cleanup.
-   - Normalizes tracker payloads into a stable issue model.
-
-4. `Orchestrator`
-   - Owns the poll tick.
-   - Is the sole writer of durable orchestration state.
-   - Decides which issues to dispatch, retry, stop, or release.
-   - Tracks session metrics and retry queue state.
-
-5. `Durable State Store`
-   - Stores leases, attempts, retries, outcomes, configuration snapshots, and guard decisions.
-   - Supports atomic compare-and-set or transactional claim transitions.
-   - Allows restart reconciliation without pretending a terminated agent process is still live.
-
-6. `Workspace Manager`
-   - Maps issue identifiers to workspace paths.
-   - Ensures per-issue workspace directories exist.
-   - Runs workspace lifecycle hooks.
-   - Cleans workspaces for terminal issues.
-
-7. `Agent Runner`
-   - Creates workspace.
-   - Builds prompt from issue + workflow template.
-   - Launches the coding agent app-server client.
-   - Streams agent updates and a required structured outcome back to the orchestrator.
-   - Enforces protocol compatibility, backpressure, timeouts, and process-tree cleanup.
-
-8. `Review Coordinator`
-   - Runs deterministic checks before model review.
-   - Requires one full-change integrative review.
-   - Fans out focused specialist reviews only when risk rules trigger them.
-   - Unifies evidence-backed findings without majority voting.
-
-9. `Status Surface` (OPTIONAL)
-   - Presents human-readable runtime status (for example terminal output, dashboard, or other
-     operator-facing view).
-
-10. `Logging`
-   - Emits structured runtime logs to one or more configured sinks.
-
-### 3.2 Abstraction Levels
-
-Symphony is easiest to port when kept in these layers:
-
-1. `Policy Layer` (repo-defined)
-   - `WORKFLOW.md` prompt body.
-   - Team-specific rules for ticket handling, validation, and handoff.
-
-2. `Configuration Layer` (typed getters)
-   - Parses front matter into typed runtime settings.
-   - Handles defaults, environment tokens, and path normalization.
-
-3. `Coordination Layer` (orchestrator)
-   - Polling loop, issue eligibility, concurrency, retries, reconciliation.
-
-4. `Execution Layer` (workspace + agent subprocess)
-   - Filesystem lifecycle, workspace preparation, coding-agent protocol.
-
-5. `Integration Layer` (tracker and agent adapters)
-   - API calls, normalization, guarded mutations, and versioned protocol compatibility.
-
-6. `Observability Layer` (logs + OPTIONAL status surface)
-   - Operator visibility into orchestrator and agent behavior.
-
-### 3.3 External Dependencies
-
-- Issue tracker API (Linear for `tracker.kind: linear`; GitHub Issues + GitHub Projects v2 for
-  `tracker.kind: github`).
-- Local filesystem for workspaces and logs.
-- A local durable transactional store. The baseline profile uses SQLite on local disk with the
-  worker process as its sole writer.
-- OPTIONAL workspace population tooling (for example Git CLI, if used).
-- Coding-agent executable that supports the targeted Codex app-server mode.
-- Host environment authentication for the issue tracker and coding agent.
-
-## 4. Core Domain Model
-
-### 4.1 Entities
-
-#### 4.1.1 Issue
-
-Normalized issue record used by orchestration, prompt rendering, and observability output.
-
-Fields:
-
-- `id` (string)
-  - Stable tracker-internal ID.
-- `identifier` (string)
-  - Human-readable ticket key (examples: `ABC-123`, `#42`, or `owner/repo#42`).
-- `number` (integer or null)
-  - Tracker issue number when the tracker exposes one.
-- `title` (string)
-- `description` (string or null)
-- `priority` (integer or null)
-  - Lower numbers are higher priority in dispatch sorting.
-- `priority_name` (string or null)
-  - Tracker priority label/value when the tracker exposes a named priority.
-- `state` (string)
-  - Current tracker state name.
-- `tracker_item_id` (string or null)
-  - Project-board item ID when the tracker separates issue ID from board item ID.
-- `branch_name` (string or null)
-  - Tracker-provided branch metadata if available.
-- `url` (string or null)
-- `labels` (list of strings)
-  - Normalized to lowercase.
-- `assignee_id` (string or null)
-  - Tracker assignee identifier used for worker routing, when configured.
-- `repo_owner` (string or null)
-- `repo_name` (string or null)
-- `blocked_by` (list of blocker refs)
-  - Each blocker ref contains:
-    - `id` (string or null)
-    - `identifier` (string or null)
-    - `state` (string or null)
-    - `url` (string or null)
-    - `repo_owner` (string or null)
-    - `repo_name` (string or null)
-- `created_at` (timestamp or null)
-- `updated_at` (timestamp or null)
-
-#### 4.1.2 Workflow Definition
-
-Parsed `WORKFLOW.md` payload:
-
-- `config` (map)
-  - YAML front matter root object.
-- `prompt_template` (string)
-  - Markdown body after front matter, trimmed.
-
-#### 4.1.3 Service Config (Typed View)
-
-Typed runtime values derived from `WorkflowDefinition.config` plus environment resolution.
-
-Examples:
-
-- poll interval
-- workspace root
-- active and terminal issue states
-- concurrency limits
-- coding-agent executable/args/timeouts
-- workspace hooks
-
-#### 4.1.4 Workspace
-
-Filesystem workspace assigned to one issue identifier.
-
-Fields (logical):
-
-- `path` (absolute workspace path)
-- `workspace_key` (sanitized issue identifier)
-- `created_now` (boolean, used to gate `after_create` hook)
-
-#### 4.1.5 Run Attempt
-
-One execution attempt for one issue.
-
-Fields (logical):
-
-- `issue_id`
-- `issue_identifier`
-- `attempt` (integer or null, `null` for first run, `>=1` for retries/continuation)
-- `workspace_path`
-- `started_at`
-- `status`
-- `config_snapshot_id`
-- `compute_profile` (logical profile selected for this attempt)
-- `model` and `reasoning_effort` (resolved provider values)
-- `routing_reasons` (ordered policy rule identifiers)
-- `outcome` (structured outcome or null while running)
-- `failure_class` (normalized retry class or null)
-- `error` (OPTIONAL)
-
-#### 4.1.6 Live Session (Agent Session Metadata)
-
-State tracked while a coding-agent subprocess is running.
-
-Fields:
-
-- `session_id` (string, `<thread_id>-<turn_id>`)
-- `thread_id` (string)
-- `turn_id` (string)
-- `codex_app_server_pid` (string or null)
-- `last_codex_event` (string/enum or null)
-- `last_codex_timestamp` (timestamp or null)
-- `last_codex_message` (summarized payload)
-- `codex_input_tokens` (integer)
-- `codex_output_tokens` (integer)
-- `codex_total_tokens` (integer)
-- `last_reported_input_tokens` (integer)
-- `last_reported_output_tokens` (integer)
-- `last_reported_total_tokens` (integer)
-- `turn_count` (integer)
-  - Number of coding-agent turns started within the current worker lifetime.
-- `adapter_version` (string)
-- `protocol_schema_hash` (string or null)
-- `compute_profile`, `model`, and `reasoning_effort`
-
-#### 4.1.7 Retry Entry
-
-Scheduled retry state for an issue.
-
-Fields:
-
-- `issue_id`
-- `identifier` (best-effort human ID for status surfaces/logs)
-- `attempt` (integer, 1-based for retry queue)
-- `due_at_ms` (monotonic clock timestamp)
-- `timer_handle` (runtime-specific timer reference)
-- `error` (string or null)
-- `failure_class` (normalized retry class)
-- `max_attempts` (effective retry budget captured from the attempt's config snapshot)
-
-#### 4.1.8 Orchestrator Runtime State
-
-Single authoritative durable state owned by the orchestrator, plus ephemeral process handles and
-timers that are rebuilt during startup reconciliation.
-
-Fields:
-
-- `poll_interval_ms` (current effective poll interval)
-- `max_concurrent_agents` (current effective global concurrency limit)
-- `running` (map `issue_id -> running entry`)
-- `claimed` (durable leases for issue IDs reserved/running/retrying)
-- `blocked` (map `issue_id -> blocked entry`)
-  - Issues waiting on operator input, unavailable approvals, missing tools, missing auth, or another
-    true external blocker.
-- `retry_attempts` (map `issue_id -> RetryEntry`)
-- `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
-- `codex_totals` (aggregate tokens + runtime seconds)
-- `codex_rate_limits` (latest rate-limit snapshot from agent events)
-
-#### 4.1.9 Pull Request Readiness Snapshot
-
-Tracker implementations that can link issues to pull requests SHOULD expose a readiness snapshot.
-
-Fields:
-
-- `issue_id` (string)
-- `issue_number` (integer or null)
-- `pr_number` (integer or null)
-- `pr_url` (string or null)
-- `pr_state` (string or null)
-- `head_sha` (string or null)
-- `base_ref` (string or null)
-- `merge_state` (string or null)
-- `review_decision` (string or null)
-- `checks` (list)
-  - Each check has `name`, `status`, `conclusion`, and `url`.
-- `reviews` (list)
-  - Each review has `state`, `body`, `author`, `commit_sha`, and `submitted_at`.
-- `review_threads` (list)
-  - Each thread has `id`, `resolved`, `outdated`, `body`, `author`, `commit_sha`, and `url`.
-- `pr_comments` (list)
-- `issue_comments` (list)
-
-#### 4.1.10 Workpad
-
-A workpad is a single persistent tracker comment owned by the workflow. It is the durable handoff
-artifact for one issue.
-
-The workpad SHOULD contain:
-
-- environment stamp: `<hostname>:<absolute-workdir>@<short-sha>`
-- plan checklist
-- acceptance criteria checklist
-- validation checklist
-- proof packet
-- fresh-context correctness review result when applicable
-- guard result when Symphony routes or blocks a protected transition
-- notes and confusions
-
-Implementations that support tracker comment reads/writes MAY parse the workpad to enforce readiness
-rules. If they do, they MUST update the same comment rather than creating extra completion comments.
-
-#### 4.1.11 Configuration Snapshot
-
-An immutable, durable record of the effective configuration used by one attempt.
-
-Fields:
-
-- `id` and `created_at`
-- `workflow_source_hash`
-- `effective_config` with secret values redacted or represented by stable references
-- `prompt_template_hash`
-- `agent_adapter_version` and `protocol_schema_hash`
-
-Every attempt MUST reference exactly one snapshot. An in-flight attempt MUST NOT observe a mixture
-of old and newly reloaded settings.
-
-#### 4.1.12 Run Outcome
-
-The agent runner MUST return exactly one structured terminal outcome:
-
-- `completed`: requested work and required evidence are complete.
-- `needs_rework`: a concrete, actionable defect remains within task scope.
-- `blocked`: an external dependency, permission, service, or policy prevents progress.
-- `needs_input`: a material product or operator decision is required.
-- `no_progress`: the attempt produced no new evidence or useful state change.
-- `failed`: execution failed before a more specific outcome could be established.
-
-Fields:
-
-- `status` (one of the values above)
-- `summary` (concise factual description)
-- `evidence` (typed references to checks, files, commits, PRs, logs, or tracker artifacts)
-- `actions_requested` (typed requests for orchestrator-owned side effects)
-- `open_findings` (bounded list with severity, evidence, and suggested disposition)
-- `handoff` (facts needed by a fresh thread; MUST exclude hidden reasoning and unsupported claims)
-
-Free-form prose alone is not a conforming terminal result.
-
-#### 4.1.13 Review Plan and Review Result
-
-A review plan records the required integrative reviewer and any risk-triggered specialists. Each
-review assignment specifies its concern slice, evidence inputs, excluded inputs, compute profile,
-and budget. A review result contains a decision and evidence-backed findings. Reviewers MUST NOT
-vote on a shared verdict; the coordinator merges findings and invokes adjudication only for a
-material conflict.
-
-### 4.2 Stable Identifiers and Normalization Rules
-
-- `Issue ID`
-  - Use for tracker lookups and internal map keys.
-- `Issue Identifier`
-  - Use for human-readable logs and workspace naming.
-- `Workspace Key`
-  - Derive from `issue.identifier` by replacing any character not in `[A-Za-z0-9._-]` with `_`.
-  - Use the sanitized value for the workspace directory name.
-- `Normalized Issue State`
-  - Compare states after `lowercase`.
-- `Session ID`
-  - Compose from coding-agent `thread_id` and `turn_id` as `<thread_id>-<turn_id>`.
-
-## 5. Workflow Specification (Repository Contract)
-
-### 5.1 File Discovery and Path Resolution
-
-Workflow file path precedence:
-
-1. Explicit application/runtime setting (set by CLI startup path).
-2. Default: `WORKFLOW.md` in the current process working directory.
-
-Loader behavior:
-
-- If the file cannot be read, return `missing_workflow_file` error.
-- The workflow file is expected to be repository-owned and version-controlled.
-
-### 5.2 File Format
-
-`WORKFLOW.md` is a Markdown file with OPTIONAL YAML front matter.
-
-Design note:
-
-- `WORKFLOW.md` SHOULD be self-contained enough to describe and run different workflows (prompt,
-  runtime settings, hooks, and tracker selection/config) without requiring out-of-band
-  service-specific configuration.
-
-Parsing rules:
-
-- If file starts with `---`, parse lines until the next `---` as YAML front matter.
-- Remaining lines become the prompt body.
-- If front matter is absent, treat the entire file as prompt body and use an empty config map.
-- YAML front matter MUST decode to a map/object; non-map YAML is an error.
-- Prompt body is trimmed before use.
-
-Returned workflow object:
-
-- `config`: front matter root object (not nested under a `config` key).
-- `prompt_template`: trimmed Markdown body.
-
-### 5.3 Front Matter Schema
-
-Top-level keys:
-
-- `tracker`
-- `polling`
-- `workspace`
-- `hooks`
-- `agent`
-- `codex`
-- `readiness`
-- `observability`
-- `server`
-
-Unknown keys SHOULD be ignored for forward compatibility.
-
-Note:
-
-- The workflow front matter is extensible. Extensions MAY define additional top-level keys without
-  changing the core schema above.
-- Extensions SHOULD document their field schema, defaults, validation rules, and whether changes
-  apply dynamically or require restart.
-
-#### 5.3.1 `tracker` (object)
-
-Fields:
-
-- `kind` (string)
-  - REQUIRED for dispatch.
-  - Supported values: `linear`, `github`
-- `endpoint` (string)
-  - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
-- `api_key` (string)
-  - MAY be a literal token or `$VAR_NAME`.
-  - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
-  - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
-- `project_slug` (string)
-  - REQUIRED for dispatch when `tracker.kind == "linear"`.
-- `owner` (string)
-  - REQUIRED for dispatch when `tracker.kind == "github"`.
-  - GitHub user or organization that owns the Project v2 board.
-- `project_number` (integer)
-  - REQUIRED for dispatch when `tracker.kind == "github"`.
-- `repo_owner` (string)
-  - REQUIRED for dispatch when `tracker.kind == "github"` unless the implementation explicitly
-    supports multi-repository dispatch.
-- `repo_name` (string)
-  - REQUIRED for dispatch when `tracker.kind == "github"` unless the implementation explicitly
-    supports multi-repository dispatch.
-- `status_field` (string)
-  - Default: `Status`.
-  - GitHub Project v2 single-select field used as the workflow state source of truth.
-- `priority_field` (string)
-  - Default: `Priority`.
-  - GitHub Project v2 single-select field used for dispatch ordering.
-- `priority_order` (list of strings)
-  - Default: `["P0", "Urgent", "Critical", "P1", "High", "P2", "Medium", "P3", "Low"]`.
-  - Earlier entries sort ahead of later entries; unknown or blank priorities sort last.
-- `assignee` (string)
-  - OPTIONAL. When set, candidate issues MUST be assigned to this tracker user to dispatch or
-    continue.
-- `required_labels` (list of strings)
-  - Default: `[]`.
-  - An issue MUST contain every configured label to dispatch or continue.
-  - Matching ignores case and surrounding whitespace.
-  - A blank configured label matches no issue.
-- `active_states` (list of strings)
-  - Default: `Todo`, `In Progress`
-- `terminal_states` (list of strings)
-  - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
-
-#### 5.3.2 `polling` (object)
-
-Fields:
-
-- `interval_ms` (integer)
-  - Default: `30000`
-  - Changes SHOULD be re-applied at runtime and affect future tick scheduling without restart.
-
-#### 5.3.3 `workspace` (object)
-
-Fields:
-
-- `root` (path string or `$VAR`)
-  - Default: `<system-temp>/symphony_workspaces`
-  - `~` is expanded.
-  - Relative paths are resolved relative to the directory containing `WORKFLOW.md`.
-  - The effective workspace root is normalized to an absolute path before use.
-
-#### 5.3.4 `hooks` (object)
-
-Fields:
-
-- `after_create` (multiline shell script string, OPTIONAL)
-  - Runs only when a workspace directory is newly created.
-  - Failure aborts workspace creation.
-- `before_run` (multiline shell script string, OPTIONAL)
-  - Runs before each agent attempt after workspace preparation and before launching the coding
-    agent.
-  - Failure aborts the current attempt.
-- `after_run` (multiline shell script string, OPTIONAL)
-  - Runs after each agent attempt (success, failure, timeout, or cancellation) once the workspace
-    exists.
-  - Failure is logged but ignored.
-- `before_remove` (multiline shell script string, OPTIONAL)
-  - Runs before workspace deletion if the directory exists.
-  - Failure is logged but ignored; cleanup still proceeds.
-- `timeout_ms` (integer, OPTIONAL)
-  - Default: `60000`
-  - Applies to all workspace hooks.
-  - Invalid values fail configuration validation.
-  - Changes SHOULD be re-applied at runtime for future hook executions.
-
-#### 5.3.5 `agent` (object)
-
-Fields:
-
-- `max_concurrent_agents` (integer)
-  - Default: `10`
-  - Changes SHOULD be re-applied at runtime and affect subsequent dispatch decisions.
-- `max_turns` (positive integer)
-  - Default: `20`
-  - Limits the number of coding-agent turns within one worker session.
-  - Invalid values fail configuration validation.
-- `max_retry_backoff_ms` (integer)
-  - Default: `300000` (5 minutes)
-  - Changes SHOULD be re-applied at runtime and affect future retry scheduling.
-- `max_failure_retries` (non-negative integer)
-  - Default: `3`
-  - Maximum automatic retries for a retryable failure within one issue execution cycle.
-- `max_no_progress_attempts` (positive integer)
-  - Default: `2`
-  - Reaching the limit routes the issue to `Blocked` or another configured operator lane.
-- `max_compute_escalations` (non-negative integer)
-  - Default: `1`
-  - Limits fresh-thread escalation to a stronger compute profile for one logical attempt.
-- `max_concurrent_agents_by_state` (map `state_name -> positive integer`)
-  - Default: empty map.
-  - State keys are normalized (`lowercase`) for lookup.
-  - Invalid entries (non-positive or non-numeric) are ignored.
-
-#### 5.3.6 `codex` (object)
-
-Fields:
-
-For Codex-owned config values such as `approval_policy`, `thread_sandbox`, and
-`turn_sandbox_policy`, supported values are defined by the targeted Codex app-server version.
-Implementors SHOULD treat them as pass-through Codex config values rather than relying on a
-hand-maintained enum in this spec. To inspect the installed Codex schema, run
-`codex app-server generate-json-schema --out <dir>` and inspect the relevant definitions referenced
-by `v2/ThreadStartParams.json` and `v2/TurnStartParams.json`. Implementations MAY validate these
-fields locally if they want stricter startup checks.
-
-- `command` (string shell command)
-  - Default: `codex app-server`
-  - The runtime launches this command via `bash -lc` in the workspace directory.
-  - The launched process MUST speak a compatible app-server protocol over stdio.
-- `approval_policy` (Codex `AskForApproval` value)
-  - Default: implementation-defined.
-- `thread_sandbox` (Codex `SandboxMode` value)
-  - Default: implementation-defined.
-- `turn_sandbox_policy` (Codex `SandboxPolicy` value)
-  - Default: implementation-defined.
-- `turn_timeout_ms` (integer)
-  - Default: `3600000` (1 hour)
-- `read_timeout_ms` (integer)
-  - Default: `5000`
-- `stall_timeout_ms` (integer)
-  - Default: `300000` (5 minutes)
-  - If `<= 0`, stall detection is disabled.
-- `required_skills` (list of strings)
-  - Default: `[]`
-  - When set, the runtime SHOULD verify that each listed skill is installed in a repo-local or
-    Codex-home skill directory visible to the Codex worker before dispatching work.
-  - Implementations SHOULD check repo-local `.codex/skills`, the active Codex home skills directory,
-    plugin cache paths, and the operator's agent skill directory when those locations exist.
-
-#### 5.3.7 `readiness` (object)
-
-Fields:
-
-- `timeout_ms` (integer)
-  - Default: `1800000`.
-  - Maximum time a readiness guard may wait or poll before routing away from the protected transition.
-- `quiet_period_ms` (integer)
-  - Default: `90000`.
-  - Minimum stable period used by implementations that poll for settling checks or comments.
-- `required_checks` (list of strings)
-  - Default: `[]`.
-  - Named status checks that must be completed successfully, neutrally, or skipped on the current PR
-    head before `Risk Review` may dispatch.
-- `review_markers` (list of strings)
-  - Default: `["P0", "P1", "P2", "blocker", "must fix"]`.
-  - Case-insensitive markers used to classify top-level PR comments as actionable feedback.
-
-#### 5.3.8 `observability` (object)
-
-Fields:
-
-- `dashboard_enabled` (boolean)
-  - Default: `true`.
-- `refresh_ms` (integer)
-  - Default: `1000`.
-- `render_interval_ms` (integer)
-  - Default: `16`.
-
-#### 5.3.9 `server` (object)
-
-Fields:
-
-- `port` (integer, OPTIONAL)
-  - Enables the optional HTTP server extension.
-  - `0` requests an ephemeral port for local development and tests.
-- `host` (string)
-  - Default: `127.0.0.1`.
-
-#### 5.3.10 `persistence` (object)
-
-Fields:
-
-- `database_path` (path)
-  - Default: `<service-data-root>/symphony-encore.sqlite3`.
-  - The baseline profile requires a local-disk SQLite database.
-  - Changing this field requires a service restart.
-- `lease_ttl_ms` (positive integer)
-  - Default: `120000`.
-  - A live worker MUST renew its claim before the lease expires.
-- `event_retention_days` (positive integer or null)
-  - Default: `30`.
-  - Retention MUST NOT remove the current state, active attempts, or evidence referenced by an open
-    work item.
-
-#### 5.3.11 `compute` (object)
-
-The configuration uses logical profiles rather than embedding provider model names in workflow
-policy. Each profile resolves to provider-specific `model` and `reasoning_effort` values.
-
-Fields:
-
-- `profiles` (map `profile_name -> provider settings`)
-  - MUST define `economy`, `standard`, and `deep`, or documented equivalent names.
-  - Provider settings MUST be validated against the active agent adapter before dispatch.
-- `phase_profiles` (map `phase_name -> profile_name`)
-  - Defines defaults for `discovery`, `implementation`, `integrative_review`, `specialist_review`,
-    and `adjudication`.
-- `risk_floor_rules` (ordered list of deterministic rules)
-  - Each rule maps observable task/change facts to a minimum profile.
-  - Security boundaries, migrations, concurrency, public API changes, cross-package architecture,
-    and ambiguous acceptance criteria SHOULD floor the affected phase at `deep`.
-- `review_budget_fraction_target` (number from `0` through `1`)
-  - Default: `0.30`.
-  - An observability and calibration target, not permission to skip required review.
-- `sampled_deep_audit_rate` (number from `0` through `1`)
-  - Default: `0.05`.
-  - Fraction of lower-risk completed work sampled for a deep audit to detect routing blind spots.
-
-Routing requirements:
-
-- Deterministic risk rules establish the minimum profile for each phase.
-- A heuristic or model-based classifier MAY raise that profile but MUST NOT lower the deterministic
-  floor.
-- The selected profile, resolved model, reasoning effort, and rule identifiers MUST be pinned in the
-  attempt snapshot and recorded in events.
-- A compute escalation MUST start a fresh thread with the structured factual handoff from the prior
-  attempt. It MUST NOT silently change model or reasoning effort inside an existing thread.
-- Model slugs and supported reasoning values belong to the agent adapter, not this specification.
-
-#### 5.3.12 `review` (object)
-
-Fields:
-
-- `integrative_required` (boolean)
-  - Default and REQUIRED value: `true`.
-- `max_parallel_specialists` (integer)
-  - Default: `2`.
-- `specialists` (list)
-  - Each entry declares `name`, `concerns`, `required_evidence`, `excluded_context`, `trigger_rules`,
-    and `compute_profile`.
-- `conflict_adjudication_profile` (profile name)
-  - Default: `deep`.
-
-The default specialist slices are:
-
-- `systems_security`: security, permissions, data integrity, concurrency, reliability, and
-  operational failure modes.
-- `architecture_product`: architecture, API coherence, maintainability, product behavior, UX, and
-  taste-dependent trade-offs.
-
-The mandatory integrative reviewer covers the full change, acceptance criteria, regression risk,
-and cross-slice interactions. Specialists supplement it; they never replace it.
-
-### 5.4 Prompt Template Contract
-
-The Markdown body of `WORKFLOW.md` is the per-issue prompt template.
-
-Rendering requirements:
-
-- Use a strict template engine (Liquid-compatible semantics are sufficient).
-- Unknown variables MUST fail rendering.
-- Unknown filters MUST fail rendering.
-
-Template input variables:
-
-- `issue` (object)
-  - Includes all normalized issue fields, including labels and blockers.
-- `attempt` (integer or null)
-  - `null`/absent on first attempt.
-  - Integer on retry or continuation run.
-
-Fallback prompt behavior:
-
-- If the workflow prompt body is empty, the runtime MAY use a minimal default prompt
-  (`You are working on an issue from Linear.`).
-- Workflow file read/parse failures are configuration/validation errors and SHOULD NOT silently fall
-  back to a prompt.
-
-### 5.5 Workflow Validation and Error Surface
-
-Error classes:
-
-- `missing_workflow_file`
-- `workflow_parse_error`
-- `workflow_front_matter_not_a_map`
-- `template_parse_error` (during prompt rendering)
-- `template_render_error` (unknown variable/filter, invalid interpolation)
-
-Dispatch gating behavior:
-
-- Workflow file read/YAML errors block new dispatches until fixed.
-- Template errors fail only the affected run attempt.
-
-## 6. Configuration Specification
-
-### 6.1 Configuration Resolution Pipeline
-
-Configuration is resolved in this order:
-
-1. Select the workflow file path (explicit runtime setting, otherwise cwd default).
-2. Parse YAML front matter into a raw config map.
-3. Apply built-in defaults for missing OPTIONAL fields.
-4. Resolve `$VAR_NAME` indirection only for config values that explicitly contain `$VAR_NAME`.
-5. Coerce and validate typed values.
-
-Environment variables do not globally override YAML values. They are used only when a config value
-explicitly references them.
-
-Value coercion semantics:
-
-- Path/command fields support:
-  - `~` home expansion
-  - `$VAR` expansion for env-backed path values
-  - Apply expansion only to values intended to be local filesystem paths; do not rewrite URIs or
-    arbitrary shell command strings.
-- Relative `workspace.root` values resolve relative to the directory containing the selected
-  `WORKFLOW.md`.
-
-### 6.2 Dynamic Reload Semantics
-
-Dynamic reload is REQUIRED:
-
-- The software MUST detect `WORKFLOW.md` changes.
-- On change, it MUST re-read and re-apply workflow config and prompt template without restart.
-- Every valid reload MUST create a new immutable configuration snapshot.
-- Hot settings, including polling cadence, dispatch concurrency, and observability refresh rates,
-  MAY affect the live scheduler after the snapshot is committed.
-- Attempt-scoped settings, including prompt content, tracker filters, hooks, compute routing,
-  review policy, timeouts, and retry budgets, apply only to attempts created from the new snapshot.
-- Restart-required settings, including `persistence.database_path` and listener bindings, MUST be
-  reported as pending and MUST NOT partially apply.
-- In-flight attempts continue using their pinned snapshot. Implementations MUST NOT restart them
-  automatically merely because configuration changed.
-- Extensions that manage their own listeners/resources (for example an HTTP server port change) MAY
-  require restart unless the implementation explicitly supports live rebind.
-- Implementations SHOULD also re-validate/reload defensively during runtime operations (for example
-  before dispatch) in case filesystem watch events are missed.
-- Invalid reloads MUST NOT crash the service; keep operating with the last known good effective
-  configuration and emit an operator-visible error.
-
-### 6.3 Dispatch Preflight Validation
-
-This validation is a scheduler preflight run before attempting to dispatch new work. It validates
-the workflow/config needed to poll and launch workers, not a full audit of all possible workflow
-behavior.
-
-Startup validation:
-
-- Validate configuration before starting the scheduling loop.
-- If startup validation fails, fail startup and emit an operator-visible error.
-
-Per-tick dispatch validation:
-
-- Re-validate before each dispatch cycle.
-- If validation fails, skip dispatch for that tick, keep reconciliation active, and emit an
+Status: Draft v3
+
+Purpose: Define a durable, cost-controlled service that orchestrates coding agents to complete
+tracker issues with verified evidence, bounded spend, proportional process, and independent review —
+and that improves itself from its own operating history.
+
+Symphony Encore is a scheduler, durable control plane, policy enforcer, and agent runner. Agents may
+edit files only inside their assigned workspace. They propose typed terminal results and requests
+for privileged external actions; the orchestrator validates them and exclusively owns tracker,
+repository-hosting, control-plane, notification, and merge mutations. A successful run ends at a
+workflow-defined handoff state, not necessarily `Done`.
+
+The key words MUST, MUST NOT, SHOULD, and MAY are used per RFC 2119. Domain schemas, enums, state
+transitions, configuration tables, required operations/surfaces, and the Core test matrix are also
+normative contracts. Text explicitly labeled guidance, example, or rationale is non-normative.
+
+## 1. Design Principles
+
+Every requirement in this document traces to one of these. When a future change conflicts with a
+principle, change the principle deliberately or reject the change.
+
+1. **Feedback over procedure.** Agents are constrained by ground-truth verification (runnable
+   tests, small diffs, early plan checks), not by ceremony. Procedure can be satisfied
+   ceremonially; feedback cannot be faked.
+2. **Cost is a control input, not a metric.** Budgets stop work. Spend is recorded durably per
+   Attempt, issue, SystemJob, and rolling fleet window; remaining budget influences routing.
+3. **Decisions read the durable store.** Guard and merge decisions consume orchestrator-owned
+   records. Tracker comments are human-readable projections, never inputs to a decision.
+4. **Proportional process.** Ceremony scales with a deterministic change class. A one-line fix and
+   a schema migration do not take the same route.
+5. **Catch errors at the cheapest point.** Issue readiness and plan quality are checked before
+   implementation; correctness before merge; escaped defects after merge feed back into routing.
+6. **Graduated autonomy.** Merge autonomy is earned per change class from measured outcomes,
+   granted by the operator, and revoked automatically on an escaped defect.
+7. **The system learns.** Failures, findings, and confusions are recorded as lessons and
+   periodically synthesized back into the workflow prompt and rules, under hard saturation caps.
+8. **Simplicity pays rent.** Every lane, field, rule, and config key must justify its existence.
+   Prefer attributes to states, deletion to configuration, and one good default to three options.
+
+## 2. System Overview
+
+Components:
+
+1. **Workflow Loader** — reads `WORKFLOW.md` (YAML front matter + prompt body), validates, and
+   commits immutable configuration snapshots.
+2. **Orchestrator** — owns the poll tick, dispatch, claims, retries, reconciliation, budgets, and
+   the merge queue. Sole writer of durable control-plane state.
+3. **Durable State Store** — local SQLite, single writer. Holds claims/leases, attempts (with
+   usage/cost), terminal records, stages, retries, parked work, budgets, logs/events, guard and review
+   records, lessons, quality metrics, config/override history, operator actions, and side-effect
+   intents/receipts.
+4. **Workspace Manager** — issue and SystemJob directories under a configured root, repository
+   population, lifecycle hooks, quarantine, and cleanup.
+5. **Agent Runner** — launches the coding-agent subprocess in the workspace, streams events,
+   enforces timeouts/turn caps/token caps, accepts at most one schema-valid Attempt-role terminal
+   result, reports missing/duplicate results as failure, and terminates the full process tree.
+6. **Review Coordinator** — runs deterministic checks, dispatches the integrative reviewer and any
+   risk-triggered specialists, merges findings without voting, records durable review records.
+7. **Merge Queue** — serializes merges per repository; re-validates against the current base before
+   each merge.
+8. **Tracker and Repository-Hosting Adapters** — normalize tracker reads and perform authorized,
+   revision-pinned tracker, Git-hosting, pull-request, and merge mutations.
+9. **Learning Synthesizer** — periodically distills lessons into proposed prompt/rule changes,
+   submitted through the same review pipeline as code.
+10. **Notifier** — fires the configured notification hook on events that need a human.
+11. **Operator Control API and UI** — authenticated control operations plus a required browser UI
+    over the same durable state used by orchestration.
+12. **Observability** — structured logs, append-only event records, durable history, and stage
+    timing, all visible through the required UI.
+
+External dependencies: an issue tracker and repository host (GitHub Issues + Projects v2 plus GitHub
+PRs is the reference; adapters may target others), a coding-agent executable speaking a supported
+adapter protocol (Codex app-server is the reference), Git, local SQLite/filesystem storage, and an
+operator browser for the required UI.
+
+## 3. Domain Model
+
+Only fields that decisions depend on are normative. Adapters may carry extra data.
+
+### 3.1 Issue (normalized)
+
+`id`, `identifier` (human key), `title`, `description`, `acceptance_criteria[]`, `state` (lane),
+`labels` (lowercased), `priority` (integer or null; lower dispatches first),
+`blocked_by` (list of `{id, state}`),
+`assignee_id`, `repo_owner`, `repo_name`, `url`, `created_at`, `updated_at`.
+
+### 3.2 Attempt
+
+One dispatched agent run. Every attempt has exactly one **role** and one pinned compute profile.
+
+Roles: `plan_review`, `implementation`, `integrative_review`, `specialist_review`, `adjudication`,
+`synthesis`.
+
+Fields: `id`, `work_ref` (exactly one of `issue_id` or `system_job_id`), `role`, `attempt_number`,
+`workspace_path`, `config_snapshot_id`, `compute_profile`, `model`, `reasoning_effort`,
+`price_table_version`, `routing_reasons` (rule ids), `change_class`,
+`started_at`, `ended_at`, `status`, `terminal_result_id`, `failure_class`,
+**`input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`** (tokens update as events stream;
+`cost_usd` derives from the pinned adapter price table and is finalized at exit).
+
+Attempt `status` is `created` | `running` | `awaiting_human` | `closed`; a closed Attempt has exactly
+one terminal record. `ended_at` is null until closed.
+
+Token fields are REQUIRED on every durable attempt. `cost_usd` is REQUIRED when the adapter has a
+price table and null otherwise; an unpriced adapter uses the token budgets defined in Section 7.
+
+### 3.3 Implementation Outcome
+
+An implementation agent that reaches the terminal-result channel submits exactly one structured
+ImplementationOutcome. Free-form prose is not a conforming result. If the agent process ends before
+a valid result, the orchestrator closes the Attempt with the ExecutionFailure from Section 3.17.
+
+`status`: one of
+`completed` | `plan_ready` | `needs_rework` | `blocked` | `needs_input` | `no_progress` |
+`budget_exhausted` | `failed`.
+
+Fields: `status`, `summary`, `evidence` (typed refs: commands run with results, files, commits, PR,
+checks), `verification` (result of the workspace verify command — REQUIRED for `completed`
+implementation attempts), `question` (REQUIRED for `needs_input`: `{text, options[], default}`),
+`actions_requested` (typed requests for orchestrator-owned external mutations),
+`confusions` (short list; feeds lessons), `handoff` (facts for a fresh session: goal, acceptance
+criteria, revision, files changed, commands+results, decisions fixed, open items — never hidden
+reasoning or claims of correctness).
+
+The orchestrator maps outcomes to transitions (Section 5.4); agents never mutate tracker state.
+
+### 3.4 Claim / Lease
+
+One schema owns both issue and SystemJob execution. Fields: `work_ref` (exactly one of `issue_id` or
+`system_job_id`), `holder`, `mode`, `acquired_at`, `updated_at`, `expires_at` (running leases only),
+`origin_stage`, `reason`, `retry_due_at`, `blocker_predicate`, `question_id`,
+`approval_request_id`, and nullable `last_comment_cursor` (issue work only).
+States: `Unclaimed` → `Claimed` → `Released`.
+
+A claimed work item is in exactly one of four claim modes:
+
+- `Running` — an attempt is executing; consumes a concurrency slot.
+- `Ready` — the next plan, implementation, review, or merge action is durably queued; consumes no
+  slot. Restart recovery re-enqueues the action from the work stage and latest terminal record.
+- `RetryQueued` — a retry timer exists; consumes no slot.
+- `AwaitingHuman` — parked pending operator input/review/unblock; consumes no slot. Reconciled
+  each tick; released if the work item goes terminal.
+
+Claims are acquired transactionally before any worker launch. A `Running` lease MUST be renewed
+before expiry; an expired running lease enters restart reconciliation and is never blindly resumed.
+`Ready`, `RetryQueued`, and `AwaitingHuman` are durable reservations, not expiring process leases.
+The Claim remains held across role changes, review, merge queuing, retries, and Human parking and is
+released only on terminal state or operator cancellation. A running Attempt closes atomically with
+the next claim mode, preventing an unowned gap between stages. For SystemJobs, terminal state is
+`done`, `failed`, or operator cancellation and no tracker lane or comment cursor is synthesized.
+Restart recovery MUST rebuild ready work, timers, and reconciliation cursors from these fields.
+Claim acquisition and renewal use `work_ref` as the unique ownership key, so duplicate dispatch is
+impossible for issues and SystemJobs alike.
+
+### 3.5 Configuration Snapshot
+
+Immutable record: `id`, `created_at`, `workflow_source_hash`, `operator_override_revision`,
+`effective_config` (secrets as references, never values), per-key source/version metadata,
+acknowledgment and restart state, `prompt_hash`, `adapter_versions`. Every attempt and SystemJob pins
+exactly one snapshot. Hot settings apply to the live scheduler after validation; attempt settings
+apply only to new work; restart settings remain pending. Ack-modified settings remain pending until
+the exact candidate version is acknowledged (Sections 15.3 and 18.3).
+
+### 3.6 Review Record
+
+Durable, orchestrator-written: `id`, `work_ref`, `attempt_id`, `reviewer_role`, `target_sha`,
+`target_base_sha`, `patch_identity`, `decision`
+(`approve` | `needs_rework` | `needs_human` | `blocked`), `findings[]`
+(`{id, behavior, severity, evidence, disposition, blocking}`), `created_at`.
+
+**Guards read review records and guard decisions from the store only.** A review result that exists
+only in a tracker comment does not exist.
+
+`ReviewSet` is the durable aggregate consumed by the merge gate: `id`, `work_ref`, `target_sha`,
+`target_base_sha`, `patch_identity`, `required_reviewer_roles[]`, `required_specialist_names[]`,
+`verification_record_id`, `guard_decision_ids[]`, `review_record_ids[]`,
+`unresolved_blocking_finding_ids[]`, nullable `carried_from_review_set_id`, nullable
+`carry_forward_guard_decision_id`, `decision`
+(`approve` | `needs_rework` | `needs_human` | `blocked`), `created_at`. The Review Coordinator writes
+one only after deterministic checks finish. In an ordinary ReviewSet both carry-forward fields are
+null and every reviewer required by the class and matching specialist rules has a terminal Review
+Record for the same immutable revision. In a Section 10.3 carried ReviewSet both carry-forward fields
+are non-null: the linked prior ReviewSet MUST be `approve`, have the identical patch identity and
+complete required reviewer set, and name the carried Review Records; those records may target only
+that prior set's head. The carry-forward Guard Decision proves those facts. The carried ReviewSet's
+Verification Record and all other Guard Decisions MUST target its new head/base. No other
+cross-revision record is valid.
+
+`approve` requires a passing current Verification Record, allowing current guards, the complete
+required reviewer set (which may be empty for `trivial`), and no unresolved blocking finding. Any
+target-SHA or patch-identity change invalidates that ReviewSet. Section 10.3 may create a new
+current-revision ReviewSet under the narrow carried invariant above; only that new set is
+merge-eligible.
+
+### 3.7 Guard Decision
+
+Durable: `id`, `work_ref`, `requested_transition`, `result` (`allow` | `deny`), `reason_code`, `evidence
+refs`, `created_at`. Denials route per Section 5.4 and emit a lesson when caused by agent output.
+
+### 3.8 Lesson
+
+Append-only: `id`, `created_at`, `work_ref`, `source`
+(`guard_denial` | `rework` | `review_finding` | `escaped_defect` | `plan_rejection` |
+`tool_failure` | `budget_exhausted` | `confusion`), `text`, `evidence refs`. Input to synthesis
+(Section 12).
+
+### 3.9 Rule
+
+A numbered, synthesized instruction in the workflow prompt's rules block: `id`, `text`,
+`lesson_ids`, `citation_count`, `last_cited_at`. Subject to the saturation caps in Section 12.3.
+
+### 3.10 Live Session
+
+Durable process and protocol identity for a running attempt: `attempt_id`, `session_id`, `thread_id`,
+`turn_id`, `process_id`, `process_group_id`, `adapter_version`, `protocol_schema_hash`,
+`last_event`, `last_event_at`, `turn_count`, last reported absolute token totals, and
+`ownership_verified_at`. Process handles are ephemeral; these fields are the evidence used to find,
+terminate, or classify abandoned processes after restart.
+
+### 3.11 Retry Entry and Parked Work
+
+`RetryEntry`: `work_ref`, `attempt_id`, `failure_class`, `retry_number`, `due_at`, `max_retries`,
+`last_error`, `created_at`. Runtime timers are rebuilt from `due_at`.
+
+`ParkedWork`: `work_ref`, `origin_stage`, `reason`, `blocker_predicate`, `question_id`,
+`parked_at`, `last_checked_at`, `resolved_at`. A blocker predicate MUST name an observable fact the
+orchestrator can re-check; otherwise only an authorized operator can resolve it.
+
+### 3.12 Operator Question and Answer
+
+`OperatorQuestion`: `id`, `work_ref`, `attempt_id`, `text`, `options`, `default`,
+`comment_marker`, `comment_cursor`, `asked_at`, `reminded_at`, `answered_at`, `answer`,
+`answered_by`. Only the first answer from an authorized operator is accepted; later replies remain
+visible but do not change the durable answer.
+
+`AgentApprovalRequest`: `id`, `work_ref`, `attempt_id`, `action_kind`, `scope`, `summary`,
+`requested_at`, `expires_at`, `status`, `decided_at`, `decided_by`, `decision`. It contains no raw
+credential or unbounded tool payload.
+
+### 3.13 Stage Transition
+
+Append-only: `id`, `work_ref`, `from_stage`, `to_stage`, `reason`, `attempt_id`,
+`confirmed_external_revision`, `entered_at`, `exited_at`, `duration_ms`. Issue stages are confirmed
+tracker lanes; SystemJob stages are durable statuses. `timestamp_source` is `receipt`, `tracker`, or
+`observed_estimate`. `from_stage` is null only for a baseline transition. `attempt_id` is nullable for
+baseline, operator-observed, reconciliation, and other orchestrator transitions; when present it
+must refer to an Attempt with the same `work_ref`. The open transition has null `exited_at` and
+`duration_ms`. Closing one transition and opening the next is atomic, so time in each stage remains
+reconstructable after restart.
+
+### 3.14 External Side Effect
+
+`MutationAuthorization`: `id`, `intent_id`, `idempotency_key`, `scope` (`work` | `fleet`), nullable
+`work_ref`, `service_run_id`,
+`actor_kind` (`orchestrator_policy` | `operator`), `actor_id`, nullable `attempt_role`, nullable
+`operator_capability`, `config_snapshot_id`, `action`, `target`, `observed_state_ref`, nullable
+`target_revision`, `decision_rule_ids[]`, `authorized_at`, and `expires_at`. Work scope requires
+`work_ref`; fleet scope requires a fleet target and `service_run_id`. `observed_state_ref` identifies
+the immutable tracker/repository/control snapshot used by the decision. An authorization is valid
+only for its exact intent/key, actor, action, target, configuration, observed state, and revision.
+`target_revision` may be null only when creating a target that does not exist; then
+`observed_state_ref` and the parent/container revision are required.
+
+`SideEffectIntent`: `id`, `idempotency_key`, `scope` (`work` | `fleet`), nullable `work_ref`,
+`service_run_id`, nullable `attempt_id`, `action`, `target`, nullable `target_revision`,
+`request_payload_hash`, `authorization_id`, `status`
+(`pending` | `applying` | `applied` | `failed` | `unknown`), `created_at`, `updated_at`.
+
+`SideEffectReceipt`: `intent_id`, `provider_request_id`, `result`, `result_revision`,
+`response_payload_hash`, `applied_at`. The orchestrator MUST commit an authorized intent before the
+adapter call and MUST commit a receipt afterward. On restart, an intent without a receipt is queried
+by its idempotency key before it is retried. Every mutating tracker, repository-hosting,
+notification, and other external adapter call MUST receive the same persisted
+MutationAuthorization and MUST reject a missing, expired, mismatched, or stale envelope.
+
+### 3.15 Operator Action and Repository Link
+
+`OperatorAction`: `id`, `operator_id`, `auth_subject`, `capability`, `endpoint`, `action`, `target`,
+`reason`, `expected_version`, `observed_version`, `idempotency_key`, `request_payload_hash`, `result`
+(`accepted` or a typed rejection code), `created_at`. UI and API mutations always create this
+record, including every rejected request made after successful authentication.
+
+An idempotency key is scoped to `(operator_id, endpoint, target)` and bound to the request payload
+hash. Reuse with the same payload returns the original committed result; reuse with a different
+payload returns `409 idempotency_conflict` and creates a rejected OperatorAction.
+
+`RepositoryLink`: append-only identity/history record with `id`, `work_ref`, `cycle`, `kind`
+(`primary` | `repair`), `repo_owner`, `repo_name`, `branch`, `pull_request_number`,
+`pull_request_url`, `head_sha`, `base_ref`, `base_sha`, `state`, `created_at`, `updated_at`. Issue and
+pull-request links shown in the UI come from these durable records; a later repair never overwrites
+the original PR link.
+
+### 3.16 Plan
+
+Durable, versioned: `id`, `work_ref`, `revision`, `status`
+(`draft` | `validated` | `approved` | `rejected` | `superseded`), `approach`,
+`acceptance_criteria[]` (`{criterion_id, criterion_text, planned_evidence}`), `proposed_paths[]`,
+`verification_commands[]`, `estimated_files`, `estimated_changed_lines`, `risk_facts[]`,
+`created_by_attempt_id`, `created_at`, `validated_at`, `approved_by_attempt_id`.
+
+The agent submits the Plan through a schema-constrained tool. The orchestrator writes `PLAN.md` as a
+human-readable workspace projection and MAY refresh it after validation; neither the orchestrator
+nor a guard parses free-form Markdown to recover plan facts.
+
+### 3.17 Role Terminal Results and System Jobs
+
+- `PlanReviewResult`: `decision` (`approve` | `needs_rework` | `needs_input`), `plan_revision`,
+  `findings[]` (`{id, behavior, severity, evidence, blocking}`), nullable `question`, `evidence`,
+  `handoff`. `needs_rework` requires at least one blocking finding; `needs_input` requires the
+  Section 3.3 question schema; `approve` forbids both a blocking finding and a question.
+- `ReviewResult`: `decision` (`approve` | `needs_rework` | `needs_human` | `blocked`), `target_sha`,
+  `findings[]` using the Review Record finding schema, `evidence`; `approve` forbids blocking
+  findings and every other decision requires evidence explaining its route.
+- `AdjudicationResult`: `target_sha`, `conflict_ids[]`, `decision` (`resolve` | `needs_human`),
+  `resolutions[]` (`{conflict_id, upheld_finding_ids[], rejected_finding_ids[], rationale,
+  evidence}`), nullable `question`, `evidence`. `resolve` requires exactly one resolution for every
+  conflict id; `needs_human` requires a question. It cannot erase an uncontested blocking finding.
+- `SynthesisResult`: `decision` (`propose_changes` | `no_change` | `needs_input`), `rule_changes[]`
+  (`{action: add|update|remove, rule_id, text, lesson_ids[], rationale}`), `cited_lesson_ids[]`,
+  nullable repository revision, branch, pull-request request, question, evidence, and handoff.
+  `propose_changes` requires a non-empty change list and repository/PR fields; `no_change` requires
+  evidence and forbids repository/PR fields; `needs_input` requires a question.
+- `ExecutionFailure`: orchestrator-authored `status` (`failed` | `budget_exhausted`), Attempt role,
+  `failure_class`, `summary`, `evidence`, and latest durable `handoff`. It closes an Attempt that did
+  not produce a valid result or that the runner terminated at a hard cap.
+
+Every Attempt has exactly one terminal record: its valid role result or an ExecutionFailure. The
+orchestrator atomically closes the attempt and writes that record plus any Review Record. A role MUST
+NOT report another role's result schema.
+
+Fleet-level and non-issue repair work is a `SystemJob`, not a synthetic tracker issue. Fields: `id`,
+`kind` (`synthesis` | `repair`), nullable `parent_work_ref` (required for repair), `repository`,
+`workspace_path`,
+`goal`, `acceptance_criteria[]`, `config_snapshot_id`, `status`
+(`queued` | `running` | `review` | `merge` | `rework` | `human` | `budget_exhausted` | `failed` | `done`),
+aggregate `input_tokens`, `output_tokens`, `cost_usd`, `created_at`, `started_at`, `ended_at`, and
+`final_result_id`. Every model execution for a SystemJob is an Attempt whose work reference is that
+job. A synthesis Attempt returns SynthesisResult; a repair implementation Attempt returns
+ImplementationOutcome. Review attempts use the same work reference. System jobs therefore reuse the
+same budget, event, failure, retry, side-effect, review, and supervised merge contracts as issue work.
+
+### 3.18 Service Run, Log Record, and Usage Sample
+
+`ServiceRun`: `id`, `service_version`, `host_id`, `started_at`, `ended_at`, `status`,
+`startup_config_snapshot_id`, `start_reason`, `end_reason`. A restart creates a new ServiceRun; it
+does not replace prior history. Startup closes any previously open ServiceRun as `interrupted` after
+process-ownership reconciliation.
+
+`LogRecord`: `id`, `service_run_id`, `work_ref`, `attempt_id`, `session_id`, `stage_transition_id`,
+`timestamp`, `level`, `event_name`, `message`, `structured_fields`. Agent commands, tool actions,
+verification output, file-action summaries, review activity, and orchestrator decisions MUST be
+logged with enough structure for the UI to show what happened at each stage. Secrets, full prompts,
+hidden reasoning, and unbounded raw payloads MUST NOT be stored.
+
+`UsageSample`: `id`, `service_run_id`, `work_ref`, `attempt_id` or `system_job_id`, `timestamp`,
+absolute `input_tokens`, `output_tokens`, `total_tokens`, `billable_categories`, derived deltas, and
+`cost_usd`. Samples plus
+Attempt/SystemJob totals and StageTransitions preserve token and elapsed-time history durably.
+
+### 3.19 Budget Ledger
+
+`BudgetLedger`: `scope` (`attempt` | `issue` | `rolling_24h`), scope id, `unit`
+(`tokens` | `usd`), `base_limit`, `adjustment`, `effective_limit`, `reserved`, `consumed`, `overrun`,
+`remaining`, `version`, `updated_at`. `BudgetReservation`: `id`, `ledger_refs[]`, `work_ref`,
+`attempt_id` or
+`system_job_id`, `estimated_amounts`, `actual_amounts`, `status`, timestamps.
+
+`BudgetAdjustment`: `id`, ledger target, `action` (`set_limit` | `add_allowance` |
+`start_new_allowance_epoch`), amount, reason, operator action id, prior version, new version, and
+timestamp. A reset starts a new allowance epoch; it never rewrites or deletes historical usage.
+
+### 3.20 Verification Record
+
+Orchestrator-authored: `id`, `work_ref`, `attempt_id`, `config_snapshot_id`, `target_revision`,
+`command_hash`, `started_at`, `ended_at`, `exit_code`, `result` (`passed` | `failed` | `error`),
+bounded stdout/stderr references, and environment-policy hash. Guards and reviewers use this record,
+not an agent's assertion that verification passed.
+
+## 4. Change Classes and Proportional Process
+
+Every issue receives a conservative provisional routing class before its first implementation
+attempt. The orchestrator derives it from tracker metadata, repository metadata, configured
+path/label rules, and the issue's structured acceptance criteria. Unknown facts select `standard`
+for initial compute routing but are not an irreversible standard-risk fact; ambiguous acceptance
+criteria are an explicit `high_risk` fact.
+
+- `trivial` — every proposed and changed path matches `class.trivial_patterns`, changed lines are at
+  most `class.trivial_max_changed_lines` (default 25), and no risk path/fact is present. The default
+  empty pattern list classifies no issue as trivial.
+- `standard` — the default.
+- `high_risk` — matches any risk rule: security boundaries, auth, migrations, concurrency,
+  public API changes, cross-package architecture, configured sensitive paths, or ambiguous
+  acceptance criteria.
+
+After the Plan is validated, the orchestrator computes the first authoritative class from the Plan's
+proposed paths and size plus every explicit provisional fact. A provisional `standard` caused only
+by facts that the pre-plan phase could not know may therefore become authoritative `trivial`; a
+provisional explicit standard/high-risk fact remains a floor. The orchestrator recomputes after every
+material diff change. Classification inputs MUST be observable facts (paths, labels, diff size,
+dependency graph, structured issue fields, configured issue-text patterns) — never agent
+self-assessment. Upward-only monotonicity begins when the first authoritative class is committed:
+within that execution cycle it may move upward but never downward. Before work continues, an upward
+move MUST apply every newly required plan review, compute floor, specialist review, and merge
+restriction.
+
+What each class buys:
+
+| | trivial | standard | high_risk |
+|---|---|---|---|
+| Plan gate | none | deterministic, in-session | model plan review (economy) |
+| Review | deterministic checks only + sampled audit | integrative review | integrative + triggered specialists |
+| Merge autonomy eligible | yes | yes, once earned | never auto-merges |
+| Default compute | economy | standard | deep floor where triggered |
+
+Sampled audits: `quality.audit_rate` (default 0.10) of merged `trivial`/`standard` issues receive a
+post-merge deep review whose findings become lessons and count as escaped defects when blocking.
+This is the calibration check on the cheap routes.
+
+## 5. Issue Lifecycle
+
+### 5.1 Lanes
+
+Six lanes. Rework, blockage, and questions are *attributes* (a reason recorded durably and
+projected as a label), not lanes.
+
+- `Backlog` — not dispatchable; never touched by Symphony.
+- `Todo` — dispatchable when unblocked (`blocked_by` all terminal).
+- `In Progress` — implementation attempts run here, including rework cycles.
+- `Review` — protected. Review attempts and the merge queue operate here.
+- `Human` — parked for the operator, with a durable `reason`: `needs_input`, `human_review`,
+  `agent_approval`, `blocked`, `budget_exhausted`, `no_progress`. Consumes no agent slot.
+- `Done` — terminal. Other terminal tracker states (`Closed`, `Cancelled`, `Duplicate`) are
+  treated as `Done`.
+
+Valid transitions: `Todo → In Progress → Review → Done`; `Review → In Progress` (rework);
+any non-terminal lane `→ Human` and `Human →` back to its origin lane once resolved. Direct
+`In Progress → Done` is invalid.
+
+### 5.2 Poll Tick
+
+Every `polling.interval_ms` (default 30000):
+
+1. Reconcile running attempts (stall detection; tracker state refresh — terminal state stops the
+   worker and cleans the workspace; a lane change away from the attempt's lane stops the worker
+   without cleanup).
+2. Reconcile issue and SystemJob `AwaitingHuman` claims plus their ParkedWork records (answered?
+   unblocked? terminal?).
+3. Advance the merge queue (Section 10.3).
+4. Validate config; on failure skip dispatch this tick but keep reconciling.
+5. Fetch candidates, sort (priority, then oldest `created_at`, then identifier), dispatch while
+   global slots (`agent.max_concurrent`, default 4) and budgets allow.
+6. Check the learning trigger (Section 12.2) and rolling fleet budgets (Section 7.1).
+
+Tracker adapters SHOULD support a webhook or event-stream trigger for an immediate tick;
+polling is the required baseline.
+
+Candidate eligibility requires the configured assignee when non-null, every lowercased
+`tracker.required_labels` value, a dispatchable lane, satisfied blockers, an unclaimed issue, an
+available slot, and a successful required-skill preflight. Blank required labels are invalid.
+Removing an assignee/required-label match during execution makes the issue ineligible at the next
+reconciliation and stops the worker without workspace cleanup. Named tracker priorities normalize
+to integers by first match in `tracker.priority_order`; unknown/blank values become null and sort
+last.
+
+On first observation, the orchestrator opens a baseline StageTransition for the tracker lane using
+the tracker's state-change timestamp when available, otherwise the observation time marked as
+estimated. Reconciliation of an operator-made external lane change atomically closes the prior stage
+and opens the observed stage with the same timestamp rule. The UI identifies estimated boundaries.
+
+### 5.3 Implementation Attempt Flow
+
+1. Compute the provisional change class; select its compute route; commit the config snapshot;
+   reserve budget; transactionally acquire the lease and create the Attempt. Commit and apply the
+   `In Progress` lane-change intent through the tracker adapter, then open the StageTransition only
+   after its receipt. A failed/unconfirmed lane mutation prevents worker launch.
+2. Prepare workspace (Section 6); run `before_run` hook.
+3. **Plan first.** Before changing code, the agent submits the typed Plan from Section 3.16. The
+   orchestrator validates its schema and acceptance-criterion coverage, computes the authoritative
+   class, and writes the `PLAN.md` projection.
+   - `trivial`: no gate; proceed.
+   - `standard`: the orchestrator validates every acceptance criterion is mapped, proposed paths are
+     allowed and consistent with configured scope/risk rules, commands are present, and size is
+     internally consistent. Failure → one in-session revision message with the specific objection;
+     second failure → `needs_input` with the objection as the question.
+   - `high_risk`: the session ends with outcome `plan_ready`. A `plan_review` attempt
+     (economy profile, fresh context, reads issue + durable Plan + repo — never builder narrative)
+     returns `PlanReviewResult`. The orchestrator atomically applies every decision:
+     - `approve` marks that Plan revision `approved` and starts a new implementation Attempt in the
+       same workspace with the approved Plan as handoff;
+     - `needs_rework` marks it `rejected`, keeps the work claimed in `In Progress`, and starts a
+       fresh implementation Attempt with only the findings and factual handoff. The revised Plan is
+       validated and reviewed again. After `agent.max_plan_revisions` (default 2) rejected revisions,
+       route to `Human(human_review)`;
+     - `needs_input` marks it `rejected`, stores the question, and parks the work as
+       `AwaitingHuman` in `Human(needs_input)`. The answer seeds a new Plan revision; it does not
+       convert the rejected revision into an approval.
+   - If the issue itself is not implementable as specified (missing acceptance criteria,
+     contradictory requirements), the correct plan-stage outcome is `needs_input` — the plan gate
+     doubles as the issue-readiness check.
+4. Implement in short sessions: `agent.max_turns` default 8, `agent.turn_timeout_ms` default
+   900000 (15 min), token cap per Section 7. State lives in the workspace and the durable store,
+   not in long threads. Continuation guidance is orchestrator-rendered and MUST contain: current
+   plan state, last verification output, unmet acceptance criteria, remaining turn/token budget,
+   and the instruction to submit a Plan revision when planned paths, verification, size, or risks
+   change. It MUST NOT resend the original prompt.
+5. **Reclassify and verify before accepting done.** Recompute class from the final diff and apply any
+   newly required gates. A `completed` proposal requires the agent's verification evidence; absence
+   is a protocol failure. The orchestrator then runs and records the independent Section 6.2
+   verification. A non-passing Verification Record routes to rework.
+6. After verification passes, the completed outcome requests branch publication and PR
+   creation/update. The orchestrator
+   commits the result, performs authorized actions through Section 16.2, stores the resulting links,
+   and moves the issue to `Review`.
+
+### 5.4 Outcome Routing
+
+| Outcome | Orchestrator action |
+|---|---|
+| `completed` (implementation) | verify evidence + guards → `Review` |
+| `plan_ready` | dispatch plan review |
+| plan review `approve` / `needs_rework` / `needs_input` | apply the three atomic routes in Section 5.3 |
+| `needs_rework` | stay/return to `In Progress`; findings attached to next attempt; bounded by `agent.max_rework_cycles` (default 2), then `Human(human_review)` |
+| `blocked` | `Human(blocked)` with the named external blocker; claim → `AwaitingHuman` |
+| `needs_input` | `Human(needs_input)`; question rendered per Section 11.2 |
+| `no_progress` | retry once fresh; second time → `Human(no_progress)` |
+| `budget_exhausted` | `Human(budget_exhausted)` with spend summary |
+| `failed` | classify (Section 13) and retry only within budget |
+
+Missing, malformed, or evidence-free role terminal results produce an orchestrator-authored
+ExecutionFailure with class `agent_process`, never success.
+
+A ReviewResult always creates its per-attempt Review Record and moves the Claim to `Ready`; no
+lifecycle route is chosen until the complete required set can produce a ReviewSet. An
+AdjudicationResult `resolve` applies only the named conflict dispositions and then recomputes that
+ReviewSet; `needs_human` parks the work in the issue `Human(human_review)` lane or SystemJob `human`
+stage with its question. A SynthesisResult `propose_changes` moves the synthesis SystemJob to
+`review` after authorized branch/PR publication, `no_change` moves it directly to `done` with its
+evidence, and `needs_input` parks it in `human` with its question. Each result, claim-mode change,
+Plan/ReviewSet update, and internal SystemJob stage change is one atomic durable transaction.
+
+An ExecutionFailure with `budget_exhausted` parks an issue in `Human(budget_exhausted)` or a SystemJob
+in `budget_exhausted` pending an authorized budget action. An ExecutionFailure with `failed` routes by
+Section 13 and its work reference.
+
+For an implementation Attempt whose work reference is a repair SystemJob, the Section 5.4 statuses
+map to SystemJob stages instead of tracker lanes: `completed → review`, `needs_rework → rework`, and
+`blocked`/`needs_input`/`no_progress → human` with ParkedWork. No tracker transition is synthesized.
+
+Every issue-lane transition is a SideEffectIntent. The orchestrator opens the corresponding
+StageTransition only after a receipt confirms the tracker revision. On failure it retains the prior
+confirmed lane, records the typed failure, and reconciles before retrying.
+
+## 6. Workspaces and Verification
+
+### 6.1 Layout and Safety Invariants
+
+- Path: `<workspace.root>/<sanitized identifier>` (`[A-Za-z0-9._-]`, others → `_`).
+- SystemJob path: `<workspace.root>/_system/<kind>-<sanitized short id>`.
+- The agent subprocess `cwd` MUST be the workspace path.
+- The workspace path MUST resolve (symlinks included) to a descendant of `workspace.root`;
+  string-prefix checks are insufficient.
+- Before any agent or hook runs, the runner MUST enforce a filesystem write boundary using a
+  sandbox, mount namespace, dedicated account/ACL, or equivalent control. The process may write only
+  beneath the fully resolved assigned workspace; its `HOME`, temporary directory, caches, and tool
+  state MUST also be located there. The control MUST resolve every write target at operation time
+  and deny absolute external paths, `..` traversal, bind/mount escapes, and symlinks whose target is
+  outside the workspace. Setting `cwd` or relying on prompt instructions is not enforcement.
+- One work-ref Claim owns one mutable workspace; unowned workspaces are quarantined at startup.
+- Before the first agent starts, the Workspace Manager populates a checkout at the recorded base SHA
+  through a trusted repository adapter or operator-managed local mirror. It records repository,
+  base SHA, checkout method, and local branch. Agents may create local commits but cannot publish
+  them; Section 16.2 publishes from the workspace after authorization.
+- The runner MUST launch the agent in a process group (or equivalent) and, on cancellation,
+  timeout, stall, or shutdown, terminate all descendants and verify exit before releasing the
+  lease.
+- Workspaces persist across attempts for the same work item; terminal issue and completed SystemJob
+  workspaces are cleaned at startup and on reconciliation after durable history is committed.
+
+### 6.2 Verification Loop (REQUIRED)
+
+`workspace.verify_command` is a REQUIRED config value: the command that provides ground truth for
+this repository (tests, typecheck, lint, build — repository's choice). Setting it to the literal
+`none` is permitted only with `workspace.verify_none_reason` documented, and restricts all issues
+to `supervised` merges.
+
+The prompt MUST instruct agents to run it early and often. At the `completed` boundary, the
+orchestrator MUST independently run the pinned command in the workspace against the proposed target
+revision, using the scrubbed verifier environment, and commit a Verification Record. Agent-provided
+verification evidence is useful context but cannot satisfy the guard by itself. Failure routes to
+rework; runner/configuration failure routes by Section 13. The merge queue re-runs required CI checks
+regardless.
+
+### 6.3 Hooks
+
+`after_create` (runs only after a new workspace is populated; fatal on failure), `before_run`
+(fatal to the attempt), `after_run` (logged, ignored), `before_remove` (logged, ignored). Executed
+with the workspace as `cwd` via a
+**non-login** shell (`bash -c`) and the scrubbed environment of Section 15.2, bounded by
+`hooks.timeout_ms` (default 60000).
+
+## 7. Cost Control
+
+Budgets are enforced, not observed. The per-attempt token cap is always enforced. Priced adapters
+also enforce per-attempt, per-issue, and rolling fleet USD budgets; unpriced adapters enforce token
+equivalents at issue and fleet scope.
+
+### 7.1 Budget Scopes
+
+- `budget.per_attempt_tokens` (default 400000): a hard cap for every Attempt, including Attempts for
+  SystemJobs. The runner terminates the process tree at the cap. The orchestrator writes a
+  `budget_exhausted` ExecutionFailure from the latest durable handoff and identifies itself, not the
+  terminated agent, as the result author.
+- `budget.per_attempt_usd` (default 5.00): a hard priced-adapter cap for every Attempt. Dispatch
+  reserves against its attempt ledger; streaming usage is topped up only to this limit. Once
+  observed usage reaches the cap, no further turn starts and the process tree is terminated with the
+  same orchestrator-authored result. Delayed provider reporting may produce a recorded overrun but
+  never authorizes another turn.
+- `budget.per_issue_usd` (default 10.00): cumulative across all attempts and reviews for the
+  issue. Exhaustion → `Human(budget_exhausted)`. Nothing dispatches for the issue until the
+  operator raises its budget or resets it.
+- `budget.rolling_24h_usd` (default 50.00): fleet-wide, rolling 24h. Exhaustion pauses new dispatch
+  (running attempts finish), fires a notification, and resumes automatically when the window
+  clears.
+- `budget.per_issue_tokens` (default 2000000) and `budget.rolling_24h_tokens` (default 10000000):
+  required enforcement scopes when `cost_usd` is unavailable. They have the same parking and pause
+  behavior as their USD counterparts.
+
+### 7.2 Accounting
+
+Token accounting is a boundary contract, because budgets depend on it:
+
+- Adapters emit `token_usage` events carrying **absolute session totals**
+  (`input_tokens`, `output_tokens`, `total_tokens`) plus any priced categories required by the
+  pinned price table (for example cached input). Delta-style provider payloads MUST be converted to
+  absolute totals inside the adapter; the orchestrator never sees deltas.
+- The orchestrator tracks the last reported totals per session and accumulates the difference,
+  so repeated or replayed events never double-count.
+- A generic `usage` map on other event types is informational only and MUST NOT feed totals.
+- `cost_usd` is the sum of each absolute billable category multiplied by its rate in the pinned
+  model/price-table version, with units normalized explicitly. It updates as events stream and is
+  finalized at Attempt exit. Attempts that die without a final usage event keep their last
+  accumulated value.
+
+Per-issue cost is the sum over its attempts and MUST be answerable from the durable store with one
+query. Per-issue tokens are the corresponding token sum. Rolling fleet usage and aggregates by
+role, class, and profile are derived from the same records and SystemJobs.
+
+### 7.3 Budget-Aware Routing
+
+Before dispatch, the orchestrator reserves expected usage against every applicable ledger: attempt
+for all work, issue for issue work, and rolling fleet for all work. A priced adapter reserves tokens
+against the attempt token cap and USD against attempt, issue, and fleet ledgers; an unpriced adapter
+reserves tokens against attempt, issue, and fleet ledgers. Expected tokens are the configured
+profile estimate until `budget.history_min_samples` matching Attempts exist, then the higher of that
+estimate and the nearest-rank 75th percentile over the most recent
+`budget.history_window_samples` Attempts for the same role/profile. Before enough priced cost
+history exists, expected USD is expected tokens at the highest applicable per-token rate in the
+pinned price table; afterward it is also floored by the matching cost percentile. Fan-out reserves
+the sum of all children. A reservation that does not fit routes an issue to
+`Human(budget_exhausted)`, parks a SystemJob in `budget_exhausted`, or pauses fleet dispatch; it MUST
+NOT start partially.
+
+As usage streams, actual usage replaces the reservation. Before actual usage can consume the
+remaining reservation, the orchestrator atomically requests a top-up; if no applicable ledger can
+grant it, the runner starts no further turn and terminates the execution with `budget_exhausted`.
+Unused reservation is released at Attempt exit. The hard per-attempt token and, when priced, USD
+caps bound a single Attempt. Issue and rolling fleet limits are dispatch ceilings: running work may
+consume its granted reservation. Any unavoidable overrun from delayed provider reporting is recorded
+as a budget-overrun event, blocks further dispatch in that scope, and is never hidden or
+retroactively deleted. The UI
+MUST distinguish limit, reserved, consumed, overrun, and remaining values. Budget changes and resets
+are durable OperatorActions and never delete usage history.
+
+Remaining budget is also a routing input: an escalation or specialist fan-out whose reservation
+exceeds remaining budget does not run. Escalations never lower deterministic risk floors; budgets
+never raise autonomy.
+
+## 8. Compute Routing
+
+Logical profiles `economy`, `standard`, `deep` map to provider `model` + `reasoning_effort` in the
+versioned agent adapter. Workflow policy names only logical profiles and role/class defaults; it
+MUST NOT embed provider model slugs.
+
+- Each attempt pins one profile at dispatch; the model never changes inside a thread.
+- Attempt-role defaults: `plan_review`: economy; `implementation`: by change class (Section 4);
+  `integrative_review`: standard; `specialist_review` and `adjudication`: deep. The synthesis
+  SystemJob uses `deep`.
+- Deterministic risk-floor rules raise the floor; a heuristic or model classifier MAY raise,
+  MUST NOT lower.
+- At most `agent.max_escalations` (default 1) per work item: a fresh Attempt on a stronger profile,
+  seeded only with the structured factual handoff. Escalate when an attempt exposes new risk,
+  contradicts evidence, or repeats a failure — and only if budget allows (Section 7.3).
+- Selected profile, resolved model, effort, and triggering rule ids are pinned on the attempt and
+  visible in events.
+
+Each `compute.risk_floor_rules` entry is `{id, roles[], when, minimum_profile}`. `when` contains only
+deterministic predicates over labels, proposed/changed path globs, diff size, acceptance-criteria
+presence, dependency facts, and configured change facts. Unknown predicates are validation errors.
+Rules are evaluated in order and the highest matching floor wins; order breaks ties only for
+recorded routing reasons.
+
+The built-in ids are `risk.security_auth`, `risk.migration_data`, `risk.concurrency`,
+`risk.public_api`, `risk.cross_package_architecture`, and `risk.ambiguous_criteria`; each maps its
+corresponding Section 4 fact to `deep`. Configuration MAY add rules but MUST NOT lower the class and
+role defaults in this section. Built-in risk rules target the `implementation` role; plan review
+remains `economy`, while specialist/adjudication roles already have a `deep` default.
+
+## 9. Review
+
+### 9.1 Pipeline
+
+1. Deterministic checks first: CI status, diff scope vs. plan, passing orchestrator Verification
+   Record present,
+   PR/branch hygiene. Failures route to rework without spending review tokens.
+2. One **integrative review** (fresh context) over the full diff and acceptance criteria —
+   required for `standard` and `high_risk`. Inputs: issue, acceptance criteria, diff, changed
+   files, check results, repo docs. Excluded: builder narrative, self-review, claims of
+   correctness.
+3. **Specialists** fan out only on deterministic triggers, up to `review.max_parallel_specialists`
+   (default 2), on the same immutable SHA. Default slices: `systems_security` (security,
+   data integrity, concurrency, failure modes) and `architecture_product` (API coherence,
+   maintainability, product behavior).
+4. Findings are unioned and deduplicated by (affected behavior, evidence). **No voting.** A single
+   `deep` adjudication runs only when two reviewers make explicitly contrary blocking findings
+   about the same behavior; the adjudicator MUST cite evidence and MUST NOT erase an uncontested
+   blocking finding.
+5. After the complete required reviewer set finishes, the Review Coordinator atomically commits the
+   Section 3.6 ReviewSet. Its aggregate decision routes once: approve (→ merge queue), needs_rework
+   (→ `In Progress` with findings), needs_human (→ `Human(human_review)`), blocked (→
+   `Human(blocked)`). A partial reviewer set can never produce aggregate approval.
+
+All review output is written as durable Review Records and one aggregate ReviewSet (Section 3.6).
+The merge gate reads only the ReviewSet, pinned to the reviewed SHA, and the records it names. A SHA
+change invalidates prior approvals.
+
+Each `review.specialists` entry is `{name, trigger_rules[], concerns[], required_evidence[],
+excluded_context[], profile}`. Names are unique; profiles resolve through the adapter; trigger rules
+use the same deterministic predicate vocabulary as Section 8. A matching specialist receives only
+its declared evidence plus the common immutable review inputs. Invalid entries fail configuration.
+
+### 9.2 Check, Review, and Thread Gate
+
+Required checks are the union of `review.required_checks` and checks reported as required by the
+repository's protection rules. A configured check missing from the snapshot is pending, not
+successful. Every required check MUST target the current head SHA and have a conclusion in
+`review.accepted_check_conclusions` (default `success`, `neutral`, `skipped`). Pending, stale,
+cancelled, timed-out, action-required, or missing checks deny the gate with a typed reason.
+
+The pull request MUST be open, non-draft, and mergeable. Missing/closed PRs and incomplete snapshots
+deny with a typed artifact reason; transient mergeability calculation and pending checks wait only
+within the configured settle timeout.
+
+Each snapshot fetch is bounded by `review.snapshot_timeout_ms`. Fetch/auth/pagination failure never
+passes the gate; it retains the last confirmed stage and routes according to Section 13.
+
+An unresolved, non-outdated review thread blocks the gate. A changes-requested review blocks until
+the same reviewer dismisses or supersedes it, or an operator with `merge_queue.write` records an
+audited override.
+Human merge approval counts only when submitted by an operator whose configured `tracker_login` has
+`merge_queue.write`, targets the current head SHA, and has not been superseded. Model Review Records
+never impersonate Git-hosting reviews.
+
+### 9.3 Review Economics
+
+Blocking findings must carry behavior + evidence + disposition; unsupported stylistic preference is
+non-blocking by definition. Review spend is recorded like any attempt and reported per issue and
+per class; there is no fixed percentage target — the calibration signal is the escaped-defect rate
+(Section 14.2) versus review spend, examined at synthesis time.
+
+## 10. Git, PRs, and the Merge Queue
+
+### 10.1 Branch and PR Contract
+
+- One branch per issue: `symphony/<sanitized-identifier>`, created from the default branch.
+- One branch per SystemJob PR: `symphony/system-<kind>-<short-id>`.
+- Repair cycles use `<primary-branch>-repair-<cycle>` from the then-current default branch.
+- At most one open PR per work item at a time, created or updated by the orchestrator through Section
+  16.2 after an authorized result; an issue PR body links the issue. A repair PR begins a new work
+  cycle after the prior PR is merged or closed. Force-pushes are permitted only to the work item's
+  own branch.
+- The PR description carries the plan summary and verification evidence (projection of durable
+  records; human-readable only).
+
+### 10.2 Human-Readable Projection
+
+The workpad of v2 is reduced to a projection: the orchestrator MAY maintain one issue comment
+summarizing plan, status, spend, guard results, and links. It is written by the orchestrator from
+durable state, never parsed as an input to any decision.
+
+### 10.3 Merge Queue
+
+Merges are serialized per repository: at most one repository mutation may be in the landing or
+post-merge verification phase at a time. Independent repository queues MAY progress concurrently.
+
+1. Eligibility: aggregate ReviewSet approval for the current head SHA, the Section 9.2 gate allows,
+   autonomy policy permits (Section 11.1) or an authorized operator approved, and the side-effect
+   intent targets the current head and observed base SHA.
+2. If the base branch advanced: update/rebase the branch and re-run required checks. Compute a
+   normalized patch identity from the ordered file modes, paths, and content changes between base
+   and head, excluding commit metadata. If it equals the identity reviewed previously, Symphony MAY
+   carry forward only its internal review conclusion: it MUST write an allowing carry-forward Guard
+   Decision and a new ReviewSet pinned to the updated head/base, linked to the prior ReviewSet and its
+   named Review Records. The new set records the current passing Verification Record and current
+   guards. CI and human review requirements still target the new head. A changed identity requires
+   fresh integrative review.
+   The orchestrator also reclassifies the changed diff and applies any higher risk floor.
+3. Merge via the repository's landing procedure; watch required post-merge/deploy checks to a
+   terminal state; then move an issue to `Done` or a SystemJob to `done`.
+4. A pre-merge failure routes an issue to `In Progress` or a SystemJob to `rework`, with evidence,
+   and pauses that repository's current queue entry until repaired or skipped by an operator.
+5. A post-merge/deploy failure creates a new repair cycle, branch, and PR through Section 16.2,
+   links the failed merge revision, and records an escaped defect when the failure indicates shipped
+   or default-branch breakage. The original issue returns to `In Progress`; a SystemJob enters
+   `failed` and links a repair SystemJob. The merged branch is never treated as an open rework branch.
+   Other repository queues continue.
+
+A repair SystemJob follows the Section 5.3 plan, classification, implementation, independent
+verification, review, and budget contracts without tracker-lane mutations. Its provisional class is
+at least `standard`; security, data, migration, concurrency, or public-API failures make it
+`high_risk`.
+
+## 11. Humans: Autonomy, Questions, Notifications
+
+### 11.1 Graduated Autonomy
+
+Per change class, merge autonomy is `supervised` (default: every merge requires operator approval)
+or `auto`. Rules:
+
+- All classes start `supervised`. `high_risk` is permanently `supervised`.
+- Promotion to `auto` is an explicit operator action. The system supports the decision with
+  measured data: trailing escape rate, rework rate, and issue count for the class.
+- Demotion is automatic and immediate: any escaped defect (Section 14.2) in a class returns it to
+  `supervised` and fires a notification.
+- Synthesis PRs (Section 12) and `verify: none` repositories are always `supervised`.
+
+Operator approval is given on the PR by an authorized login or through the authenticated UI/API;
+the orchestrator detects or records it at reconciliation.
+
+### 11.2 Structured Questions
+
+`needs_input` renders the terminal result's `question` into the UI and, for issue work, one issue
+comment:
+
+```
+**Symphony needs a decision** (issue parked in Human)
+<question text>
+1. <option A> (default)
+2. <option B>
+Reply with a number or free text. First reply from an authorized operator is consumed.
+```
+
+Authorized operators are `human.operators` (REQUIRED records with stable `id`, optional
+`tracker_login`, Control API `auth_subject`, and `capabilities`). The first answer submitted by a
+configured tracker login or API identity whose operator has `question.answer` wins through an atomic
+expected-version update. It is stored durably, echoed into the next attempt's context, and the issue
+or SystemJob returns to its origin stage. Human-parked work is reconciled every tick;
+`human.reminder_hours` (default 24) re-notifies once.
+
+### 11.3 Notifications
+
+`notify.command` (shell) and/or `notify.webhook_url`. Fired on: entry to `Human` (any reason),
+rolling fleet-budget exhaustion, autonomy demotion, merge-queue pause, synthesis PR opened, and
+service startup validation failure. Payload: work reference and URL when applicable, reason,
+one-line summary, and spend so far.
+Each notification uses a SideEffectIntent/Receipt and idempotency key; delivery failure is visible in
+the UI and follows infrastructure retry policy without duplicating a confirmed delivery.
+The notification adapter accepts the common Section 3.14 MutationAuthorization and rejects any
+delivery whose fleet/work scope, configuration snapshot, target, or action does not match it.
+
+### 11.4 Operator Controls
+
+The UI and API are the required operator channel for budget changes/resets, autonomy promotion or
+demotion, privileged configuration acknowledgment, durable configuration overrides, merge-queue
+retry/skip, synthesis dispatch, retention policy, and manual refresh. Each action requires an
+authorized capability, expected target version, idempotency key, and durable OperatorAction. Direct
+database writes are non-conforming.
+
+Required capability identifiers are `operator.read`, `question.answer`, `config.write`,
+`agent.approve`, `config.ack`, `budget.write`, `autonomy.write`, `merge_queue.write`,
+`synthesis.write`, and `retention.write`. An implementation MAY add capabilities but MUST NOT
+collapse all mutations into read access. The bootstrap administrator receives all required
+capabilities until changed through an acknowledged operator configuration.
+
+## 12. Learning Loop
+
+### 12.1 Lesson Capture
+
+The orchestrator writes Lessons (Section 3.8) automatically for: guard denials, rework cycles
+(with the triggering findings), blocking review findings, escaped defects, plan rejections,
+repeated tool failures, budget exhaustions, and every `confusions` entry from outcomes. No agent
+cooperation is required beyond the outcome contract.
+
+### 12.2 Synthesis
+
+After every `learning.interval_issues` (default 25) completed issues — or on an authenticated
+operator action — the orchestrator queues one synthesis SystemJob (deep profile). Its Attempts use
+the global concurrency pool and rolling fleet budget. Inputs:
+lessons since the last synthesis, current prompt and rules with citation counts, and per-class
+quality/cost metrics. Its typed SynthesisResult either proposes a PR editing the workflow prompt's
+rules block and, where justified, repo docs; records an evidence-backed `no_change`; or asks a
+structured operator question. A proposal includes a summary of rule additions/removals with cited
+lesson ids.
+
+The orchestrator creates the SystemJob and dispatches one `synthesis` Attempt. The SystemJob enters
+its own `review` then `merge` status and uses the same review and
+repository merge gates as issue work. It is always `supervised`; it does not create or move a
+tracker issue. Self-improvement is gated exactly like code.
+
+### 12.3 Saturation Controls
+
+- `learning.max_rules` (default 25) and `learning.max_prompt_tokens` (default 4000) are hard caps.
+- At the cap, adding a rule requires removing or merging one; the synthesis output must say which
+  and why.
+- Every rule cites its lessons. The orchestrator increments `citation_count` when a rule's id is
+  referenced by a guard denial, routing decision, or review finding.
+- Rules uncited for `learning.rule_decay_issues` (default 100) completed issues MUST be proposed
+  for removal at the next synthesis. Evidence-free rules do not accumulate.
+
+## 13. Failure Handling and Retries
+
+Every failure maps to one class:
+
+- `infrastructure` — tracker/network outage, provider capacity, rate limits. Retried with
+  exponential backoff + jitter (base 10s, cap `agent.max_retry_backoff_ms`, default 300000),
+  honoring provider retry-after. It does not consume `agent.max_failure_retries`. Persistent
+  infrastructure failure (>1h) fires a notification.
+- `agent_process` — crash, protocol violation, timeout, stall, malformed terminal result. Retried within
+  `agent.max_failure_retries` (default 2) per work-item cycle.
+- `configuration` / `auth` — not retryable. A shared adapter, credential, or configuration failure
+  pauses dispatch for its affected scope; an issue-specific permission failure parks that issue in
+  `Human(blocked)`. The record names the observable recovery fact. Repeating a non-retryable failure
+  without new evidence is prohibited.
+- `policy` — denied side effect, unsafe path, injection boundary. Not automatically retryable;
+  always produces a lesson.
+- `task` — deterministic test failures, unreconcilable criteria. Not a retry; routes through
+  outcomes (`needs_rework` / `needs_input` / `blocked`).
+
+Stall detection: no adapter event for `agent.stall_timeout_ms` (default 300000) → kill and retry.
+Restart recovery: reload leases/attempts before dispatch; close attempts interrupted without a
+durable terminal result as `agent_process`; reconcile side-effect intents by idempotency key; compare
+tracker, store, and workspace ownership before any re-dispatch; never assume an old process
+survived.
+
+Every external mutation carries an idempotency key (work reference, attempt/SystemJob, action,
+target revision) and is
+committed as an intent before it is applied. Persistence failure stops new dispatch and external
+mutations immediately. Existing workers MUST be stopped if the service can no longer renew leases,
+record token/cost usage, or commit their terminal result safely.
+
+## 14. Observability and Quality Measurement
+
+### 14.1 Required Surfaces
+
+- **Structured durable logs** with `service_run_id` and, when applicable, `work_ref`, issue
+  identifier, `attempt_id`, `session_id`, and stage transition. Startup, validation, dispatch, agent
+  activity, commands, tool actions, verification, review, merge, and failure records MUST be visible
+  in the UI without a debugger.
+- **Event records** (append-only table, exportable as JSONL): lane transitions, dispatches with
+  routing reasons, terminal results, guard decisions, review decisions, merges, budget events,
+  autonomy changes, configuration changes, and syntheses. Every event carries `event_name`,
+  `result`, `reason_code`, `timestamp`, and the identifiers applicable to that event. Fleet events
+  may omit `work_ref`; work-scoped events require it; attempt events require `attempt_id` and
+  `compute_profile`; issue implementation events require `change_class`; `cost_usd` is null for
+  unpriced work. Budget events require scope, limit, reserved, consumed, overrun, and remaining.
+  Configuration and operator events require actor, target, and version. Events MUST NOT contain
+  prompts, diffs, or secrets.
+- **Cost queries**: per-issue, per-class, per-role, SystemJob, and rolling fleet usage answerable
+  from the store.
+
+Attempt/SystemJob totals, UsageSamples, ServiceRuns, StageTransitions, terminal results, evidence,
+links, events, logs, review records, and OperatorActions are durably retained indefinitely by
+default. Section 14.5 governs explicit retention and deletion.
+
+### 14.2 Quality Metrics (the other Pareto axis)
+
+An **escaped defect** is: a revert of a Symphony merge; a post-merge/deploy failure attributable to
+that merge; a subsequent fix PR linked to the same issue or touching the same files within
+`quality.escape_window_days` (default 14) and confirmed by an authorized operator or sampled audit;
+or a blocking finding from a sampled audit (Section 4).
+
+A sampled audit creates a reproducible read-only checkout of the recorded merge SHA and base SHA,
+runs the required deterministic checks, and dispatches a deep review with the original criteria and
+diff. Its findings, usage, cost, and target revisions are durable even though the issue is terminal
+and its mutable workspace has been cleaned. A blocking finding creates a lesson, demotes autonomy,
+and opens or links a repair work item; it never silently reopens a cleaned workspace.
+
+Tracked per change class and compute route: escape rate, rework cycles per accepted issue,
+plan-rejection rate, cost per accepted issue, and review spend per accepted issue. These numbers
+drive autonomy promotion evidence, risk-floor tuning, and synthesis — they are the point of the
+whole exercise: cost per accepted issue on one axis, escape rate on the other.
+
+### 14.3 Required Operator UI
+
+A conforming implementation MUST ship a working browser UI. Shipping only the API is
+non-conforming. The UI reads the required Control API; it MUST NOT query SQLite directly or derive
+decision state from tracker comments or humanized log strings.
+
+Required surfaces:
+
+1. **Operations dashboard** — current issue count by lane; running attempts with current role/stage;
+   retry due times; parked reasons and waiting duration; SystemJob status; merge queues by
+   repository; current USD and
+   token limits at attempt/issue/fleet scope, reservations, consumption, overrun, and remaining
+   budget; cumulative token/cost/time totals;
+   latest failures and notifications; direct links to every tracked issue and generated PR.
+2. **Issue and run history** — issue metadata and links; a StageTransition timeline with duration in
+   each stage; all issue attempts/reviews and any SystemJobs whose evidence references the issue,
+   terminal results, evidence,
+   verification, findings, side effects, configuration snapshots, token/cost/time totals and usage
+   history; logs and normalized agent actions grouped by stage; previous completed runs and service
+   restarts. Logs MUST support pagination, filtering, and live updates after the durable write.
+3. **Settings and controls** — every configurable key's effective value, source (`default`,
+   `workflow`, or `operator_override`), version, reload category, acknowledgment and restart state;
+   create/update/clear controls for every runtime-overridable key; bootstrap-only keys shown read-only
+   with the reason; budget change/reset; autonomy controls; privileged change acknowledgment;
+   pending agent approvals; merge-queue retry/skip; synthesis trigger; retention policy; operator
+   audit log.
+
+The UI MUST identify stale data and API errors visibly. A failed mutation MUST leave the submitted
+value and structured error visible; the UI MUST NOT display an uncommitted optimistic value as
+effective configuration.
+
+### 14.4 Required Control API
+
+The authenticated API MUST provide, at minimum:
+
+- state, budget, quality, notification, and repository-queue reads;
+- paginated issue, attempt, SystemJob, ServiceRun, StageTransition, event, log, usage, ReviewRecord,
+  ReviewSet, evidence, mutation-authorization, side-effect, RepositoryLink,
+  configuration-snapshot, and OperatorAction reads;
+- effective configuration and source metadata reads;
+- configuration override create/update/clear and privileged acknowledgment;
+- operator-question answer and agent-approval decision; budget change/reset; autonomy change; queue
+  retry/skip; synthesis dispatch; retention update; and immediate refresh operations.
+
+Every read requires `operator.read`; mutation endpoints require their Section 11.4 capability in
+addition.
+
+All mutations require an authenticated operator, an explicit capability, `expected_version`, and
+`idempotency_key`. Repeating a key in the same actor/endpoint/target scope with the same request hash
+returns the original result; a different payload returns `409 idempotency_conflict`. A version
+mismatch returns `409` without changing target state but is still audited. Browser mutations require
+same-origin enforcement and a CSRF defense bound to the authenticated session. Remote access
+requires TLS; the default bind is loopback. Authentication
+cookies MUST be `Secure` when TLS is used, `HttpOnly`, and `SameSite=Lax` or stricter.
+
+Issue text, logs, commands, tool output, comments, and URLs are untrusted UI data. The UI MUST escape
+them by default, sanitize any explicitly supported rich text, reject unsafe URL schemes, and ship a
+Content Security Policy that prevents inline script execution from displayed content.
+
+Errors use `{ "error": { "code": "...", "message": "...", "details": {...},
+"current_version": "..." } }`. Authorization failures return `403`; unauthenticated requests
+return `401`; invalid values return `422`. Secrets are never returned. Every accepted or rejected
+authenticated mutation creates an OperatorAction, including actor, capability, target version,
+reason, and result. Unauthenticated attempts create a rate-limited security LogRecord without
+persisting supplied credentials.
+
+### 14.5 Durable History and Retention
+
+The default retention value is `null`, meaning indefinite. Completed issues, previous attempts,
+previous ServiceRuns, stage durations, logs, events, token and cost history, evidence, links, and
+operator actions remain queryable and visible in the UI after completion and restart.
+
+An authorized operator MAY set a finite retention policy or request deletion through the API. The
+change and each deletion are audited. Deletion MUST NOT remove active-work records, unresolved
+side-effect evidence, records under an operator/legal hold, or the aggregate usage/cost/quality data
+needed to explain current budgets and autonomy. When detail is deleted, the UI MUST show a durable
+tombstone containing scope, time range, actor, policy version, deletion time, and retained aggregate
+totals; it MUST NOT present missing history as if no activity occurred.
+
+## 15. Security
+
+### 15.1 Trust Boundaries
+
+Issue text, PR comments, repository contents, tool output, and fetched content are untrusted input.
+Policy lives in the orchestrator and effective configuration, never delegated to those inputs.
+Agents hold no tracker, repository-hosting, notification, operator-control, or control-plane
+credentials; all such mutations flow through typed adapters with authority checks, revision
+pinning, idempotency, and audit. A deployment MUST prevent agents from recovering host credentials
+through inherited environment variables, credential files under `HOME`, sockets, or mounted paths.
+Broad passthrough tools (raw GraphQL execution in-session) are not part of this specification.
+
+### 15.2 Secrets and Environment
+
+- Config secret values MUST use `$VAR` indirection. Literal tokens in `WORKFLOW.md` are a
+  validation error.
+- Agent and hook processes receive a scrubbed environment: `env.allowlist` plus a minimal
+  PATH/locale baseline and an isolated credential-free `HOME` created for that execution context.
+  The orchestrator's environment and host HOME are never inherited wholesale.
+- Secrets are resolved at the adapter boundary, never persisted in snapshots, prompts, handoffs,
+  events, or logs; tool results are filtered for credential patterns before entering model context
+  or durable records.
+
+### 15.3 Config-Change Acknowledgment
+
+`WORKFLOW.md` is repo-owned and agents modify the repo. Any candidate change that executes code,
+widens authority, exposes the service, changes credentials, or changes who may operate it requires
+explicit acknowledgment through the authenticated UI/API. This includes `hooks.*`,
+`agent.command`, `workspace.verify_command`, `notify.command`, `notify.webhook_url`,
+`env.allowlist`, approval/sandbox posture, `human.operators`, tracker/repository scope, authentication
+settings, non-loopback binding, workspace/database roots, and equivalent adapter settings.
+Keys marked `file-ack+` also treat repository-originated changes as pending because they can weaken
+cost, routing, verification, or quality controls; the same typed value set by an authorized operator
+override does not require a redundant second confirmation.
+
+Acknowledgment is a separate OperatorAction bound to the candidate config hash and expected
+version. A confirmation click that does not name that candidate is insufficient. Until acknowledged,
+the last known good effective value remains active and the UI shows the candidate as pending.
+Invalid candidates are never acknowledgeable. The reload category controls when an acknowledged
+value applies. This closes the loop where merged agent output becomes trusted shell or authority.
+
+First startup has no authenticated operator or last known good configuration. Bootstrap is permitted
+only when the post-migration database is **pristine**: every domain table other than schema-migration
+metadata is empty, with no ServiceRun, operator, claim, attempt, live session, intent, receipt,
+history, or configuration record. That store enters a narrow pre-auth bootstrap state before normal
+configuration validation: the service binds only to loopback, keeps orchestration and every external
+mutation disabled, and validates all configuration except the non-empty operator/auth-subject
+mapping and acknowledgments that require that first operator. The configured authentication adapter
+itself must still be structurally valid.
+
+An operator-empty but non-pristine database is corruption/recovery, never first startup. Bootstrap
+is prohibited. Before failing closed, the service loads recorded live sessions and intents,
+terminates and verifies every owned process, and queries providers by idempotency key to record any
+already-applied receipt; it MUST NOT issue a new external mutation or dispatch. It then records
+`operator_store_missing_nonpristine` and exits, requiring restoration of a known-good database with
+its operator/auth records. It MUST NOT create a replacement administrator in that store.
+
+Bootstrap requires a single-use credential supplied through a trusted startup argument or host
+environment (never `WORKFLOW.md`), displays the complete privileged-candidate hash on the trusted
+local console, and requires both that credential and explicit local hash confirmation. One SQLite
+transaction creates the initial administrator, its authentication mapping, the acknowledged initial
+configuration snapshot, and the bootstrap OperatorAction. Failure rolls back the entire transaction
+and leaves the service in loopback-only bootstrap state. The service then reruns full ordinary
+validation; only success permanently disables bootstrap and enables the authenticated UI/API and
+orchestration. It MUST NOT expose an unauthenticated remote setup page or reuse the bootstrap
+credential. After bootstrap, the UI/API is the only conforming acknowledgment channel.
+
+### 15.4 Sandboxing
+
+The agent adapter's approval/sandbox settings are configuration, and each deployment MUST document
+its posture. Approval requests and user-input signals from the agent protocol MUST NOT stall a run
+indefinitely: satisfy, surface, or fail them per documented policy. Independently of those
+provider-specific settings, every deployment MUST enforce the Section 6.1 write boundary for agent
+and hook processes. OS/container isolation, dedicated users, restricted workspace volumes, and
+network egress controls remain recommended defense in depth beyond that mandatory boundary.
+
+When policy surfaces an approval request, the orchestrator stores it durably, parks the execution
+in the issue `Human(agent_approval)` lane or SystemJob `human` stage without consuming an active
+agent slot where the protocol permits, and exposes it through UI/API. Only `agent.approve` may
+resolve it; the decision, actor, scope, and expiry are audited, then work returns to its origin stage.
+Timeout or unsupported parking produces a typed failure instead of an indefinite wait.
+
+### 15.5 Operator Authentication
+
+The configured authentication adapter MUST map a verified credential to an immutable
+`auth_subject`, which must match one `human.operators` record. Capabilities come from that effective
+operator record, not from client-supplied claims. Supported mechanisms are implementation-defined
+but MUST document session lifetime, logout/revocation, credential storage, and subject mapping.
+
+Local credentials are salted password hashes or stronger verifier records, never plaintext. OIDC
+validates issuer, audience, signature, expiry, and nonce. Trusted-proxy identity headers are accepted
+only from a configured authenticated proxy path and stripped from direct requests. Credentials and
+session tokens never appear in URLs, logs, events, configuration snapshots, or API responses.
+When an effective operator record or capability changes, the service MUST re-evaluate active
+sessions before their next request and revoke access that is no longer granted.
+
+### 15.6 First-Run Setup
+
+An implementation SHOULD ship a guided command-line setup that prepares a deployment before the
+service first starts. Setup is RECOMMENDED tooling, not a Core requirement; when provided it MUST
+follow this contract.
+
+Setup runs before bootstrap (Section 15.3), so no authenticated operator or durable state exists
+yet. Its only outputs are `WORKFLOW.md`, host-environment values, and operator-confirmed
+tracker-side changes made with the operator's own interactively supplied credentials. It MUST NOT
+create durable-store records (preserving the pristine-database bootstrap invariant), MUST NOT bind
+a network listener, and MUST NOT store its own state outside the outputs above.
+
+The guided flow covers, in order:
+
+1. **Tracker selection** — choose `tracker.kind` and its identifying configuration
+   (Section 18.1 `tracker.*` keys).
+2. **Credentials** — verify host authentication for the selected tracker and agent adapter using
+   each provider's native flow (for the GitHub reference profile, `gh` device-flow login; for
+   API-key trackers, an interactive prompt). Secret values are written only to the host
+   environment or an operator-chosen environment file and referenced from configuration as `$VAR`
+   (Section 15.2). Setup MUST NOT write a literal credential into `WORKFLOW.md`.
+3. **Project selection or creation** — list existing candidate projects/boards to choose from, or
+   create a new one through the Section 16.1 schema operation.
+4. **Schema check and remediation** — verify the configured status field exposes every
+   Section 5.1 lane, the priority field exists, and write authority works: the same checks as
+   Section 18.2 validation. Each missing item is offered as an explicit fix; setup MUST NOT
+   mutate the tracker without a per-change operator confirmation.
+5. **Workflow generation** — write `WORKFLOW.md` with the selected tracker keys, prompting for
+   required values that have no default (at minimum `workspace.verify_command`) and leaving
+   documented defaults for everything else.
+6. **Validation and handoff** — run the full Section 18.2 startup validation and report the
+   result. On success, direct the operator to start the service, which enters bootstrap.
+
+Setup MUST be idempotent: re-running it detects already-completed steps (valid credentials, an
+existing conforming project, a parseable `WORKFLOW.md`) and prompts only for the gaps, so an
+interrupted setup is resumed by running it again.
+
+After bootstrap, the authenticated UI and API are the channel for runtime settings (Section 18.3);
+setup exists for the identity-defining and secret-bearing values the UI intentionally cannot
+manage: bootstrap keys, credential material, and tracker identity. Post-setup schema drift is
+surfaced by per-tick validation (Section 18.2) in logs, events, and the UI; the remedy is a UI
+override for runtime keys, or re-running setup for identity and credential keys.
+
+## 16. Tracker and Repository-Hosting Adapter Contracts
+
+### 16.1 Tracker Adapter
+
+Required operations: `fetch_candidates()`, `fetch_states_by_ids(ids)`,
+`fetch_issues_by_states(states)` (startup cleanup), `update_issue_lane(id, lane, reason)`,
+`create_or_update_comment(id, marker, body)` (projection + questions),
+`fetch_comments_since(id, cursor)` (answers), and cursor-based pagination for every list operation.
+The adapter MUST detect an incomplete page (missing cursor while more results are reported) and fail
+the operation rather than silently treating partial data as complete.
+
+Adapter errors follow Section 13 (`infrastructure` unless clearly `auth`/`configuration`).
+Candidate-fetch failure skips a tick; state-refresh failure keeps workers running.
+Every mutating operation accepts the common Section 3.14 MutationAuthorization and MUST reject a
+missing envelope, tracker-scope/actor/configuration mismatch, or state revision that differs from
+the authorization's observed tracker snapshot. Provider request ids and resulting tracker revisions
+are returned for the SideEffectReceipt.
+
+**GitHub reference profile**: Issues + Projects v2; the Project single-select `Status` field is the
+lane source of truth (lane names of Section 5.1 as options); `Priority` field for ordering; native
+`blockedBy` for dependencies; `gh`/App auth (never tokens in config); one repository per workflow
+unless multi-repo is explicitly supported. Other trackers (e.g., Linear) implement the same
+contract; normalization per Section 3.1 (labels lowercased, ISO-8601 timestamps, blockers with
+states).
+
+Acceptance criteria are normalized only from structured tracker fields or checklist items under the
+configured `tracker.acceptance_criteria_heading`; adapters MUST NOT invent them from prose. Missing
+criteria produce an empty list and route through the plan-stage readiness rule.
+
+`ensure_project_schema(project, status_field, lanes, priority_field)` is an OPTIONAL operation that
+creates or repairs the tracker project so the configured status field exposes every Section 5.1
+lane, the priority field exists, and write authority is confirmed. It exists for Section 15.6
+first-run setup, runs with the operator's interactive credentials and per-change confirmation, and
+takes no MutationAuthorization because it precedes the durable store; the running service MUST NOT
+invoke it. An implementation advertising it declares Extension Conformance (Section 19.1) and MUST
+test idempotent re-runs and partial-schema repair.
+
+### 16.2 Repository-Hosting Adapter
+
+Required operations:
+
+- `publish_branch(work_ref, workspace, expected_base_sha)`
+- `ensure_pull_request(work_ref, head_sha, base_ref, body_projection)`
+- `fetch_pull_request_snapshot(work_ref)`
+- `update_branch(work_ref, expected_head_sha, expected_base_sha)`
+- `merge_pull_request(work_ref, expected_head_sha, landing_policy)`
+- `fetch_post_merge_status(repository, merge_sha)`
+- `create_repair_pull_request(work_ref, failed_merge_sha, evidence)`
+
+`fetch_pull_request_snapshot(work_ref)` returns:
+
+- `pr_number`, `pr_url`, `pr_state` (`open` | `closed` | `merged`), `is_draft`
+- `head_sha`, `base_ref`, `observed_base_sha`, `mergeable`
+- `required_check_source` (`configured` | `protection` | `union`)
+- `checks[]`: `{name, target_sha, status, conclusion, url, required_source}`
+- `review_decision` (`approved` | `changes_requested` | `none`)
+- `reviews[]`: `{author, state, commit_sha, submitted_at}`
+- `unresolved_threads[]`: `{id, author, url, commit_sha, is_outdated}`
+- `post_merge_checks[]`: `{name, target_sha, status, conclusion, url}` when a merge SHA exists
+
+The gate consumes only these normalized fields. An adapter MUST return complete review/check/thread
+data or fail the snapshot; partial pagination MUST NOT appear as an empty or successful result.
+
+Mutating calls accept the common Section 3.14 MutationAuthorization. The adapter MUST reject a
+missing envelope, actor/role/configuration/repository-scope mismatch, or stale revision. It MUST
+expose provider request identifiers and result revisions for the SideEffectReceipt. Agent and
+reviewer processes MUST NOT receive the adapter's credentials.
+
+The adapter owns provider-specific Git hosting details. The orchestrator owns policy: whether a
+branch may be force-updated, which checks and reviews are required, whether approval may carry
+forward, and whether a merge is authorized.
+
+## 17. Agent Adapter Contract
+
+Each provider integration is a versioned adapter that publishes: supported protocol range, price
+table per model, profile→(model, effort) mapping, and normalized event mapping. The adapter MUST:
+
+- Launch the subprocess in the workspace with scrubbed env; speak the provider protocol over its
+  transport; verify protocol/capability compatibility **before** an Attempt is charged.
+- Stream normalized events (`session_started`, `turn_completed`, `turn_failed`, token usage,
+  agent actions, rate limits) through a bounded channel with backpressure or fail-fast overflow.
+- Enforce read, turn, and token limits; expose one schema-constrained terminal-result channel whose
+  schema matches the Attempt role. If a session ends without a result, the adapter MAY attempt one
+  minimal elicitation turn on the Attempt's pinned profile in the same thread. Alternatively the
+  orchestrator MAY create a separately charged salvage Attempt. It MUST NOT change model or profile
+  inside an Attempt or thread.
+- Terminate the full process tree and confirm exit on any end state.
+
+Implementation roles also receive a schema-constrained `submit_plan` tool for Section 3.16. External
+actions remain requests in the terminal result; agent tools MUST NOT directly execute tracker or
+repository-hosting mutations.
+
+Before charging an Attempt, the runtime resolves every `agent.required_skills` name in
+documented repo-local and agent-home skill roots visible to that worker, records the resolved path
+and content hash in the config snapshot, and verifies the adapter can expose it to the session. A
+missing skill blocks dispatch with `configuration.missing_required_skill`; mentioning a skill only
+in the prompt does not satisfy preflight.
+
+The normalized upstream event set and error mapping every adapter targets are defined in
+Appendix B alongside the Codex reference profile; alternative adapters map their protocol onto the
+same enums so the orchestrator is provider-blind.
+
+## 18. Configuration and WORKFLOW.md
+
+One repo-owned file: YAML front matter (config) + Markdown body (the implementation prompt
+template, rendered strictly — unknown variables/filters fail — with `work_ref`, `issue` or
+`system_job`, `attempt`, `change_class`, `plan`, and `rules` available). The synthesized rules block
+(Section 12) lives in the body between `<!-- rules:start -->` and `<!-- rules:end -->` markers.
+
+The front matter is machine-readable YAML; Markdown is used only for the prompt body. This keeps the
+versioned baseline and prompt in one reviewable artifact. UI edits create Section 18.3 overrides;
+the UI MUST NOT rewrite or commit `WORKFLOW.md` implicitly.
+
+Workflow path precedence is the trusted startup `workflow.path`, then `WORKFLOW.md` in the process
+working directory. If the file starts with `---`, parse through the next `---` as YAML and require a
+map; the trimmed remainder is the prompt body. Without front matter, config is empty and the whole
+trimmed file is the body. Missing files, unterminated/invalid YAML, non-map front matter, empty prompt
+body, and template parse errors fail startup. The service MUST detect file changes. An invalid reload
+keeps the last known good file/config/prompt and records the error in logs, events, and UI.
+
+### 18.1 Configuration Reference
+
+This table is the configuration contract. Reload categories: **hot** (live scheduler, next tick),
+**attempt** (new attempts/SystemJobs), and **restart** (pending until restart; never partially
+applied). **bootstrap** comes only from the trusted startup boundary, is resolved before its first
+use (`persistence.database_path` before the store opens), is read-only in the UI, and cannot be a
+durable override. **ack+** is a modifier requiring Section 15.3 acknowledgment before the category
+applies regardless of source. **file-ack+** requires acknowledgment for a `WORKFLOW.md`
+candidate; an authenticated, authorized UI override is itself sufficient approval and applies at the
+named reload boundary.
+
+Bootstrap values come only from trusted process arguments or host environment, never from
+repository-owned `WORKFLOW.md`. A bootstrap key found in front matter or an override request is a
+validation error. The UI displays its redacted effective value and trusted source read-only.
+
+| Key | Type | Default | Reload |
+|---|---|---|---|
+| `workflow.path` | path | `<process-cwd>/WORKFLOW.md` | bootstrap |
+| `tracker.kind` | string | (required) | ack+restart |
+| `tracker.owner` | string | (required for github) | ack+restart |
+| `tracker.project_number` | integer | (required for github) | ack+restart |
+| `tracker.repo_owner` | string | (required for github) | ack+restart |
+| `tracker.repo_name` | string | (required for github) | ack+restart |
+| `tracker.status_field` | string | `"Status"` | ack+hot |
+| `tracker.priority_field` | string | `"Priority"` | hot |
+| `tracker.priority_order` | list of strings | `["P0", "Urgent", "Critical", "P1", "High", "P2", "Medium", "P3", "Low"]` | hot |
+| `tracker.acceptance_criteria_heading` | string | `"Acceptance Criteria"` | ack+hot |
+| `tracker.assignee` | string or null | `null` | ack+hot |
+| `tracker.required_labels` | list of strings | `[]` | ack+hot |
+| `polling.interval_ms` | integer | `30000` | hot |
+| `workspace.root` | path | `<system-temp>/symphony_workspaces` | ack+restart |
+| `workspace.verify_command` | string | (required; literal `none` permitted) | ack+attempt |
+| `workspace.verify_none_reason` | string | `null` (required if `none`) | attempt |
+| `hooks.after_create` | script | `null` | ack+attempt |
+| `hooks.before_run` | script | `null` | ack+attempt |
+| `hooks.after_run` | script | `null` | ack+attempt |
+| `hooks.before_remove` | script | `null` | ack+attempt |
+| `hooks.timeout_ms` | integer | `60000` | attempt |
+| `agent.command` | string | `"codex app-server"` | ack+attempt |
+| `agent.read_timeout_ms` | integer | `5000` | attempt |
+| `agent.max_concurrent` | integer | `4` | file-ack+hot |
+| `agent.max_turns` | integer | `8` | file-ack+attempt |
+| `agent.turn_timeout_ms` | integer | `900000` | file-ack+attempt |
+| `agent.stall_timeout_ms` | integer | `300000` (`<=0` disables) | file-ack+hot |
+| `agent.max_failure_retries` | integer | `2` | file-ack+attempt |
+| `agent.max_rework_cycles` | integer | `2` | file-ack+attempt |
+| `agent.max_plan_revisions` | integer | `2` | file-ack+attempt |
+| `agent.max_escalations` | integer | `1` | file-ack+attempt |
+| `agent.max_retry_backoff_ms` | integer | `300000` | hot |
+| `agent.required_skills` | list of names | `[]` | file-ack+attempt |
+| `agent.approval_policy` | adapter-defined value | (required) | ack+attempt |
+| `agent.thread_sandbox` | adapter-defined value | (required) | ack+attempt |
+| `agent.turn_sandbox_policy` | adapter-defined value | (required) | ack+attempt |
+| `budget.per_attempt_tokens` | integer | `400000` | file-ack+attempt |
+| `budget.per_attempt_usd` | number | `5.00` | file-ack+attempt |
+| `budget.per_issue_usd` | number | `10.00` | file-ack+hot |
+| `budget.rolling_24h_usd` | number | `50.00` | file-ack+hot |
+| `budget.per_issue_tokens` | integer | `2000000` | file-ack+hot |
+| `budget.rolling_24h_tokens` | integer | `10000000` | file-ack+hot |
+| `budget.estimate_tokens_by_profile` | map profile → integer | `{economy: 100000, standard: 200000, deep: 300000}` | file-ack+hot |
+| `budget.history_min_samples` | integer | `10` | file-ack+hot |
+| `budget.history_window_samples` | integer | `50` | file-ack+hot |
+| `compute.enabled_profiles` | list | `[economy, standard, deep]` | file-ack+attempt |
+| `compute.route_profiles` | map role/class → logical profile | defaults of Section 8 | file-ack+attempt |
+| `compute.risk_floor_rules` | ordered rule list | built-in rules of Section 4 | file-ack+attempt |
+| `class.trivial_max_changed_lines` | integer | `25` | file-ack+attempt |
+| `class.trivial_patterns` | list of globs | `[]` | file-ack+attempt |
+| `class.risk_paths` | list of globs | `[]` | file-ack+attempt |
+| `review.max_parallel_specialists` | integer | `2` | file-ack+attempt |
+| `review.specialists` | list | defaults of Section 9.1 | file-ack+attempt |
+| `review.required_checks` | list of names | `[]` | file-ack+hot |
+| `review.accepted_check_conclusions` | list | `[success, neutral, skipped]` | file-ack+hot |
+| `review.snapshot_timeout_ms` | integer | `30000` | hot |
+| `review.settle_timeout_ms` | integer | `1800000` | hot |
+| `review.quiet_period_ms` | integer | `0` | hot |
+| `quality.audit_rate` | number 0–1 | `0.10` | file-ack+hot |
+| `quality.escape_window_days` | integer | `14` | file-ack+hot |
+| `learning.interval_issues` | integer | `25` | hot |
+| `learning.max_rules` | integer | `25` | attempt |
+| `learning.max_prompt_tokens` | integer | `4000` | attempt |
+| `learning.rule_decay_issues` | integer | `100` | hot |
+| `human.operators` | list of `{id, auth_subject, capabilities[], tracker_login?}` | (required, non-empty) | ack+hot |
+| `human.reminder_hours` | integer | `24` | hot |
+| `notify.command` | string | `null` | ack+hot |
+| `notify.webhook_url` | string | `null` | ack+hot |
+| `env.allowlist` | list of var names | `[]` | ack+attempt |
+| `persistence.database_path` | path | `<service-data-root>/symphony-encore.sqlite3` | bootstrap |
+| `persistence.lease_ttl_ms` | integer | `120000` | hot |
+| `persistence.retention_days` | integer or null | `null` (indefinite) | ack+hot |
+| `server.port` | integer | `8080` | restart |
+| `server.host` | string | `"127.0.0.1"` | ack+restart |
+| `server.auth_kind` | string | (required) | ack+restart |
+| `server.session_secret` | secret reference | (required unless auth adapter supplies sessions) | ack+restart |
+| `bootstrap.admin_credential` | secret reference | (required only while operator store is empty) | bootstrap |
+| `ui.live_refresh_ms` | integer | `1000` | hot |
+
+### 18.2 Value Semantics and Validation
+
+- Secret-bearing values MUST use `$VAR` indirection (Section 15.2); `$VAR` resolving to empty is
+  treated as missing.
+- Path values expand `~`; a relative `workspace.root` resolves against the directory containing
+  `WORKFLOW.md`; the effective root is normalized to an absolute path before use.
+- Extensions MUST live below `extensions.<name>`; unknown extension names, unknown top-level
+  namespaces, and unknown keys inside a core namespace are ignored with an operator-visible warning
+  so a newer workflow remains forward-compatible with an older binary. A safety-critical near miss
+  is instead a validation error. The safety-critical top-level namespaces are `budget`, `hooks`,
+  `agent`, `workspace`, `env`, `human`, `tracker`, `server`, `bootstrap`, `persistence`, `notify`,
+  `review`, `compute`, `class`, and `quality`. Reject (a) an unknown top-level namespace whose
+  lowercase Levenshtein distance from one of those names is at most 2, or (b) within one of those
+  namespaces, an unknown final key segment whose distance from a defined sibling is at most 2.
+  Warnings and errors include the full key and closest known key. Blank strings in list values are
+  validation errors.
+- Startup validation failure fails startup. Per-tick validation failure skips dispatch but keeps
+  reconciliation running. Invalid reloads keep the last known good configuration and emit an
   operator-visible error.
-
-Validation checks:
-
-- Workflow file can be loaded and parsed.
-- `tracker.kind` is present and supported.
-- `tracker.api_key` is present after `$` resolution when the selected tracker requires a direct API
-  key.
-- `tracker.project_slug` is present when REQUIRED by the selected tracker kind.
-- `tracker.owner`, `tracker.project_number`, `tracker.repo_owner`, and `tracker.repo_name` are present
-  when REQUIRED by GitHub tracker mode.
-- `codex.command` is present and non-empty.
-- `codex.required_skills`, when present, resolve to installed skill directories visible to the worker.
-- `readiness.required_checks` and `readiness.review_markers` contain no blank strings.
-- `persistence.database_path` resolves to a local, writable location and its schema is compatible.
-- Compute profiles referenced by phase, risk, specialist, and adjudication rules exist and are
-  supported by the selected agent adapter.
-- `review.integrative_required` is `true`, specialist definitions have distinct concern slices, and
-  review budgets are valid.
-
-### 6.4 Core Config Fields Summary (Cheat Sheet)
-
-This section is intentionally redundant so a coding agent can implement the config layer quickly.
-Profile fields are documented in the section that defines them. Core fields in this summary are
-always required; profile fields are required when that profile is selected.
-
-- `tracker.kind`: string, REQUIRED, `linear` or `github`
-- `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
-- `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
-- `tracker.owner`: GitHub Project owner, REQUIRED when `tracker.kind=github`
-- `tracker.project_number`: GitHub Project number, REQUIRED when `tracker.kind=github`
-- `tracker.repo_owner`: GitHub issue repository owner, REQUIRED when `tracker.kind=github`
-- `tracker.repo_name`: GitHub issue repository name, REQUIRED when `tracker.kind=github`
-- `tracker.status_field`: string, default `"Status"` when `tracker.kind=github`
-- `tracker.priority_field`: string, default `"Priority"` when `tracker.kind=github`
-- `tracker.priority_order`: list of strings, default `["P0", "Urgent", "Critical", "P1", "High", "P2", "Medium", "P3", "Low"]`
-- `tracker.assignee`: string, optional worker routing filter
-- `tracker.required_labels`: list of strings, default `[]`
-- `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
-- `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
-- `polling.interval_ms`: integer, default `30000`
-- `workspace.root`: path resolved to absolute, default `<system-temp>/symphony_workspaces`
-- `hooks.after_create`: shell script or null
-- `hooks.before_run`: shell script or null
-- `hooks.after_run`: shell script or null
-- `hooks.before_remove`: shell script or null
-- `hooks.timeout_ms`: integer, default `60000`
-- `agent.max_concurrent_agents`: integer, default `10`
-- `agent.max_turns`: integer, default `20`
-- `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
-- `agent.max_failure_retries`: non-negative integer, default `3`
-- `agent.max_no_progress_attempts`: positive integer, default `2`
-- `agent.max_compute_escalations`: non-negative integer, default `1`
-- `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
-- `codex.command`: shell command string, default `codex app-server`
-- `codex.approval_policy`: Codex `AskForApproval` value, default implementation-defined
-- `codex.thread_sandbox`: Codex `SandboxMode` value, default implementation-defined
-- `codex.turn_sandbox_policy`: Codex `SandboxPolicy` value, default implementation-defined
-- `codex.turn_timeout_ms`: integer, default `3600000`
-- `codex.read_timeout_ms`: integer, default `5000`
-- `codex.stall_timeout_ms`: integer, default `300000`
-- `codex.required_skills`: list of strings, default `[]`
-- `readiness.timeout_ms`: integer, default `1800000`
-- `readiness.quiet_period_ms`: integer, default `90000`
-- `readiness.required_checks`: list of strings, default `[]`
-- `readiness.review_markers`: list of strings, default `["P0", "P1", "P2", "blocker", "must fix"]`
-- `observability.dashboard_enabled`: boolean, default `true`
-- `observability.refresh_ms`: integer, default `1000`
-- `observability.render_interval_ms`: integer, default `16`
-- `server.port`: integer, optional
-- `server.host`: string, default `"127.0.0.1"`
-- `persistence.database_path`: local path, default `<service-data-root>/symphony-encore.sqlite3`
-- `persistence.lease_ttl_ms`: positive integer, default `120000`
-- `persistence.event_retention_days`: positive integer or null, default `30`
-- `compute.profiles`: logical profile map, REQUIRED
-- `compute.phase_profiles`: phase-to-profile map, REQUIRED
-- `compute.risk_floor_rules`: ordered deterministic rule list, REQUIRED
-- `compute.review_budget_fraction_target`: number, default `0.30`
-- `compute.sampled_deep_audit_rate`: number, default `0.05`
-- `review.integrative_required`: boolean, REQUIRED `true`
-- `review.max_parallel_specialists`: integer, default `2`
-- `review.specialists`: focused specialist definitions
-- `review.conflict_adjudication_profile`: profile name, default `deep`
-
-## 7. Orchestration State Machine
-
-The orchestrator is the only component that mutates scheduling state. All worker outcomes are
-reported back to it and converted into explicit state transitions.
-
-### 7.1 Issue Orchestration States
-
-This is not the same as tracker states (`Todo`, `In Progress`, etc.). This is the service's internal
-claim state.
-
-1. `Unclaimed`
-   - Issue is not running and has no retry scheduled.
-
-2. `Claimed`
-   - Orchestrator has reserved the issue to prevent duplicate dispatch.
-   - In practice, claimed issues are either `Running` or `RetryQueued`.
-
-3. `Running`
-   - Worker task exists and the issue is tracked in `running` map.
-
-4. `RetryQueued`
-   - Worker is not running, but a retry timer exists in `retry_attempts`.
-
-5. `Released`
-   - Claim removed because issue is terminal, non-active, missing, or retry path completed without
-     re-dispatch.
-
-Important nuance:
-
-- A successful worker exit does not mean the issue is done forever.
-- The worker MAY continue through multiple back-to-back coding-agent turns before it exits.
-- After each normal turn completion, the worker re-checks the tracker issue state.
-- If the issue is still in an active state, the worker SHOULD start another turn on the same live
-  coding-agent thread in the same workspace, up to `agent.max_turns`.
-- The first turn SHOULD use the full rendered task prompt.
-- Continuation turns SHOULD send only continuation guidance to the existing thread, not resend the
-  original task prompt that is already present in thread history.
-- Once the worker exits normally, its structured outcome determines the next transition. The
-  orchestrator MAY schedule a short continuation only when policy requires another session, the
-  refreshed issue remains eligible, and the continuation budget has not been exhausted.
-
-### 7.2 Run Attempt Lifecycle
-
-A run attempt transitions through these phases:
-
-1. `PreparingWorkspace`
-2. `BuildingPrompt`
-3. `LaunchingAgentProcess`
-4. `InitializingSession`
-5. `StreamingTurn`
-6. `Finishing`
-7. `ReportingOutcome`
-8. `Completed`
-9. `NeedsRework`
-10. `Blocked`
-11. `NeedsInput`
-12. `NoProgress`
-13. `Failed`
-14. `TimedOut`
-15. `Stalled`
-16. `CanceledByReconciliation`
-
-Distinct terminal reasons are important because retry logic and logs differ.
-
-### 7.3 Transition Triggers
-
-- `Poll Tick`
-  - Reconcile active runs.
-  - Validate config.
-  - Fetch candidate issues.
-  - Dispatch until slots are exhausted.
-
-- `Worker Exit (normal)`
-  - Remove running entry.
-  - Update aggregate runtime totals.
-  - Validate the required structured outcome.
-  - Apply the deterministic outcome transition; continuation is permitted only when the outcome and
-    refreshed tracker state require it and the continuation budget remains.
-
-- `Worker Exit (abnormal)`
-  - Remove running entry.
-  - Update aggregate runtime totals.
-  - Schedule exponential-backoff retry.
-
-- `Codex Update Event`
-  - Update live session fields, token counters, and rate limits.
-
-- `Retry Timer Fired`
-  - Re-fetch active candidates and attempt re-dispatch, or release claim if no longer eligible.
-
-- `Reconciliation State Refresh`
-  - Stop runs whose issue states are terminal or no longer active.
-
-- `Stall Timeout`
-  - Kill worker and schedule retry.
-
-### 7.4 Idempotency and Recovery Rules
-
-- The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
-- Claims MUST be acquired transactionally before launching a worker and MUST use renewable leases.
-- `claimed` and `running` checks are REQUIRED before launching any worker.
-- Every external mutation MUST carry an idempotency key derived from the issue, attempt, requested
-  action, and target revision when the integration supports one.
-- An attempt record MUST be committed before its agent process starts.
-- An outcome and its requested side effects MUST be committed before side effects are applied.
-- Reconciliation runs before dispatch on every tick.
-- Restart recovery reconciles durable state, tracker state, workspace state, and live-process
-  evidence. Expired leases become recoverable; the service MUST NOT assume an old process survived.
-- Startup terminal cleanup removes stale workspaces for issues already in terminal states.
-
-### 7.5 Outcome Transition Contract
-
-The orchestrator maps structured outcomes to policy; the agent does not choose the final tracker
-transition directly.
-
-- `completed`: verify required evidence and guards, apply approved side effects, then release or move
-  to the workflow-defined handoff lane.
-- `needs_rework`: preserve the workspace and route to targeted rework with the findings attached.
-- `blocked`: record the external blocker, hold or release the claim according to workflow policy,
-  and wait for a detectable state change.
-- `needs_input`: route to the configured operator lane with the exact decision requested.
-- `no_progress`: retry only within `agent.max_no_progress_attempts`; then route to operator review.
-- `failed`: classify the failure before deciding whether retry is allowed.
-
-Missing, malformed, contradictory, or evidence-free outcomes are protocol failures. They MUST NOT be
-treated as success.
-
-### 7.6 Failure Taxonomy and Retry Budgets
-
-Every failure MUST map to one category:
-
-- `transient_external`: network interruption, service unavailability, or rate limiting; retryable.
-- `capacity`: no slot or provider capacity; retryable without charging the task failure budget.
-- `agent_process`: crash, protocol interruption, timeout, or stall; retryable within budget.
-- `configuration`: invalid workflow, missing executable, or incompatible adapter; not retryable until
-  the relevant configuration or capability changes.
-- `authentication_or_permission`: missing or insufficient authority; not retryable until credentials
-  or permissions change.
-- `policy_or_safety`: denied side effect, unsafe path, prompt-injection boundary, or approval failure;
-  not automatically retryable.
-- `task`: deterministic test failure, irreconcilable acceptance criteria, or repeated no progress;
-  route to rework, input, or blocked according to evidence.
-
-Retries MUST be bounded by the captured attempt configuration. A retry MUST record its category,
-budget consumption, next eligible time, and the external fact that would unblock any non-retryable
-failure. Repeating the same non-retryable failure without new evidence is prohibited.
-
-## 8. Polling, Scheduling, and Reconciliation
-
-### 8.1 Poll Loop
-
-At startup, the service validates config, performs startup cleanup, schedules an immediate tick, and
-then repeats every `polling.interval_ms`.
-
-The effective poll interval SHOULD be updated when workflow config changes are re-applied.
-
-Tick sequence:
-
-1. Reconcile running issues.
-2. Run dispatch preflight validation.
-3. Fetch candidate issues from tracker using active states.
-4. Sort issues by dispatch priority.
-5. Dispatch eligible issues while slots remain.
-6. Notify observability/status consumers of state changes.
-
-If per-tick validation fails, dispatch is skipped for that tick, but reconciliation still happens
-first.
-
-### 8.2 Candidate Selection Rules
-
-An issue is dispatch-eligible only if all are true:
-
-- It has `id`, `identifier`, `title`, and `state`.
-- Its state is in `active_states` and not in `terminal_states`.
-- It is routed to this worker by the configured assignee and contains every
-  label in `tracker.required_labels`.
-- It is not already in `running`.
-- It is not already in `claimed`.
-- Global concurrency slots are available.
-- Per-state concurrency slots are available.
-- Blocker rule for `Todo` state passes:
-  - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
-
-Sorting order (stable intent):
-
-1. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-2. `created_at` oldest first
-3. `identifier` lexicographic tie-breaker
-
-### 8.3 Concurrency Control
-
-Global limit:
-
-- `available_slots = max(max_concurrent_agents - running_count, 0)`
-
-Per-state limit:
-
-- `max_concurrent_agents_by_state[state]` if present (state key normalized)
-- otherwise fallback to global limit
-
-The runtime counts issues by their current tracked state in the `running` map.
-
-### 8.4 Retry and Backoff
-
-Retry entry creation:
-
-- Cancel any existing retry timer for the same issue.
-- Store `attempt`, `identifier`, `error`, `due_at_ms`, and new timer handle.
-
-Backoff formula:
-
-- Policy-approved continuation retries after a valid `completed` outcome use a short fixed delay of
-  `1000` ms and consume a continuation budget.
-- Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`.
-- Power is capped by the configured max retry backoff (default `300000` / 5m).
-- Rate-limit responses SHOULD honor a provider-supplied retry time when it is later than the
-  computed delay.
-- Randomized jitter SHOULD be applied to transient external retries to avoid synchronized retry
-  storms.
-
-Retry handling behavior:
-
-1. Fetch active candidate issues (not all issues).
-2. Find the specific issue by `issue_id`.
-3. If not found, release claim.
-4. If found and still candidate-eligible:
-   - Dispatch if slots are available.
-   - Otherwise requeue with error `no available orchestrator slots`.
-5. If found but no longer active, release claim.
-6. If the captured retry budget is exhausted, do not requeue; persist a terminal outcome and route
-   according to the failure taxonomy.
-
-Note:
-
-- Terminal-state workspace cleanup is handled by startup cleanup and active-run reconciliation
-  (including terminal transitions for currently running issues).
-- Retry handling mainly operates on active candidates and releases claims when the issue is absent,
-  rather than performing terminal cleanup itself.
-
-### 8.5 Active Run Reconciliation
-
-Reconciliation runs every tick and has two parts.
-
-Part A: Stall detection
-
-- For each running issue, compute `elapsed_ms` since:
-  - `last_codex_timestamp` if any event has been seen, else
-  - `started_at`
-- If `elapsed_ms > codex.stall_timeout_ms`, terminate the worker and queue a retry.
-- If `stall_timeout_ms <= 0`, skip stall detection entirely.
-
-Part B: Tracker state refresh
-
-- Fetch current issue states for all running issue IDs.
-- For each running issue:
-  - If tracker state is terminal: terminate worker and clean workspace.
-  - If tracker state is still active: update the in-memory issue snapshot.
-  - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
-- If state refresh fails, keep workers running and try again on the next tick.
-
-### 8.6 Startup Terminal Workspace Cleanup
-
-When the service starts:
-
-1. Query tracker for issues in terminal states.
-2. For each returned issue identifier, remove the corresponding workspace directory.
-3. If the terminal-issues fetch fails, log a warning and continue startup.
-
-This prevents stale terminal workspaces from accumulating after restarts.
-
-## 9. Workspace Management and Safety
-
-### 9.1 Workspace Layout
-
-Workspace root:
-
-- `workspace.root` (normalized absolute path)
-
-Per-issue workspace path:
-
-- `<workspace.root>/<sanitized_issue_identifier>`
-
-Workspace persistence:
-
-- Workspaces are reused across runs for the same issue.
-- Successful runs do not auto-delete workspaces.
-
-### 9.2 Workspace Creation and Reuse
-
-Input: `issue.identifier`
-
-Algorithm summary:
-
-1. Sanitize identifier to `workspace_key`.
-2. Compute workspace path under workspace root.
-3. Ensure the workspace path exists as a directory.
-4. Mark `created_now=true` only if the directory was created during this call; otherwise
-   `created_now=false`.
-5. If `created_now=true`, run `after_create` hook if configured.
-
-Notes:
-
-- This section does not assume any specific repository/VCS workflow.
-- Workspace preparation beyond directory creation (for example dependency bootstrap, checkout/sync,
-  code generation) is implementation-defined and is typically handled via hooks.
-
-### 9.3 OPTIONAL Workspace Population (Implementation-Defined)
-
-The spec does not require any built-in VCS or repository bootstrap behavior.
-
-Implementations MAY populate or synchronize the workspace using implementation-defined logic and/or
-hooks (for example `after_create` and/or `before_run`).
-
-Failure handling:
-
-- Workspace population/synchronization failures return an error for the current attempt.
-- If failure happens while creating a brand-new workspace, implementations MAY remove the partially
-  prepared directory.
-- Reused workspaces SHOULD NOT be destructively reset on population failure unless that policy is
-  explicitly chosen and documented.
-
-### 9.4 Workspace Hooks
-
-Supported hooks:
-
-- `hooks.after_create`
-- `hooks.before_run`
-- `hooks.after_run`
-- `hooks.before_remove`
-
-Execution contract:
-
-- Execute in a local shell context appropriate to the host OS, with the workspace directory as
-  `cwd`.
-- On POSIX systems, `sh -lc <script>` (or a stricter equivalent such as `bash -lc <script>`) is a
-  conforming default.
-- Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
-- Log hook start, failures, and timeouts.
-
-Failure semantics:
-
-- `after_create` failure or timeout is fatal to workspace creation.
-- `before_run` failure or timeout is fatal to the current run attempt.
-- `after_run` failure or timeout is logged and ignored.
-- `before_remove` failure or timeout is logged and ignored.
-
-### 9.5 Safety Invariants
-
-This is the most important portability constraint.
-
-Invariant 1: Run the coding agent only in the per-issue workspace path.
-
-- Before launching the coding-agent subprocess, validate:
-  - `cwd == workspace_path`
-
-Invariant 2: Workspace path MUST stay inside workspace root.
-
-- Resolve both paths to canonical absolute paths, including symlinks for existing components.
-- Require `workspace_path` to be a descendant path of `workspace_root`; a string prefix check alone
-  is insufficient.
-- Reject any path outside the workspace root.
-
-Invariant 3: Workspace key is sanitized.
-
-- Only `[A-Za-z0-9._-]` allowed in workspace directory names.
-- Replace all other characters with `_`.
-
-Invariant 4: One issue lease owns one mutable workspace.
-
-- A workspace MUST NOT be attached to concurrent attempts.
-- Startup reconciliation MUST quarantine a workspace when ownership cannot be established.
-
-Invariant 5: Termination covers the full process tree.
-
-- The runner MUST launch the agent in an identifiable process group, job object, container, or
-  equivalent boundary.
-- Cancellation, timeout, stall, and shutdown MUST terminate descendants, then verify they exited
-  before releasing the workspace lease.
-
-## 10. Agent Runner Protocol (Coding Agent Integration)
-
-This section defines Symphony's language-neutral responsibilities when integrating a Codex
-app-server. The Codex app-server protocol for the targeted Codex version is the source of truth for
-protocol schemas, message payloads, transport framing, and method names.
-
-Protocol source of truth:
-
-- Implementations MUST send messages that are valid for the targeted Codex app-server version.
-- Implementations MUST consult the targeted Codex app-server documentation or generated schema
-  instead of treating this specification as a protocol schema.
-- If this specification appears to conflict with the targeted Codex app-server protocol, the Codex
-  protocol controls protocol shape and transport behavior.
-- Symphony-specific requirements in this section still control orchestration behavior, workspace
-  selection, prompt construction, continuation handling, and observability extraction.
-- Each provider integration MUST be isolated behind a versioned adapter. The adapter MUST publish
-  its supported protocol range, generated-schema hash when available, required capabilities, and
-  normalized event mappings.
-
-### 10.1 Launch Contract
-
-Subprocess launch parameters:
-
-- Command: `codex.command`
-- Invocation: `bash -lc <codex.command>`
-- Working directory: workspace path
-- Transport/framing: the protocol transport required by the targeted Codex app-server version
-
-Notes:
-
-- The default command is `codex app-server`.
-- Approval policy, sandbox policy, cwd, prompt input, and OPTIONAL tool declarations are supplied
-  using fields supported by the targeted Codex app-server version.
-
-RECOMMENDED additional process settings:
-
-- Max line size: 10 MB (for safe buffering)
-- A bounded inbound event queue with explicit backpressure or fail-fast overflow behavior
-- A process-group or equivalent lifecycle boundary for descendant cleanup
-
-### 10.2 Session Startup Responsibilities
-
-Reference: https://developers.openai.com/codex/app-server/
-
-Startup MUST follow the targeted Codex app-server contract. Symphony additionally requires the
-client to:
-
-- Start the app-server subprocess in the per-issue workspace.
-- Initialize the app-server session using the targeted Codex app-server protocol.
-- Complete initialization and capability negotiation before starting a thread.
-- Verify required methods, notification shapes, tool support, approval modes, model settings, and
-  reasoning-effort values against the selected adapter.
-- Reject an incompatible server before an issue lease is charged with an execution attempt.
-- Create or resume a coding-agent thread according to the targeted protocol.
-- Supply the absolute per-issue workspace path as the thread/turn working directory wherever the
-  targeted protocol accepts cwd.
-- Start the first turn with the rendered issue prompt.
-- Start later in-worker continuation turns on the same live thread with continuation guidance rather
-  than resending the original issue prompt.
-- Supply the implementation's documented approval and sandbox policy using fields supported by the
-  targeted protocol.
-- Include issue-identifying metadata, such as `<issue.identifier>: <issue.title>`, when the targeted
-  protocol supports turn or session titles.
-- Advertise implemented client-side tools using the targeted protocol.
-
-Session identifiers:
-
-- Extract `thread_id` from the thread identity returned by the targeted Codex app-server protocol.
-- Extract `turn_id` from each turn identity returned by the targeted Codex app-server protocol.
-- Emit `session_id = "<thread_id>-<turn_id>"`
-- Reuse the same `thread_id` for all continuation turns inside one worker run
-
-### 10.3 Streaming Turn Processing
-
-The client processes app-server updates according to the targeted Codex app-server protocol until
-the active turn terminates.
-
-Completion conditions:
-
-- Targeted-protocol turn completion signal -> success
-- Targeted-protocol turn failure signal -> failure
-- Targeted-protocol turn cancellation signal -> failure
-- turn timeout (`turn_timeout_ms`) -> failure
-- subprocess exit -> failure
-
-Continuation processing:
-
-- If the worker decides to continue after a successful turn, it SHOULD start another turn on the same
-  live thread using the targeted protocol.
-- The app-server subprocess SHOULD remain alive across those continuation turns and be stopped only
-  when the worker run is ending.
-
-Transport handling requirements:
-
-- Follow the transport and framing rules of the targeted Codex app-server version.
-- For stdio-based transports, keep protocol stream handling separate from diagnostic stderr
-  handling unless the targeted protocol specifies otherwise.
-- Bound buffered messages and pending requests. When the consumer cannot keep up, apply protocol
-  backpressure if available; otherwise fail the attempt with `agent_process` rather than allowing
-  unbounded memory growth.
-- On shutdown or failure, cancel pending requests, close transport handles, terminate the process
-  tree, and wait for confirmed exit within a bounded grace period.
-
-### 10.4 Emitted Runtime Events (Upstream to Orchestrator)
-
-The app-server client emits structured events to the orchestrator callback. Each event SHOULD
-include:
-
-- `event` (enum/string)
-- `timestamp` (UTC timestamp)
-- `codex_app_server_pid` (if available)
-- OPTIONAL `usage` map (token counts)
-- payload fields as needed
-
-Important emitted events include, for example:
-
-- `session_started`
-- `startup_failed`
-- `turn_completed`
-- `turn_failed`
-- `turn_cancelled`
-- `turn_ended_with_error`
-- `turn_input_required`
-- `approval_auto_approved`
-- `unsupported_tool_call`
-- `notification`
-- `other_message`
-- `malformed`
-
-### 10.5 Approval, Tool Calls, and User Input Policy
-
-Approval, sandbox, and user-input behavior is implementation-defined.
-
-Policy requirements:
-
-- Each implementation MUST document its chosen approval, sandbox, and operator-confirmation
-  posture.
-- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely. An
-  implementation MAY either satisfy them, surface them to an operator, auto-resolve them, or
-  fail the run according to its documented policy.
-
-Example high-trust behavior:
-
-- Auto-approve command execution approvals for the session.
-- Auto-approve file-change approvals for the session.
-- Treat user-input-required turns as hard failure.
-
-Unsupported dynamic tool calls:
-
-- Supported dynamic tool calls that are explicitly implemented and advertised by the runtime SHOULD
-  be handled according to their extension contract.
-- If the agent requests a dynamic tool call that is not supported, return a tool failure response
-  using the targeted protocol and continue the session.
-- This prevents the session from stalling on unsupported tool execution paths.
-
-Optional client-side tool extension:
-
-- An implementation MAY expose a limited set of client-side tools to the app-server session.
-- The core standardized tool is `report_outcome`, which accepts the Section 4.1.12 structure and is
-  REQUIRED unless the selected agent protocol provides an equivalent schema-constrained terminal
-  result.
-- Workflow mutations SHOULD use narrow typed tools such as `request_state_transition`,
-  `upsert_workpad`, and `request_merge`. These tools return policy decisions and do not expose raw
-  credentials.
-- Broad tools such as `linear_graphql` or `github_graphql` are compatibility extensions. They MUST
-  be disabled by default, explicitly enabled per workflow, scoped to minimum authority, audited,
-  and unavailable to reviewer roles that do not need mutation access.
-- If implemented, supported tools SHOULD be advertised to the app-server session during startup
-  using the protocol mechanism supported by the targeted Codex app-server version.
-- Unsupported tool names SHOULD still return a failure result using the targeted protocol and
-  continue the session.
-
-`linear_graphql` extension contract:
-
-- Purpose: execute a raw GraphQL query or mutation against Linear using Symphony's configured
-  tracker auth for the current session.
-- Availability: only meaningful when `tracker.kind == "linear"` and valid Linear auth is configured.
-- Preferred input shape:
-
-  ```json
-  {
-    "query": "single GraphQL query or mutation document",
-    "variables": {
-      "optional": "graphql variables object"
-    }
-  }
-  ```
-
-- `query` MUST be a non-empty string.
-- `query` MUST contain exactly one GraphQL operation.
-- `variables` is OPTIONAL and, when present, MUST be a JSON object.
-- Implementations MAY additionally accept a raw GraphQL query string as shorthand input.
-- Execute one GraphQL operation per tool call.
-- If the provided document contains multiple operations, reject the tool call as invalid input.
-- `operationName` selection is intentionally out of scope for this extension.
-- Reuse the configured Linear endpoint and auth from the active Symphony workflow/runtime config; do
-  not require the coding agent to read raw tokens from disk.
-- Tool result semantics:
-  - transport success + no top-level GraphQL `errors` -> `success=true`
-  - top-level GraphQL `errors` present -> `success=false`, but preserve the GraphQL response body
-    for debugging
-  - invalid input, missing auth, or transport failure -> `success=false` with an error payload
-- Return the GraphQL response or error payload as structured tool output that the model can inspect
-  in-session.
-
-User-input-required policy:
-
-- Implementations MUST document how targeted-protocol user-input-required signals are handled.
-- A run MUST NOT stall indefinitely waiting for user input.
-- A conforming implementation MAY fail the run, surface the request to an operator, satisfy it
-  through an approved operator channel, or auto-resolve it according to its documented policy.
-- The example high-trust behavior above fails user-input-required turns immediately.
-
-### 10.6 Timeouts and Error Mapping
-
-Timeouts:
-
-- `codex.read_timeout_ms`: request/response timeout during startup and sync requests
-- `codex.turn_timeout_ms`: total turn stream timeout
-- `codex.stall_timeout_ms`: enforced by orchestrator based on event inactivity
-
-Error mapping (RECOMMENDED normalized categories):
-
-- `codex_not_found`
-- `invalid_workspace_cwd`
-- `response_timeout`
-- `turn_timeout`
-- `port_exit`
-- `response_error`
-- `turn_failed`
-- `turn_cancelled`
-- `turn_input_required`
-
-### 10.7 Agent Runner Contract
-
-The `Agent Runner` wraps workspace + prompt + app-server client.
-
-Behavior:
-
-1. Create/reuse workspace for issue.
-2. Build prompt from workflow template.
-3. Start app-server session.
-4. Forward normalized app-server events to the orchestrator through a bounded channel.
-5. Require and validate exactly one structured terminal outcome.
-6. Stop the complete process tree and release resources.
-7. On any error, return a normalized failure class; the orchestrator decides whether retry is
-   allowed.
-
-Note:
-
-- Workspaces are intentionally preserved after successful runs.
-
-## 11. Issue Tracker Integration Contract
-
-### 11.1 REQUIRED Operations
-
-An implementation MUST support these tracker adapter operations:
-
-1. `fetch_candidate_issues()`
-   - Return issues in configured active states for a configured project.
-
-2. `fetch_issues_by_states(state_names)`
-   - Used for startup terminal cleanup.
-
-3. `fetch_issue_states_by_ids(issue_ids)`
-   - Used for active-run reconciliation.
-
-4. `create_comment(issue_id, body)` (RECOMMENDED)
-   - Used by workflows that maintain a persistent workpad comment.
-
-5. `fetch_issue_comments(issue_id)` (RECOMMENDED)
-   - Used by readiness guards and workpad reconciliation.
-
-6. `update_issue_comment(comment_id, body)` (RECOMMENDED)
-   - Used to update the same persistent workpad comment in place.
-
-7. `update_issue_state(issue_id, state_name)` (RECOMMENDED)
-   - Used by protected transition guards to route issues to `Rework`, `Blocked`, `Human Review`,
-     `Merging`, or another configured lane.
-
-8. `fetch_readiness_snapshot(issue_id)` (RECOMMENDED for pull-request workflows)
-   - Returns the linked pull request, checks, reviews, review threads, PR comments, and issue comments
-     required by Section 12.
-
-### 11.2 Query Semantics (Linear)
-
-Linear-specific requirements for `tracker.kind == "linear"`:
-
-- `tracker.kind == "linear"`
-- GraphQL endpoint (default `https://api.linear.app/graphql`)
-- Auth token sent in `Authorization` header
-- `tracker.project_slug` maps to Linear project `slugId`
-- Candidate issue query filters project using `project: { slugId: { eq: $projectSlug } }`
-- Candidate and issue-state refresh queries include issue labels. Required
-  label filtering happens after normalization so refresh can observe label
-  removal and stop or release existing work.
-- Issue-state refresh query uses GraphQL issue IDs with variable type `[ID!]`
-- Pagination REQUIRED for candidate issues
-- Page size default: `50`
-- Network timeout: `30000 ms`
-
-Important:
-
-- Linear GraphQL schema details can drift. Keep query construction isolated and test the exact query
-  fields/types REQUIRED by this specification.
-
-A non-Linear implementation MAY change transport details, but the normalized outputs MUST match the
-domain model in Section 4.
-
-### 11.3 Query Semantics (GitHub Issues + Projects v2)
-
-GitHub-specific requirements for `tracker.kind == "github"`:
-
-- Use GitHub Projects v2 as the workflow board.
-- Use the configured Project single-select `Status` field as the issue workflow state source of truth.
-- Use the configured Project single-select `Priority` field for dispatch ordering when present.
-- Use GitHub Issues as the work item content source.
-- Use native GitHub issue dependencies, especially `blockedBy`, for dependency gating.
-- Use `gh` authentication or another documented GitHub auth source. Do not require a GitHub token to
-  be stored in `WORKFLOW.md`.
-- Candidate queries MUST include issue ID, number, title, body, state, URL, created/updated times,
-  repository owner/name, labels, assignees, Project field values, and blockers.
-- Candidate filtering MUST reject issues outside the configured repository unless the implementation
-  explicitly supports multi-repository dispatch.
-- GitHub issue comments SHOULD be readable and updateable so the workpad can be maintained in place.
-- GitHub Project status updates SHOULD be implemented by resolving Project, field, item, and option
-  IDs, then updating the Project item single-select field.
-- Readiness snapshot queries SHOULD resolve the pull request that closes or is linked to the issue,
-  then include latest head SHA, base ref, merge state, review decision, checks, reviews, unresolved
-  review threads, top-level PR comments, and issue comments.
-
-GitHub Project field requirements:
-
-- `Status` and `Priority` field names are configurable.
-- The configured `Status` field MUST contain every lane used by the workflow prompt.
-- The default GitHub SDLC workflow uses: `Backlog`, `Todo`, `In Progress`, `Risk Review`,
-  `Human Review`, `Merging`, `Rework`, `Blocked`, and `Done`.
-
-### 11.4 Normalization Rules
-
-Candidate issue normalization SHOULD produce fields listed in Section 4.1.1.
-
-Additional normalization details:
-
-- Label names are trimmed and lowercased.
-
-- `labels` -> lowercase strings
-- `blocked_by` -> derived from inverse Linear relations where relation type is `blocks`, or from
-  GitHub `blockedBy` issue dependency nodes.
-- `priority` -> integer only for numeric tracker priorities; named priorities map through
-  `tracker.priority_order` when available.
-- `priority_name` -> tracker-provided named priority when available.
-- `created_at` and `updated_at` -> parse ISO-8601 timestamps
-
-### 11.5 Error Handling Contract
-
-RECOMMENDED error categories:
-
-- `unsupported_tracker_kind`
-- `missing_tracker_api_key`
-- `missing_tracker_project_slug`
-- `missing_github_project_owner`
-- `missing_github_project_number`
-- `missing_github_repo`
-- `github_cli_missing`
-- `github_auth_missing`
-- `github_project_scope_missing`
-- `github_graphql_errors`
-- `github_unknown_payload`
-- `linear_api_request` (transport failures)
-- `linear_api_status` (non-200 HTTP)
-- `linear_graphql_errors`
-- `linear_unknown_payload`
-- `linear_missing_end_cursor` (pagination integrity error)
-
-Orchestrator behavior on tracker errors:
-
-- Candidate fetch failure: log and skip dispatch for this tick.
-- Running-state refresh failure: log and keep active workers running.
-- Startup terminal cleanup failure: log warning and continue startup.
-- Readiness snapshot failure: route the protected transition to `Blocked` and record the reason in
-  the workpad when the implementation owns transition routing.
-- Comment update failure: fail only the operation that requires the comment; keep the scheduler alive.
-
-### 11.6 Tracker Writes and Protected Transitions
-
-Symphony Encore owns workflow mutations through its orchestrator and typed integration adapters.
-
-- Agents request state transitions, comment/workpad updates, PR metadata changes, or merges as typed
-  actions in their outcome or through narrow client-side tools.
-- The orchestrator MUST validate the request against the pinned workflow snapshot, current tracker
-  state, current target revision, applicable guards, and the agent role's authority.
-- Approved mutations MUST be idempotent, audited, and associated with the originating attempt.
-- The service MUST reject stale-revision writes and transitions that skip protected states.
-- Review agents are read-only by default. Granting them mutation authority requires an explicit
-  documented workflow rule.
-- Workflow-specific success often means "reached the next handoff state" (for example
-  `Risk Review` or `Human Review`) rather than tracker terminal state `Done`.
-- If a broad GraphQL compatibility tool is implemented, its mutation paths remain subject to the
-  same policy checks and audit requirements; bypassing them is non-conforming.
-
-## 12. Prompt Construction and Context Assembly
-
-### 12.1 Inputs
-
-Inputs to prompt rendering:
-
-- `workflow.prompt_template`
-- normalized `issue` object
-- OPTIONAL `attempt` integer (retry/continuation metadata)
-
-### 12.2 Rendering Rules
-
-- Render with strict variable checking.
-- Render with strict filter checking.
-- Convert issue object keys to strings for template compatibility.
-- Preserve nested arrays/maps (labels, blockers) so templates can iterate.
-
-### 12.3 Retry/Continuation Semantics
-
-`attempt` SHOULD be passed to the template because the workflow prompt can provide different
-instructions for:
-
-- first run (`attempt` null or absent)
-- continuation run after a successful prior session
-- retry after error/timeout/stall
-
-### 12.4 Failure Semantics
-
-If prompt rendering fails:
-
-- Fail the run attempt immediately.
-- Let the orchestrator treat it like any other worker failure and decide retry behavior.
-
-### 12.5 GitHub SDLC Workflow Contract (RECOMMENDED Extension)
-
-The GitHub SDLC workflow is a concrete workflow prompt and tracker-write policy for GitHub Issues,
-GitHub Projects v2, and pull requests. It is not required for a generic Symphony implementation, but
-it captures the fork's current behavior and SHOULD be implemented by successors that target the same
-operating model.
-
-#### 12.5.1 Lanes
-
-The workflow uses these Project `Status` lanes:
-
-- `Backlog`: not dispatchable. Symphony MUST NOT modify issue content or start implementation.
-- `Todo`: dispatchable. The worker SHOULD move the issue to `In Progress` before active work.
-- `In Progress`: implementation lane.
-- `Risk Review`: protected review lane. Symphony SHOULD verify readiness evidence before dispatching
-  a review worker.
-- `Human Review`: human decision lane for high uncertainty, high blast radius, policy-sensitive
-  changes, weak evidence, or invalid fresh-review contracts.
-- `Merging`: protected merge lane. Symphony SHOULD verify fresh-context correctness review evidence
-  before dispatching merge handling.
-- `Rework`: dispatchable targeted-fix lane.
-- `Blocked`: non-dispatchable lane for missing auth, tools, permissions, external systems, or required
-  evidence.
-- `Done`: terminal lane.
-
-Every pull request MUST pass through `Risk Review` before `Merging`; direct `In Progress` ->
-`Merging` or `In Progress` -> `Done` transitions are invalid for this workflow.
-
-#### 12.5.2 Persistent Workpad
-
-For each issue, the worker SHOULD find or create exactly one active issue comment with the marker
-header `## Codex Workpad`. The worker MUST update that comment in place for progress, plans,
-acceptance criteria, validation, proof packets, guard results, and handoff notes.
-
-The workpad SHOULD contain this structure:
-
-````md
-## Codex Workpad
+- Validation checks at minimum: tracker keys for the selected kind; priority entries normalize to
+  integers; the configured tracker status field exposes all Section 5.1 lanes and write authority;
+  `workspace.verify_command` present (or `none` with reason); commands non-empty;
+  required skills discoverable; approval/sandbox values supported by the adapter; retry/rework/plan
+  limits, token budgets, and estimates positive; history sample minimum positive and no greater than
+  its window; per-attempt,
+  per-issue, and fleet USD budgets positive when the adapter is priced; enabled logical profiles and
+  route mappings resolve through the adapter; accepted check conclusions supported; operators
+  non-empty with unique ids/subjects/logins and at least one operator holding `config.write` and
+  `config.ack`;
+  authentication configured; database path local and writable with compatible schema.
+
+These are ordinary-mode requirements. The only startup exemption is the empty-store operator and
+auth-subject mapping described in Section 15.3; bootstrap still validates the authentication adapter
+and every other field, then full validation must pass before orchestration is enabled.
+
+If `review.quiet_period_ms > 0`, the complete PR snapshot must remain materially unchanged for that
+period before the gate allows. Material fields are head/base SHA, mergeability, required-check
+status/conclusion, review decision, and unresolved-thread identity. Pending checks/reviews are
+polled until `review.settle_timeout_ms`; timeout routes to `Human(blocked)` with a typed
+pending-evidence reason, not to rework.
+
+### 18.3 Durable Operator Overrides
+
+Effective configuration resolves in this order:
+
+1. built-in defaults;
+2. the parsed `WORKFLOW.md` front matter;
+3. active durable operator overrides.
+
+For every non-bootstrap key, an override record contains `key`, typed `value` or secret reference,
+`version`, `created_by`,
+`created_at`, `reason`, validation result, acknowledgment state, reload state, and optional expiry.
+Create, update, and clear require `expected_version` and `idempotency_key`. Clearing reveals the
+current workflow/default candidate; if that candidate requires acknowledgment or restart, it remains
+pending under the same rules.
+
+The UI MUST show the workflow value even when overridden, the effective value, source, candidate
+version, and pending state. A workflow reload cannot overwrite an active override. Invalid override
+requests return `422` and do not change the last known good configuration. Overrides take effect
+only after the durable record, validation, required acknowledgment, and applicable reload boundary
+have completed. Every new Attempt and SystemJob pins the resulting immutable snapshot.
+
+Secret values themselves cannot be entered or returned through the UI. Operators may set only a
+`$VAR` reference or adapter-owned secret reference; resolution occurs at the trusted boundary.
+
+## 19. Conformance and Validation
+
+### 19.1 Conformance Profiles
+
+- **Core Conformance** requires every MUST in Sections 1–18, including a transactional local SQLite
+  durable store, one conforming tracker adapter, one conforming repository-hosting adapter, one conforming
+  agent adapter, the authenticated Control API, the visual UI, indefinite default history,
+  orchestration/recovery, budgets, review, merge, and the deterministic tests in Section 19.2.
+- **Extension Conformance** applies to an optional capability an implementation advertises, such as
+  webhook-triggered ticks, additional adapters, or remote worker execution. The extension MUST
+  publish its schema, authority, failure, durability, UI, and test contracts and MUST preserve Core
+  invariants.
+- **Real Integration Profile** exercises the selected tracker, repository host, agent provider,
+  authentication, UI, hooks, and landing/deployment path with real credentials in a non-production
+  repository. It is REQUIRED before an implementation is declared production-ready.
+
+A conformance report names the implementation version, spec version, adapters and versions,
+enabled extensions, test command, deterministic result, real-integration result, and any
+implementation-defined choices. Partial implementation of a Core requirement cannot be reported as
+Core Conformance.
+
+### 19.2 Core Conformance Test Matrix
+
+A conforming implementation MUST ship automated deterministic tests for all of the following.
+
+**Workflow and configuration**
+
+- Honor trusted workflow-path precedence; parse optional YAML front matter plus strict Markdown
+  prompt; detect reloads; reject missing files, malformed/non-map YAML, empty prompt, unknown
+  variables/filters, safety-critical near-miss keys at both top-level and field-level, empty required
+  values, and literal secrets; warn visibly and ignore other unknown configuration keys.
+- Resolve default → workflow → operator override; show each source/version; persist overrides across
+  restart; clear an override back to the current file/default candidate; reject stale expected
+  versions and invalid candidates without changing the last known good configuration.
+- Show bootstrap-only keys read-only and reject durable override attempts for them.
+- Reject bootstrap keys in `WORKFLOW.md`; accept them only from trusted startup arguments/environment.
+- Hold every `ack+` candidate and every workflow-originated `file-ack+` candidate pending until an
+  authorized acknowledgment of the exact hash; let an authorized `file-ack+` UI override apply
+  directly at its hot/attempt boundary; expose pending state in UI/API.
+- Bootstrap the first administrator through the one-time loopback credential + hash-confirmation
+  flow only on a pristine store; prove external mutations and dispatch remain disabled, roll back
+  partial failure, rerun full validation, reject credential reuse and unauthenticated remote setup,
+  and require UI/API acknowledgment thereafter. With an operator-empty non-pristine fixture,
+  terminate recorded processes, query unresolved intents without new mutation, reject bootstrap, and
+  fail closed for database restoration.
+- Resolve required skills and adapter capabilities before charging an attempt.
+
+**Durable control plane and recovery**
+
+- Atomically acquire a work-ref claim and create an Attempt plus budget reservation; a second issue
+  or SystemJob dispatch is impossible; open an issue StageTransition only after the lane-mutation
+  receipt and enforce baseline/attempt nullability invariants.
+- Renew running leases; preserve non-expiring Ready/RetryQueued/AwaitingHuman reservations; rebuild
+  ready actions, retry timers, parked predicates, questions/approval requests, comment cursors, stage
+  timing, and rolling budgets after restart.
+- Verify or terminate recorded process ownership; close interrupted work as `agent_process`; never
+  resume an unverifiable process blindly.
+- Reconcile each side-effect intent without a receipt by idempotency key and never duplicate a
+  tracker, PR, branch, merge, notification, or control mutation; reject every mutating adapter call
+  whose common authorization envelope has the wrong actor/role/capability, config snapshot,
+  observed state, scope, target, revision, or expiry, including fleet notifications without a work
+  reference.
+- Stop dispatch and privileged mutations on persistence failure; stop workers that cannot be
+  accounted or committed safely.
+
+**Plans, attempts, and routing**
+
+- Reject malformed or duplicate role results into one ExecutionFailure; reject an implementation
+  `completed` result without agent verification evidence; independently run the pinned verification
+  command, require a passing Verification Record for review, and route a failed record to rework;
+  atomically store each valid role-specific result and associated Review Record.
+- Validate typed Plan criterion coverage and commands; allow an unknown-only provisional `standard`
+  route to become first-authoritative `trivial`, then move only upward within a cycle and apply newly
+  required gates before work proceeds.
+- Exercise `trivial`, `standard`, and `high_risk` plan/review routes, every PlanReviewResult decision,
+  bounded rejected Plan revisions, issue-readiness `needs_input`, rework/no-progress caps, and factual
+  fresh-attempt handoff; validate every conditional PlanReview, Review, Adjudication, and Synthesis
+  result field.
+- Keep one pinned profile/model per attempt/thread; a salvage turn uses it or creates a separately
+  accounted attempt.
+
+**Budgets, tokens, cost, and time**
+
+- Deduplicate repeated/replayed absolute token events and persist UsageSamples plus correct Attempt,
+  SystemJob, issue, role, class, profile, and rolling totals.
+- Reserve expected usage before dispatch and fan-out, reject reservations that do not fit, replace
+  reservation with actual usage, top up atomically or stop before further turns, release unused
+  reservation, and surface delayed-reporting overruns without further dispatch.
+- Enforce per-attempt/per-issue/fleet USD scopes for priced adapters and corresponding token scopes
+  for unpriced adapters; hard-cap an attempt by tokens and priced USD with an orchestrator-authored
+  `budget_exhausted` result and latest durable handoff; park/pause and resume/reset through audited
+  operator actions without deleting history.
+- Reconstruct total elapsed time and duration per stage from durable timestamps across restart.
+
+**Review, merge, quality, and learning**
+
+- Require complete current-head checks, accepted conclusions, no unresolved non-outdated threads,
+  no blocking current review, and authorized human approval when supervised.
+- Pin Review Records and the aggregate ReviewSet to one SHA; reject partial reviewer sets and
+  tracker-comment evidence; require every mandated reviewer and no unresolved blocking finding for
+  approval; union findings without voting, adjudicate only contrary blocking findings, and retain
+  uncontested blockers.
+- Serialize per repository; after base advance require fresh checks and compare normalized patch
+  identity; for an identical patch create a new current-head ReviewSet linked to the prior set and
+  carry-forward Guard Decision, allow only the linked prior set's Review Records to remain old-head,
+  and require current-head verification/guards; require fresh review for a changed identity.
+- Create a linked repair PR after attributable post-merge failure; keep independent repository queues
+  moving; record escaped defects, demotion, notification, and durable evidence.
+- Run sampled audits against recorded revisions; create lessons and repair work for blocking results;
+  run synthesis as a budgeted SystemJob and enforce rule/prompt saturation and supervised merge.
+
+**UI, API, and durable history**
+
+- Render operations, issue/run history, and settings/control surfaces using only Control API data.
+- Show current stage, time per stage, live durable logs/actions, all attempts and prior ServiceRuns,
+  verification/review/evidence, token/cost/time history, effective settings and sources, audit history,
+  and working issue/PR links after completion and restart.
+- Normalize command/file/tool/network action fixtures into durable scrubbed LogRecords, group them by
+  StageTransition in the UI, and preserve bounded output references across restart.
+- Create/update/clear cost and other settings through the UI; show committed values only; surface
+  validation, conflict, authorization, and server failures without losing the submitted value.
+- Enforce authentication, capability checks, same-origin and CSRF protection, expected versions,
+  mutation idempotency, structured errors, secret redaction, scoped `agent.approve`, and
+  OperatorAction audit records; audit every authenticated rejection before returning and reject
+  same-scope idempotency-key reuse with a different payload. Use OperatorAction alone for a pure
+  internal control mutation and require MutationAuthorization plus SideEffectIntent only when that
+  action performs external work.
+- Escape hostile issue/log/tool content, reject unsafe links, and enforce the UI Content Security
+  Policy without breaking log/history inspection.
+- Retain logs/events/history indefinitely by default; apply explicit finite retention/deletion only
+  through audited controls; preserve protected records and show tombstones with retained aggregates.
+
+**Workspace and security**
+
+- Enforce a write boundary beneath the resolved assigned workspace; reject absolute external writes,
+  `..` traversal, in-workspace symlinks/bind paths targeting outside, and cross-work ownership;
+  quarantine unowned workspaces and terminate the full process tree on every end state.
+- Give agent/hooks only the allowlist, minimal baseline, and isolated credential-free HOME; prove
+  tracker/repository/control credentials are unavailable to agent and reviewer processes.
+- Apply tracker, repository-hosting, and notification mutations only through typed scoped adapters
+  with common authorization, current revision, and durable intent/receipt evidence; apply control
+  mutations only through the authenticated versioned API and OperatorAction contract.
+
+### 19.3 Real Integration Profile
+
+Before production readiness, run a smoke issue through `Todo → In Progress → Review → Done` using
+the selected real adapters. Verify plan/classification, workspace population, agent protocol,
+verification command, PR link, required checks, supervised approval, merge, post-merge checks, UI
+live logs, stage timing, tokens/cost, and history after service restart. Also exercise one Human
+question, one rejected stale UI mutation, one privileged acknowledgment, one budget denial, one
+idempotent mutation replay, and one repair PR path. The report records identifiers and redacted
+evidence, never credentials.
+
+### 19.4 Reference Algorithms
 
 ```text
-<hostname>:<abs-path>@<short-sha>
-```
-
-### Plan
-
-- [ ] 1. Parent task
-  - [ ] 1.1 Child task
-
-### Acceptance Criteria
-
-- [ ] Criterion with evidence target
-
-### Validation
-
-- [ ] command or check name: result
-
-### Proof Packet
-
-- Issue: <tracker issue URL>
-- PR: <PR URL>
-- Head SHA: <full or short SHA>
-- Base branch: <branch>
-- Changed files: <count and key paths>
-- Validation:
-  - [ ] <command or check name>: <result>
-- CI: <required checks summary or link>
-- Acceptance criteria:
-  - [ ] <criterion>: <evidence>
-- Review comments: <none | summary of addressed items>
-- Known risks: <none | concise bullets>
-- Skipped checks: <none | check and reason>
-
-### Fresh Context Correctness Review
-
-```json
-{
-  "review_name": "fresh_context_correctness_review",
-  "review_head_sha": "<current PR head SHA>",
-  "review_status": "not_run",
-  "findings": [],
-  "reviewer_input_summary": [],
-  "cost_control": {
-    "max_findings": 5,
-    "max_attempts": 1,
-    "timeout_seconds": 600
-  }
-}
-```
-
-### Notes
-
-- <short progress note with timestamp>
-
-### Confusions
-
-- <only include when something was confusing during execution>
-````
-
-Workers SHOULD copy issue-authored `Validation`, `Test Plan`, or `Testing` sections into the workpad
-as required validation checklist items. Workers SHOULD record reproduction evidence before editing
-code and SHOULD record final validation evidence before moving to `Risk Review`.
-
-#### 12.5.3 Required Worker Discipline
-
-When `codex.required_skills` includes a workflow skill such as `sdlc-symphony`, the worker SHOULD
-record the skill and lane in the workpad before active work:
-
-```text
-Skill used: sdlc-symphony
-Symphony lane: <current lane>
-```
-
-This marker is audit evidence, not the sole readiness gate. Symphony MUST prefer artifact evidence
-from the PR, proof packet, checks, and reviews over ceremonial attestation when deciding whether to
-dispatch `Risk Review` or `Merging`.
-
-#### 12.5.4 PR Feedback Sweep
-
-Before moving to `Risk Review`, the worker SHOULD gather top-level PR comments, inline review
-comments, review summaries and states, and unresolved review threads.
-
-Every actionable human or bot comment is blocking until the worker either changes code/tests/docs to
-address it or posts a concrete pushback reply on the thread. The worker SHOULD update the workpad
-with each feedback item and resolution.
-
-#### 12.5.5 Protected Transition Guards
-
-For `In Progress` -> `Risk Review`, Symphony SHOULD:
-
-1. Fetch the linked PR readiness snapshot.
-2. Fetch the workpad issue comment.
-3. Parse the proof packet.
-4. Confirm the proof packet PR number matches the linked PR.
-5. Confirm the proof packet head SHA matches the current PR head SHA.
-6. Confirm validation evidence exists.
-7. Confirm configured required checks are complete with accepted conclusions.
-8. Confirm the current review decision is not `CHANGES_REQUESTED`.
-9. Confirm no unresolved review thread or configured actionable top-level PR comment remains.
-10. Write a `Guard Result` to the workpad.
-11. Allow dispatch only when the guard result is `allow`; otherwise route to `Rework` or `Blocked`.
-
-For `Risk Review` -> `Merging`, Symphony SHOULD:
-
-1. Fetch the linked PR readiness snapshot.
-2. Parse the workpad's `Fresh Context Correctness Review` JSON.
-3. Confirm `review_name == "fresh_context_correctness_review"`.
-4. Confirm `review_head_sha` equals the current PR head SHA.
-5. Confirm `review_status` is `passed` or `non_blocking_findings`.
-6. Confirm required reviewer inputs include issue acceptance criteria, PR diff, changed files, factual
-   check results, and relevant repo docs.
-7. Confirm forbidden reviewer inputs exclude builder self-assessment, builder reasoning, self-review,
-   and claims of correctness.
-8. Confirm cost controls are at most five findings, one attempt, and 600 seconds.
-9. Confirm no finding marked `blocking: true` remains.
-10. Write a `Guard Result` to the workpad.
-11. Allow dispatch only when the guard result is `allow`; otherwise route to `Human Review`, `Rework`,
-    or `Blocked`.
-
-Guard results use `requested_transition`, `result`, `reason_code`, `reason`, `next_lane`, and
-`evidence`. Valid results are `allow`, `route_to_rework`, `route_to_human_review`, and
-`route_to_blocked`.
-
-#### 12.5.6 Risk Review, Human Review, Merging, and Rework
-
-Risk Review SHOULD run a fresh-context correctness review using issue acceptance criteria, PR diff,
-changed files, factual check results, linked PR comments/reviews, proof packet, and relevant repo
-docs. It SHOULD exclude the builder's reasoning narrative, self-review, and claims of correctness.
-It SHOULD return exactly one routing decision: `auto_merge_eligible`, `needs_human_review`,
-`needs_rework`, or `blocked`.
-
-Human Review is a waiting lane. Workers SHOULD poll for decisions and review updates, but MUST NOT
-start new implementation work while the issue remains in `Human Review`.
-
-Merging MUST use the repository landing procedure rather than direct ad hoc merge commands. Before
-merge, the worker SHOULD verify that the PR is open, not draft, targets the expected base, matches the
-reviewed head SHA, has green required checks, has no unresolved actionable review feedback, and has
-valid fresh-context review evidence. After merge, the worker SHOULD watch staging or post-deploy
-checks to a terminal state and move the issue to `Done` only after all deliverables and acceptance
-criteria map to evidence.
-
-Rework is targeted by default. The worker SHOULD preserve the existing PR, branch, and workpad when
-the approach is sound. A full reset is appropriate only when the branch or PR is closed/unusable, the
-implementation strategy is wrong, the workpad/proof packet is unrecoverable, or repeated guard
-failures show targeted fixes are not converging.
-
-### 12.6 Adaptive Compute Routing
-
-Compute is selected per phase, not once for the whole issue.
-
-Reference phase policy:
-
-- Discovery, repository orientation, log collection, and deterministic evidence extraction SHOULD
-  begin with the `economy` profile unless a risk floor raises them.
-- Ordinary implementation SHOULD use `standard`.
-- Security-sensitive work, data migrations, concurrency, ambiguous acceptance criteria,
-  cross-package architecture, and public API design SHOULD use `deep`.
-- The integrative review SHOULD use at least `standard`; high-risk changes use `deep`.
-- Architecture/product adjudication SHOULD use `deep` because it depends on broad context and taste,
-  not merely local defect detection.
-
-Routing inputs MUST be observable facts such as changed paths, dependency graph, declared risk,
-issue labels, diff size, test surface, prior failed attempts, security boundaries, schema changes,
-and unresolved ambiguity. Routing MUST NOT depend only on the agent's self-reported confidence.
-
-Escalation is appropriate when an attempt exposes new risk, contradicts evidence, exhausts its
-context, repeats a failure, or cannot reconcile acceptance criteria. Escalation MUST preserve the
-workspace but start a fresh thread with a factual handoff containing:
-
-- goal and acceptance criteria
-- current repository revision and changed files
-- commands run and exact results
-- decisions already fixed by policy or the user
-- open findings and unresolved facts
-- side effects already applied
-
-The handoff MUST NOT include hidden reasoning, a claim that the work is correct, or instructions to
-rubber-stamp the prior attempt.
-
-### 12.7 Review Orchestration
-
-Review proceeds in this order:
-
-1. Run deterministic checks and assemble a shared evidence packet.
-2. Run one independent integrative reviewer over the complete change and acceptance contract.
-3. Evaluate deterministic specialist trigger rules.
-4. If triggered, fan out up to `review.max_parallel_specialists` focused reviewers against the same
-   revision and evidence packet.
-5. Merge the union of evidence-backed findings, deduplicated by affected behavior and evidence.
-6. Invoke one `deep` adjudicator only when findings materially conflict or their combined remedy
-   creates an architectural trade-off.
-7. Route once: accept, targeted rework, human input, or blocked.
-
-Reference review depth:
-
-- Tiny, low-risk change: deterministic checks plus the integrative reviewer.
-- Normal change: integrative reviewer plus any triggered systems/security or architecture/product
-  specialist.
-- High-risk change: integrative reviewer plus both default specialists.
-
-Reviewer independence requirements:
-
-- A reviewer MUST run in a fresh thread and MUST NOT receive builder reasoning, self-review, or
-  unsupported correctness claims.
-- All reviewers inspect the same immutable target revision.
-- Each specialist receives only the concern slice, evidence, and repository context needed for its
-  assignment, plus enough full-change context to identify cross-boundary effects.
-- Findings MUST identify affected behavior, severity, concrete evidence, and a proposed
-  disposition. Unsupported stylistic preference is non-blocking.
-- Correlated votes do not increase confidence. Majority vote, best-of-N verdict selection, and
-  repeated identical reviewer prompts are non-conforming substitutes for concern decomposition.
-- The coordinator MUST retain all unique blocking findings. An adjudicator may resolve conflicts but
-  MUST cite evidence and may not erase an uncontested blocking finding without explaining why its
-  premise is false.
-
-The initial operating target is to reserve roughly 25-35 percent of agent cost for review and
-repair. This is a calibration target, not a quota. Implementations SHOULD tune routing from measured
-escape defects, false positives, rework cycles, latency, and cost per accepted issue. Sampled deep
-audits MUST be used to estimate defects missed by cheaper routes.
-
-## 13. Logging, Status, and Observability
-
-### 13.1 Logging Conventions
-
-REQUIRED context fields for issue-related logs:
-
-- `issue_id`
-- `issue_identifier`
-
-REQUIRED context for coding-agent session lifecycle logs:
-
-- `session_id`
-
-Message formatting requirements:
-
-- Use stable `key=value` phrasing.
-- Include action outcome (`completed`, `failed`, `retrying`, etc.).
-- Include concise failure reason when present.
-- Avoid logging large raw payloads unless necessary.
-
-### 13.2 Logging Outputs and Sinks
-
-The spec does not prescribe where logs are written (stderr, file, remote sink, etc.).
-
-Requirements:
-
-- Operators MUST be able to see startup/validation/dispatch failures without attaching a debugger.
-- Implementations MAY write to one or more sinks.
-- If a configured log sink fails, the service SHOULD continue running when possible and emit an
-  operator-visible warning through any remaining sink.
-
-### 13.3 Runtime Snapshot / Monitoring Interface (OPTIONAL but RECOMMENDED)
-
-If the implementation exposes a synchronous runtime snapshot (for dashboards or monitoring), it
-SHOULD return:
-
-- `running` (list of running session rows)
-- each running row SHOULD include `turn_count`
-- `retrying` (list of retry queue rows)
-- session and retry rows SHOULD include the tracker-provided issue URL when available
-- `codex_totals`
-  - `input_tokens`
-  - `output_tokens`
-  - `total_tokens`
-  - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
-- `rate_limits` (latest coding-agent rate limit payload, if available)
-- `routing`
-  - selected logical profile, resolved model, reasoning effort, deterministic floor, routing rules,
-    escalation count, and sampled-audit status for each attempt/reviewer
-- `reviews`
-  - reviewer roles, target revision, decisions, finding counts, conflicts, and adjudication result
-- `persistence`
-  - database health, schema version, lease-renewal health, and last successful checkpoint
-
-RECOMMENDED snapshot error modes:
-
-- `timeout`
-- `unavailable`
-
-### 13.4 OPTIONAL Human-Readable Status Surface
-
-A human-readable status surface (terminal output, dashboard, etc.) is OPTIONAL and
-implementation-defined.
-
-If present, it SHOULD draw from orchestrator state/metrics only and MUST NOT be REQUIRED for
-correctness.
-
-### 13.5 Session Metrics and Token Accounting
-
-Token accounting rules:
-
-- Agent events can include token counts in multiple payload shapes.
-- Prefer absolute thread totals when available, such as:
-  - `thread/tokenUsage/updated` payloads
-  - `total_token_usage` within token-count wrapper events
-- Ignore delta-style payloads such as `last_token_usage` for dashboard/API totals.
-- Extract input/output/total token counts leniently from common field names within the selected
-  payload.
-- For absolute totals, track deltas relative to last reported totals to avoid double-counting.
-- Do not treat generic `usage` maps as cumulative totals unless the event type defines them that
-  way.
-- Accumulate aggregate totals in orchestrator state.
-
-Runtime accounting:
-
-- Runtime SHOULD be reported as a live aggregate at snapshot/render time.
-- Implementations MAY maintain a cumulative counter for ended sessions and add active-session
-  elapsed time derived from `running` entries (for example `started_at`) when producing a
-  snapshot/status view.
-- Add run duration seconds to the cumulative ended-session runtime when a session ends (normal exit
-  or cancellation/termination).
-- Continuous background ticking of runtime totals is not REQUIRED.
-
-Rate-limit tracking:
-
-- Track the latest rate-limit payload seen in any agent update.
-- Any human-readable presentation of rate-limit data is implementation-defined.
-
-### 13.6 Humanized Agent Event Summaries (OPTIONAL)
-
-Humanized summaries of raw agent protocol events are OPTIONAL.
-
-If implemented:
-
-- Treat them as observability-only output.
-- Do not make orchestrator logic depend on humanized strings.
-
-### 13.7 SDLC Outcome Events (RECOMMENDED)
-
-Implementations that run the GitHub SDLC workflow SHOULD emit lightweight JSON Lines outcome events
-for local inspection and later aggregation. Events are for outcomes and costs, not large artifacts.
-
-The default event file SHOULD live beside the main log as `sdlc_events.jsonl`. If the operator
-configures a logs root, the event file SHOULD follow that root.
-
-Every event SHOULD include these stable fields:
-
-- `event_name`
-- `issue_id`
-- `issue_number`
-- `pr_number`
-- `old_state`
-- `new_state`
-- `result`
-- `reason_code`
-- `reason`
-- `head_sha`
-- `session_id`
-- `worker_workspace`
-- `timestamp`
-- `token_usage`
-- `config_snapshot_id`
-- `compute_profile`
-- `model`
-- `reasoning_effort`
-- `routing_reasons`
-- `estimated_or_recorded_cost`
-
-Events MAY include counters such as `turns`, `attempt`, and `runtime_seconds`. Event payloads MUST
-NOT include prompt bodies, full diffs, secrets, private credentials, or other large artifacts.
-
-Recommended event names:
-
-- `issue_session_usage`
-  - Emitted when an agent task finishes. Result: `recorded`.
-- `compute_route_selected`
-  - Emitted before an attempt or reviewer starts. Includes the deterministic floor, selected profile,
-    and triggering rule identifiers.
-- `compute_escalated`
-  - Emitted when work moves to a fresh thread with a stronger profile.
-- `run_outcome_recorded`
-  - Emitted after the Section 4.1.12 outcome is validated and durably committed.
-- `review_assignment_started`
-  - Emitted for the integrative reviewer and each triggered specialist.
-- `review_finding_recorded`
-  - Emitted for evidence-backed findings without embedding large diffs or prompt bodies.
-- `review_adjudication_result`
-  - Emitted only when material reviewer conflict required adjudication.
-- `readiness_guard_result`
-  - Emitted when a guard evaluates `In Progress` -> `Risk Review` or `Risk Review` -> `Merging`.
-  - Results: `allow`, `route_to_rework`, `route_to_human_review`, `route_to_blocked`.
-- `fresh_context_review_result`
-  - Emitted when the merge-entry guard consumes a fresh-context correctness review result.
-  - Results: `passed`, `blocking_findings`, `non_blocking_findings`, `not_run`.
-- `risk_review_result`
-  - Emitted when a continuation poll observes an issue move out of `Risk Review`.
-  - Results: `auto_merge_eligible`, `needs_human_review`, `needs_rework`, `blocked`.
-- `rework_entered`
-  - Emitted when an issue moves into `Rework`.
-- `blocked_entered`
-  - Emitted when an issue moves into `Blocked`.
-- `merge_result`
-  - Emitted when a continuation poll observes an issue move out of `Merging`.
-  - Results: `merged`, `failed`.
-
-Reason codes SHOULD be stable dot-separated strings. Recommended prefixes:
-
-- `readiness.`
-- `fresh_review.`
-- `gate.<gate-name>.`
-- `human_review.`
-- `merge.`
-
-### 13.8 OPTIONAL HTTP Server Extension
-
-This section defines an OPTIONAL HTTP interface for observability and operational control.
-
-If implemented:
-
-- The HTTP server is an extension and is not REQUIRED for conformance.
-- The implementation MAY serve server-rendered HTML or a client-side application for the dashboard.
-- The dashboard/API MUST be observability/control surfaces only and MUST NOT become REQUIRED for
-  orchestrator correctness.
-
-Extension config:
-
-- `server.port` (integer, OPTIONAL)
-  - Enables the HTTP server extension.
-  - `0` requests an ephemeral port for local development and tests.
-  - CLI `--port` overrides `server.port` when both are present.
-
-Enablement (extension):
-
-- Start the HTTP server when a CLI `--port` argument is provided.
-- Start the HTTP server when `server.port` is present in `WORKFLOW.md` front matter.
-- The `server` top-level key is owned by this extension.
-- Positive `server.port` values bind that port.
-- Implementations SHOULD bind loopback by default (`127.0.0.1` or host equivalent) unless explicitly
-  configured otherwise.
-- Changes to HTTP listener settings (for example `server.port`) do not need to hot-rebind;
-  restart-required behavior is conformant.
-
-#### 13.8.1 Human-Readable Dashboard (`/`)
-
-- Host a human-readable dashboard at `/`.
-- The returned document SHOULD depict the current state of the system (for example active sessions,
-  retry delays, token consumption, runtime totals, recent events, and health/error indicators).
-- It is up to the implementation whether this is server-generated HTML or a client-side app that
-  consumes the JSON API below.
-
-#### 13.8.2 JSON REST API (`/api/v1/*`)
-
-Provide a JSON REST API under `/api/v1/*` for current runtime state and operational debugging.
-
-Minimum endpoints:
-
-- `GET /api/v1/state`
-  - Returns a summary view of the current system state (running sessions, retry queue/delays,
-    aggregate token/runtime totals, latest rate limits, and any additional tracked summary fields).
-  - Suggested response shape:
-
-    ```json
-    {
-      "generated_at": "2026-02-24T20:15:30Z",
-      "counts": {
-        "running": 2,
-        "retrying": 1
-      },
-      "running": [
-        {
-          "issue_id": "abc123",
-          "issue_identifier": "MT-649",
-          "issue_url": "https://tracker.example/issues/MT-649",
-          "state": "In Progress",
-          "session_id": "thread-1-turn-1",
-          "turn_count": 7,
-          "last_event": "turn_completed",
-          "last_message": "",
-          "started_at": "2026-02-24T20:10:12Z",
-          "last_event_at": "2026-02-24T20:14:59Z",
-          "tokens": {
-            "input_tokens": 1200,
-            "output_tokens": 800,
-            "total_tokens": 2000
-          }
-        }
-      ],
-      "retrying": [
-        {
-          "issue_id": "def456",
-          "issue_identifier": "MT-650",
-          "issue_url": "https://tracker.example/issues/MT-650",
-          "attempt": 3,
-          "due_at": "2026-02-24T20:16:00Z",
-          "error": "no available orchestrator slots"
-        }
-      ],
-      "codex_totals": {
-        "input_tokens": 5000,
-        "output_tokens": 2400,
-        "total_tokens": 7400,
-        "seconds_running": 1834.2
-      },
-      "rate_limits": null
-    }
-    ```
-
-- `GET /api/v1/<issue_identifier>`
-  - Returns issue-specific runtime/debug details for the identified issue, including any information
-    the implementation tracks that is useful for debugging.
-  - Suggested response shape:
-
-    ```json
-    {
-      "issue_identifier": "MT-649",
-      "issue_id": "abc123",
-      "status": "running",
-      "workspace": {
-        "path": "/tmp/symphony_workspaces/MT-649"
-      },
-      "attempts": {
-        "restart_count": 1,
-        "current_retry_attempt": 2
-      },
-      "running": {
-        "session_id": "thread-1-turn-1",
-        "turn_count": 7,
-        "state": "In Progress",
-        "started_at": "2026-02-24T20:10:12Z",
-        "last_event": "notification",
-        "last_message": "Working on tests",
-        "last_event_at": "2026-02-24T20:14:59Z",
-        "tokens": {
-          "input_tokens": 1200,
-          "output_tokens": 800,
-          "total_tokens": 2000
-        }
-      },
-      "retry": null,
-      "logs": {
-        "codex_session_logs": [
-          {
-            "label": "latest",
-            "path": "/var/log/symphony/codex/MT-649/latest.log",
-            "url": null
-          }
-        ]
-      },
-      "recent_events": [
-        {
-          "at": "2026-02-24T20:14:59Z",
-          "event": "notification",
-          "message": "Working on tests"
-        }
-      ],
-      "last_error": null,
-      "tracked": {}
-    }
-    ```
-
-  - If the issue is unknown to the current in-memory state, return `404` with an error response (for
-    example `{\"error\":{\"code\":\"issue_not_found\",\"message\":\"...\"}}`).
-
-- `POST /api/v1/refresh`
-  - Queues an immediate tracker poll + reconciliation cycle (best-effort trigger; implementations
-    MAY coalesce repeated requests).
-  - Suggested request body: empty body or `{}`.
-  - Suggested response (`202 Accepted`) shape:
-
-    ```json
-    {
-      "queued": true,
-      "coalesced": false,
-      "requested_at": "2026-02-24T20:15:30Z",
-      "operations": ["poll", "reconcile"]
-    }
-    ```
-
-API design notes:
-
-- The JSON shapes above are the RECOMMENDED baseline for interoperability and debugging ergonomics.
-- Implementations MAY add fields, but SHOULD avoid breaking existing fields within a version.
-- Endpoints SHOULD be read-only except for operational triggers like `/refresh`.
-- Unsupported methods on defined routes SHOULD return `405 Method Not Allowed`.
-- API errors SHOULD use a JSON envelope such as `{"error":{"code":"...","message":"..."}}`.
-- If the dashboard is a client-side app, it SHOULD consume this API rather than duplicating state
-  logic.
-
-## 14. Failure Model and Recovery Strategy
-
-### 14.1 Failure Classes
-
-1. `Workflow/Config Failures`
-   - Missing `WORKFLOW.md`
-   - Invalid YAML front matter
-   - Unsupported tracker kind or missing tracker credentials/project slug
-   - Missing coding-agent executable
-
-2. `Workspace Failures`
-   - Workspace directory creation failure
-   - Workspace population/synchronization failure (implementation-defined; can come from hooks)
-   - Invalid workspace path configuration
-   - Hook timeout/failure
-
-3. `Agent Session Failures`
-   - Startup handshake failure
-   - Turn failed/cancelled
-   - Turn timeout
-   - User input requested and handled as failure by the implementation's documented policy
-   - Subprocess exit
-   - Stalled session (no activity)
-
-4. `Tracker Failures`
-   - API transport errors
-   - Non-200 status
-   - GraphQL errors
-   - malformed payloads
-
-5. `Observability Failures`
-   - Snapshot timeout
-   - Dashboard render errors
-   - Log sink configuration failure
-
-6. `Persistence Failures`
-   - Database unavailable or corrupt
-   - Migration failure
-   - Claim transaction or lease renewal failure
-   - Durable outcome commit failure
-
-7. `Policy and Review Failures`
-   - Unsafe or stale side-effect request
-   - Missing or malformed structured outcome
-   - Missing required integrative review
-   - Review target revision changed
-   - Material reviewer conflict not adjudicated
-
-### 14.2 Recovery Behavior
-
-- Dispatch validation failures:
-  - Skip new dispatches.
-  - Keep service alive.
-  - Continue reconciliation where possible.
-
-- Worker failures:
-  - Classify using Section 7.6.
-  - Retry only retryable classes and only within the pinned budget.
-
-- Tracker candidate-fetch failures:
-  - Skip this tick.
-  - Try again on next tick.
-
-- Reconciliation state-refresh failures:
-  - Keep current workers.
-  - Retry on next tick.
-
-- Dashboard/log failures:
-  - Do not crash the orchestrator.
-
-- Persistence failures:
-  - Stop new dispatch immediately.
-  - Do not apply external mutations whose intent cannot first be committed durably.
-  - Keep or terminate existing workers according to whether leases and outcomes can still be
-    recorded safely; surface an operator-visible critical error.
-
-### 14.3 Partial State Recovery (Restart)
-
-Control-plane state is durable. Agent processes and in-memory protocol sessions are not assumed to
-survive process restart.
-
-After restart:
-
-- Open attempts and leases are loaded before dispatch starts.
-- Leases with verified live ownership remain unavailable; expired or unverifiable leases enter
-  reconciliation and are never blindly resumed.
-- Retry due times and budgets are restored from durable records; runtime timer handles are rebuilt.
-- Attempts interrupted before a durable outcome are closed as `agent_process` failures and retried
-  only when budget permits.
-- Side-effect intents without completion receipts are reconciled using their idempotency keys.
-- Tracker state, durable state, and workspace ownership are compared before any re-dispatch.
-- Terminal workspace cleanup runs after claims have been reconciled.
-
-The baseline SQLite database MUST live on local disk, not a network filesystem. The worker is the
-sole database writer. The dashboard and API SHOULD read through the worker or a read-only connection
-whose consistency limitations are documented.
-
-### 14.4 Operator Intervention Points
-
-Operators can control behavior by:
-
-- Editing `WORKFLOW.md` (prompt and most runtime settings).
-- `WORKFLOW.md` changes are detected and re-applied automatically without restart according to
-  Section 6.2.
-- Changing issue states in the tracker:
-  - terminal state -> running session is stopped and workspace cleaned when reconciled
-  - non-active state -> running session is stopped without cleanup
-- Restarting the service for process recovery or deployment (not as the normal path for applying
-  workflow config changes).
-
-## 15. Security and Operational Safety
-
-### 15.1 Trust Boundary Assumption
-
-Each implementation defines its own trust boundary.
-
-Operational safety requirements:
-
-- Implementations SHOULD state clearly whether they are intended for trusted environments, more
-  restrictive environments, or both.
-- Implementations SHOULD state clearly whether they rely on auto-approved actions, operator
-  approvals, stricter sandboxing, or some combination of those controls.
-- Workspace isolation and path validation are important baseline controls, but they are not a
-  substitute for whatever approval and sandbox policy an implementation chooses.
-
-### 15.2 Filesystem Safety Requirements
-
-Mandatory:
-
-- Workspace path MUST remain under configured workspace root.
-- Coding-agent cwd MUST be the per-issue workspace path for the current run.
-- Workspace directory names MUST use sanitized identifiers.
-
-RECOMMENDED additional hardening for ports:
-
-- Run under a dedicated OS user.
-- Restrict workspace root permissions.
-- Mount workspace root on a dedicated volume if possible.
-
-### 15.3 Secret Handling
-
-- Support `$VAR` indirection in workflow config.
-- Do not log API tokens or secret env values.
-- Validate presence of secrets without printing them.
-- Resolve secrets at the narrow integration boundary that needs them. Do not persist resolved secret
-  values in configuration snapshots, prompts, handoffs, workpads, review packets, or event logs.
-- Agent and reviewer processes SHOULD receive scoped credentials rather than the orchestrator's full
-  environment. Reviewer roles SHOULD be read-only by default.
-- Tool results MUST be filtered for accidental credentials before they enter model context or durable
-  logs.
-
-### 15.4 Hook Script Safety
-
-Workspace hooks are arbitrary shell scripts from `WORKFLOW.md`.
-
-Implications:
-
-- Hooks are fully trusted configuration.
-- Hooks run inside the workspace directory.
-- Hook output SHOULD be truncated in logs.
-- Hook timeouts are REQUIRED to avoid hanging the orchestrator.
-
-### 15.5 Harness Hardening Guidance
-
-Running Codex agents against repositories, issue trackers, and other inputs that can contain
-sensitive data or externally-controlled content can be dangerous. A permissive deployment can lead
-to data leaks, destructive mutations, or full machine compromise if the agent is induced to execute
-harmful commands or use overly-powerful integrations.
-
-Implementations SHOULD explicitly evaluate their own risk profile and harden the execution harness
-where appropriate. This specification intentionally does not mandate a single hardening posture, but
-implementations SHOULD NOT assume that tracker data, repository contents, prompt inputs, or tool
-arguments are fully trustworthy just because they originate inside a normal workflow.
-
-Possible hardening measures include:
-
-- Tightening Codex approval and sandbox settings described elsewhere in this specification instead
-  of running with a maximally permissive configuration.
-- Adding external isolation layers such as OS/container/VM sandboxing, network restrictions, or
-  separate credentials beyond the built-in Codex policy controls.
-- Filtering which Linear issues, projects, teams, labels, or other tracker sources are eligible for
-  dispatch so untrusted or out-of-scope tasks do not automatically reach the agent.
-- Keeping broad GraphQL compatibility tools disabled; when explicitly required, narrowing them to
-  the intended project and operation scope.
-- Reducing the set of client-side tools, credentials, filesystem paths, and network destinations
-  available to the agent to the minimum needed for the workflow.
-- Treating issue text, PR comments, repository files, tool output, and fetched web content as
-  untrusted instructions. Policy and system constraints MUST NOT be delegated to those inputs.
-- Separating control-plane credentials from workspace credentials and using typed brokers for
-  privileged actions.
-- Pinning review and mutation actions to an immutable commit SHA or equivalent target revision.
-- Recording tool authority, target scope, and policy decision for every privileged action.
-
-The correct controls are deployment-specific, but implementations SHOULD document them clearly and
-treat harness hardening as part of the core safety model rather than an optional afterthought.
-
-## 16. Reference Algorithms (Language-Agnostic)
-
-### 16.1 Service Startup
-
-```text
-function start_service():
-  configure_logging()
-  store = open_local_state_store()
-  apply_schema_migrations_transactionally(store)
-  acquire_single_writer_lock(store)
-  start_observability_outputs()
-  start_workflow_watch(on_change=reload_and_reapply_workflow)
-
-  state = {
-    poll_interval_ms: get_config_poll_interval_ms(),
-    max_concurrent_agents: get_config_max_concurrent_agents(),
-    running: {},
-    claimed: set(),
-    blocked: {},
-    retry_attempts: {},
-    completed: set(),
-    codex_totals: {input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-    codex_rate_limits: null
-  }
-
-  validation = validate_dispatch_config()
-  if validation is not ok:
-    log_validation_error(validation)
-    fail_startup(validation)
-
-  reconcile_durable_attempts_leases_and_side_effects(store)
-  rebuild_retry_timers_from_store(store)
-  startup_terminal_workspace_cleanup()
-  schedule_tick(delay_ms=0)
-
-  event_loop(state)
-```
-
-### 16.2 Poll-and-Dispatch Tick
-
-```text
-on_tick(state):
-  state = reconcile_running_issues(state)
-  state = reconcile_blocked_issues(state)
-
-  validation = validate_dispatch_config()
-  if validation is not ok:
-    log_validation_error(validation)
-    notify_observers()
-    schedule_tick(state.poll_interval_ms)
-    return state
-
-  issues = tracker.fetch_candidate_issues()
-  if issues failed:
-    log_tracker_error()
-    notify_observers()
-    schedule_tick(state.poll_interval_ms)
-    return state
-
-  for issue in sort_for_dispatch(issues):
-    if no_available_slots(state):
-      break
-
-    if should_dispatch(issue, state):
-      state = dispatch_issue(issue, state, attempt=null)
-
-  notify_observers()
-  schedule_tick(state.poll_interval_ms)
-  return state
-```
-
-### 16.3 Reconcile Active Runs
-
-```text
-function reconcile_running_issues(state):
-  state = reconcile_stalled_runs(state)
-
-  running_ids = keys(state.running)
-  if running_ids is empty:
-    return state
-
-  refreshed = tracker.fetch_issue_states_by_ids(running_ids)
-  if refreshed failed:
-    log_debug("keep workers running")
-    return state
-
-  for issue in refreshed:
-    if issue.state in terminal_states:
-      state = terminate_running_issue(state, issue.id, cleanup_workspace=true)
-    else if issue.state in active_states:
-      state.running[issue.id].issue = issue
-    else:
-      state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
-
-  return state
+start_service():
+  resolve bootstrap-only workflow/database paths from trusted args/environment
+  open local SQLite; acquire the single-writer lock; apply migrations transactionally
+  load defaults + WORKFLOW.md + durable overrides; inspect pristine/operator state
+  if operator store is empty and database is non-pristine:
+    load recorded sessions/intents; terminate owned processes; query intent status without mutation
+    record operator_store_missing_nonpristine; require known-good database restore; return failure
+  if database is pristine:
+    validate under the narrow bootstrap exemptions; keep dispatch/external mutations disabled
+    start loopback-only bootstrap; require trusted one-time credential + exact candidate hash
+    atomically create admin, auth mapping, acknowledgment snapshot, and bootstrap OperatorAction
+    on failure roll back completely; on success disable bootstrap credential and rerun full validation
+  else validate adapters, auth/operators, required skills, acknowledgment and restart state normally
+  create ServiceRun
+  start authenticated Control API and UI in recovering/read-only mode
+  load open attempts, claims, retries, parked work, stages, budgets, and side-effect intents
+  verify/terminate process ownership; reconcile intents by idempotency key
+  close prior ServiceRun as interrupted; rebuild timers/cursors; close interrupted results
+  clean terminal unclaimed workspaces
+  schedule immediate poll; expose startup result durably; enable authorized control mutations
 ```
 
 ```text
-function reconcile_blocked_issues(state):
-  blocked_ids = keys(state.blocked)
-  if blocked_ids is empty:
-    return state
-
-  refreshed = tracker.fetch_issue_states_by_ids(blocked_ids)
-  if refreshed failed:
-    log_debug("keep blocked issues claimed")
-    return state
-
-  for issue in refreshed:
-    if issue.state in terminal_states:
-      cleanup_workspace(issue.identifier)
-      release_claim(state, issue.id)
-    else if issue.state in active_states:
-      state.blocked[issue.id].issue = issue
-    else:
-      release_claim(state, issue.id)
-
-  release blocked claims for any requested issue IDs no longer visible
-  return state
-```
-
-### 16.4 Dispatch One Issue
-
-```text
-function dispatch_issue(issue, state, attempt):
-  guard = enforce_pre_dispatch_guards(issue)
-  if guard.result is not allow:
-    if guard.next_lane exists:
-      tracker.update_issue_state(issue.id, guard.next_lane)
-    record_guard_result(issue, guard)
-    return state
-
-  config_snapshot = commit_effective_config_snapshot()
-  route = select_compute_route(issue, phase="implementation", config_snapshot)
-  durable_attempt = transactionally_acquire_lease_and_create_attempt(
-    issue, attempt, config_snapshot, route
-  )
-  if durable_attempt failed:
-    return state
-
-  worker = spawn_worker(
-    fn -> run_agent_attempt(issue, durable_attempt, parent_orchestrator_pid) end
-  )
-
-  if worker spawn failed:
-    close_attempt(durable_attempt, failure_class="agent_process")
-    return schedule_retry_if_allowed(state, issue.id, next_attempt(attempt), {
-      identifier: issue.identifier,
-      error: "failed to spawn agent"
-    })
-
-  state.running[issue.id] = {
-    worker_handle,
-    monitor_handle,
-    identifier: issue.identifier,
-    issue,
-    session_id: null,
-    codex_app_server_pid: null,
-    last_codex_message: null,
-    last_codex_event: null,
-    last_codex_timestamp: null,
-    codex_input_tokens: 0,
-    codex_output_tokens: 0,
-    codex_total_tokens: 0,
-    last_reported_input_tokens: 0,
-    last_reported_output_tokens: 0,
-    last_reported_total_tokens: 0,
-    retry_attempt: normalize_attempt(attempt),
-    started_at: now_utc()
-  }
-
-  state.claimed.add(issue.id)
-  state.retry_attempts.remove(issue.id)
-  return state
+dispatch(work):
+  require eligible issue or queued SystemJob, unclaimed work_ref, adapter preflight, slot, and class
+  snapshot effective config; select logical profile; compute and require budget reservation
+  transactionally create work-ref Claim + Attempt + all-scope reservations + dispatch-pending event
+  for issue: commit authorized lane-change intent and apply through tracker adapter
+             after receipt, open confirmed StageTransition
+  for SystemJob: atomically open its durable running StageTransition; perform no tracker mutation
+  prepare workspace; enforce write boundary; run hooks; launch credential-free agent process group
+  on launch failure, close Attempt, settle reservation, and route through failure policy
 ```
 
 ```text
-function enforce_pre_dispatch_guards(issue):
-  if issue.state == "Risk Review" and github_sdlc_workflow_enabled():
-    snapshot = tracker.fetch_readiness_snapshot(issue.id)
-    workpad = tracker.fetch_issue_comments(issue.id).find("## Codex Workpad")
-    if snapshot failed or workpad missing:
-      return route_to_blocked("readiness.github_fetch_failed")
-    return evaluate_implementation_readiness(snapshot, parse_proof_packet(workpad.body))
-
-  if issue.state == "Merging" and github_sdlc_workflow_enabled():
-    snapshot = tracker.fetch_readiness_snapshot(issue.id)
-    workpad = tracker.fetch_issue_comments(issue.id).find("## Codex Workpad")
-    if snapshot failed or workpad missing:
-      return route_to_blocked("fresh_review.missing_evidence")
-    return evaluate_fresh_review_merge_readiness(
-      snapshot,
-      parse_fresh_context_correctness_review(workpad.body)
-    )
-
-  return allow()
-```
-
-### 16.5 Worker Attempt (Workspace + Prompt + Agent)
-
-```text
-function run_agent_attempt(issue, durable_attempt, orchestrator_channel):
-  workspace = workspace_manager.create_for_issue(issue.identifier)
-  if workspace failed:
-    fail_worker("workspace error")
-
-  if run_hook("before_run", workspace.path) failed:
-    fail_worker("before_run hook error")
-
-  session = app_server.start_session(workspace=workspace.path)
-  if session failed:
-    run_hook_best_effort("after_run", workspace.path)
-    fail_worker("agent session startup error")
-
-  config = load_pinned_snapshot(durable_attempt.config_snapshot_id)
-  max_turns = config.agent.max_turns
-  turn_number = 1
-
-  while true:
-    prompt = build_turn_prompt(config.workflow_template, issue, durable_attempt, turn_number, max_turns)
-    if prompt failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("prompt error")
-
-    turn_result = app_server.run_turn(
-      session=session,
-      prompt=prompt,
-      issue=issue,
-      on_message=(msg) -> send(orchestrator_channel, {codex_update, issue.id, msg})
-    )
-
-    if turn_result failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("agent turn error")
-
-    refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
-    if refreshed_issue failed:
-      app_server.stop_session(session)
-      run_hook_best_effort("after_run", workspace.path)
-      fail_worker("issue state refresh error")
-
-    issue = refreshed_issue[0] or issue
-
-    if issue.state is not active:
-      break
-
-    if turn_number >= max_turns:
-      break
-
-    turn_number = turn_number + 1
-
-  outcome = app_server.require_structured_outcome(session)
-  if outcome invalid:
-    app_server.stop_session(session)
-    run_hook_best_effort("after_run", workspace.path)
-    fail_worker("invalid structured outcome", failure_class="agent_process")
-
-  commit_outcome_and_side_effect_intents(durable_attempt, outcome)
-  app_server.stop_session(session)
-  run_hook_best_effort("after_run", workspace.path)
-
-  exit_with_outcome(outcome)
-```
-
-### 16.6 Worker Exit and Retry Handling
-
-```text
-on_worker_exit(issue_id, result, state):
-  running_entry = state.running.remove(issue_id)
-  state = add_runtime_seconds_to_totals(state, running_entry)
-
-  if result contains valid outcome:
-    state = apply_outcome_transition_and_approved_side_effects(result.outcome, state)
-  else:
-    failure = classify_failure(result)
-    state = schedule_retry_if_allowed(state, issue_id, next_attempt_from(running_entry), {
-      identifier: running_entry.identifier,
-      failure_class: failure.class,
-      error: failure.summary
-    })
-
-  notify_observers()
-  return state
+finish_attempt(attempt, terminal_result):
+  validate the schema for attempt.role and the pinned budget/revision
+  transactionally store result/review, final usage, logs, evidence, requested-action intents,
+    next claim mode, and routing decision; close/open StageTransitions only when the confirmed
+    tracker lane or durable SystemJob stage actually changes
+  terminate and confirm process tree; run after_run best effort
+  apply committed intents through typed adapters and store receipts
+  reconcile resulting tracker/repository revisions before releasing or changing the claim
 ```
 
 ```text
-on_retry_timer(issue_id, state):
-  retry_entry = state.retry_attempts.pop(issue_id)
-  if missing:
-    return state
-
-  candidates = tracker.fetch_candidate_issues()
-  if fetch failed:
-    return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
-      identifier: retry_entry.identifier,
-      error: "retry poll failed"
-    })
-
-  issue = find_by_id(candidates, issue_id)
-  if issue is null:
-    state.claimed.remove(issue_id)
-    return state
-
-  if available_slots(state) == 0:
-    return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
-      identifier: issue.identifier,
-      error: "no available orchestrator slots"
-    })
-
-  return dispatch_issue(issue, state, attempt=retry_entry.attempt)
+activate_override(operator, request):
+  authenticate; bind key to actor/endpoint/target/request hash
+  on idempotency conflict, CSRF/capability/version/validation rejection: store OperatorAction; return error
+  return original result only when the scoped key and request hash both match
+  transactionally store accepted OperatorAction and override revision
+  if ack-modified, require a second action bound to candidate hash
+  apply at hot/attempt/restart boundary; preserve last known good on any failure
+  create immutable config snapshot metadata; return effective value, source, and pending state
 ```
-
-## 17. Test and Validation Matrix
-
-A conforming implementation SHOULD include tests that cover the behaviors defined in this
-specification.
-
-Validation profiles:
-
-- `Core Conformance`: deterministic tests REQUIRED for all conforming implementations.
-- `Extension Conformance`: REQUIRED only for OPTIONAL features that an implementation chooses to
-  ship.
-- `Real Integration Profile`: environment-dependent smoke/integration checks RECOMMENDED before
-  production use.
-
-Unless otherwise noted, Sections 17.1 through 17.8 are `Core Conformance`. Bullets that begin with
-`If ... is implemented` are `Extension Conformance`.
-
-### 17.1 Workflow and Config Parsing
-
-- Workflow file path precedence:
-  - explicit runtime path is used when provided
-  - cwd default is `WORKFLOW.md` when no explicit runtime path is provided
-- Workflow file changes are detected and trigger re-read/re-apply without restart
-- Valid reload creates an immutable configuration snapshot
-- In-flight attempts retain their pinned snapshot while hot settings and future-attempt settings
-  apply according to Section 6.2
-- Restart-required changes are reported without partially applying
-- Invalid workflow reload keeps last known good effective configuration and emits an
-  operator-visible error
-- Missing `WORKFLOW.md` returns typed error
-- Invalid YAML front matter returns typed error
-- Front matter non-map returns typed error
-- Config defaults apply when OPTIONAL values are missing
-- `tracker.kind` validation enforces supported kinds (`linear`, `github`)
-- `tracker.api_key` works for direct-token trackers (including `$VAR` indirection)
-- GitHub tracker validation requires Project owner/number and repository owner/name
-- `codex.required_skills` normalizes values and blocks dispatch when required skills are missing
-- `readiness.required_checks` and `readiness.review_markers` reject blank values
-- `$VAR` resolution works for tracker API key and path values
-- `~` path expansion works
-- `codex.command` is preserved as a shell command string
-- Per-state concurrency override map normalizes state names and ignores invalid values
-- Prompt template renders `issue` and `attempt`
-- Prompt rendering fails on unknown variables (strict mode)
-- Logical compute profiles resolve through the active adapter and reject unsupported model/effort
-  combinations
-- Deterministic risk floors cannot be lowered by heuristic or model classification
-
-### 17.2 Workspace Manager and Safety
-
-- Deterministic workspace path per issue identifier
-- Missing workspace directory is created
-- Existing workspace directory is reused
-- Existing non-directory path at workspace location is handled safely (replace or fail per
-  implementation policy)
-- OPTIONAL workspace population/synchronization errors are surfaced
-- `after_create` hook runs only on new workspace creation
-- `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
-- `after_run` hook runs after each attempt and failure/timeouts are logged and ignored
-- `before_remove` hook runs on cleanup and failures/timeouts are ignored
-- Workspace path sanitization and root containment invariants are enforced before agent launch
-- Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths
-
-### 17.3 Issue Tracker Client
-
-- Candidate issue fetch uses active states and the configured tracker project
-- Linear query uses the specified project filter field (`slugId`)
-- GitHub query uses the configured Project v2 owner/number and Status/Priority fields
-- Empty `fetch_issues_by_states([])` returns empty without API call
-- Pagination preserves order across multiple pages
-- Blockers are normalized from Linear inverse relations of type `blocks` or GitHub `blockedBy`
-- Labels are normalized to lowercase
-- GitHub Project status updates resolve field/item/option IDs and mutate the Project item status
-- GitHub issue comments can be created, listed, and updated for workpad use
-- GitHub readiness snapshots include linked PR, checks, reviews, review threads, PR comments, and
-  issue comments
-- Issue state refresh by ID returns minimal normalized issues
-- Issue state refresh query uses GraphQL ID typing (`[ID!]`) as specified in Section 11.2
-- Error mapping for request errors, non-200, GraphQL errors, malformed payloads
-
-### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
-
-- Dispatch sort order is priority then oldest creation time
-- `Todo` issue with non-terminal blockers is not eligible
-- `Todo` issue with terminal blockers is eligible
-- Active-state issue refresh updates running entry state
-- Non-active state stops running agent without workspace cleanup
-- Terminal state stops running agent and cleans workspace
-- Reconciliation with no running issues is a no-op
-- A valid normal outcome maps to exactly one policy transition; continuation occurs only when
-  explicitly required and budgeted
-- A retryable abnormal exit increments the applicable budget and uses exponential backoff
-- Retry backoff cap uses configured `agent.max_retry_backoff_ms`
-- Retry queue entries include attempt, due time, identifier, and error
-- Claim acquisition and attempt creation are atomic and durable before process launch
-- Lease renewal prevents concurrent workspace ownership; expired leases enter reconciliation
-- Retry timers, budgets, and due times are rebuilt after restart
-- Side-effect intents and receipts reconcile idempotently after interruption
-- Missing or malformed structured outcomes cannot produce a success transition
-- Every failure maps to one Section 7.6 class and non-retryable classes do not loop
-- `no_progress` stops at `agent.max_no_progress_attempts`
-- Stall detection kills stalled sessions and schedules retry
-- Slot exhaustion requeues retries with explicit error reason
-- Blocked issues remain claimed while the blocker is present and are reconciled on later ticks
-- `In Progress` -> `Risk Review` guard routes stale/missing proof, failed checks, requested changes,
-  and actionable comments to the configured next lane
-- `Risk Review` -> `Merging` guard rejects stale, missing, invalid, or blocking fresh-context review
-  evidence
-- If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
-  limits
-- If a snapshot API is implemented, timeout/unavailable cases are surfaced
-
-### 17.5 Coding-Agent App-Server Client
-
-- Launch command uses workspace cwd and invokes `bash -lc <codex.command>`
-- Session startup follows the targeted Codex app-server protocol.
-- Adapter startup rejects incompatible protocol/schema/capability combinations before execution
-- Selected model and reasoning effort are pinned for the attempt
-- Client identity/capability payloads are valid when the targeted Codex app-server protocol requires
-  them.
-- Policy-related startup payloads use the implementation's documented approval/sandbox settings
-- Thread and turn identities exposed by the targeted protocol are extracted and used to emit
-  `session_started`
-- Request/response read timeout is enforced
-- Turn timeout is enforced
-- Transport framing required by the targeted protocol is handled correctly
-- Bounded event buffering applies backpressure or fails safely under overload
-- Cancellation, timeout, stall, and shutdown terminate and verify the full process tree
-- For stdio-based transports, diagnostic stderr handling is kept separate from the protocol stream
-- Command/file-change approvals are handled according to the implementation's documented policy
-- Unsupported dynamic tool calls are rejected without stalling the session
-- User input requests are handled according to the implementation's documented policy and do not
-  stall indefinitely
-- Usage and rate-limit telemetry exposed by the targeted protocol is extracted
-- Approval, user-input-required, usage, and rate-limit signals are interpreted according to the
-  targeted protocol
-- If client-side tools are implemented, session startup advertises the supported tool specs
-  using the targeted app-server protocol
-- `report_outcome` or an equivalent schema-constrained terminal result is required and validates all
-  Section 4.1.12 fields
-- Narrow mutation tools enforce role authority, current tracker state, target revision, guard
-  results, and idempotency keys
-- If the `linear_graphql` client-side tool extension is implemented:
-  - the tool is advertised to the session
-  - valid `query` / `variables` inputs execute against configured Linear auth
-  - top-level GraphQL `errors` produce `success=false` while preserving the GraphQL body
-  - invalid arguments, missing auth, and transport failures return structured failure payloads
-  - unsupported tool names still fail without stalling the session
-- If the `github_graphql` client-side tool extension is implemented:
-  - the tool is advertised to the session
-  - valid `query` / `variables` inputs execute through the configured GitHub auth path
-  - invalid arguments, missing auth, Project-scope failures, and transport failures return structured
-    failure payloads
-
-### 17.6 Observability
-
-- Validation failures are operator-visible
-- Structured logging includes issue/session context fields
-- Logging sink failures do not crash orchestration
-- Token/rate-limit aggregation remains correct across repeated agent updates
-- If a human-readable status surface is implemented, it is driven from orchestrator state and does
-  not affect correctness
-- If humanized event summaries are implemented, they cover key wrapper/agent event classes without
-  changing orchestrator behavior
-- If SDLC outcome events are implemented, JSONL events include the stable fields from Section 13.7
-  and omit prompts, diffs, secrets, and large artifacts
-- Compute-route, escalation, outcome, review assignment, finding, and adjudication events include
-  pinned profile/model/effort and routing reasons
-- Database, schema, lease-renewal, and checkpoint health are operator-visible
-
-### 17.7 CLI and Host Lifecycle
-
-- CLI accepts a positional workflow path argument (`path-to-WORKFLOW.md`)
-- CLI uses `./WORKFLOW.md` when no workflow path argument is provided
-- CLI errors on nonexistent explicit workflow path or missing default `./WORKFLOW.md`
-- CLI surfaces startup failure cleanly
-- CLI exits with success when application starts and shuts down normally
-- CLI exits nonzero when startup fails or the host process exits abnormally
-
-### 17.8 Adaptive Compute and Review
-
-- Phase routing selects the expected profile for low-, normal-, and high-risk fixtures
-- Risk floors cover security, migrations, concurrency, public APIs, cross-package architecture, and
-  acceptance ambiguity
-- A classifier can raise but cannot lower the deterministic floor
-- Escalation starts a fresh thread and supplies only the structured factual handoff
-- Every change receives one full-change integrative review
-- Low-risk changes do not fan out specialists without a trigger
-- High-risk fixtures trigger both default specialist slices
-- Reviewers operate on the same immutable target revision and are read-only by default
-- Findings are unioned and deduplicated; majority vote is never used
-- Materially conflicting findings invoke one deep adjudication; uncontested blocking findings remain
-- Sampled deep audits measure missed-defect rates for cheaper routes
-- Evaluation fixtures record quality, escaped defects, false positives, cost, latency, and rework
-  cycles so routing changes can be compared against a strong-model baseline
-
-### 17.9 Real Integration Profile (RECOMMENDED)
-
-These checks are RECOMMENDED for production readiness and MAY be skipped in CI when credentials,
-network access, or external service permissions are unavailable.
-
-- A real tracker smoke test can be run with valid credentials supplied by the selected tracker auth
-  path, such as `LINEAR_API_KEY` for Linear or authenticated `gh` with Project scope for GitHub.
-- Real integration tests SHOULD use isolated test identifiers/workspaces and clean up tracker
-  artifacts when practical.
-- A skipped real-integration test SHOULD be reported as skipped, not silently treated as passed.
-- If a real-integration profile is explicitly enabled in CI or release validation, failures SHOULD
-  fail that job.
-
-## 18. Implementation Checklist (Definition of Done)
-
-Use the same validation profiles as Section 17:
-
-- Section 18.1 = `Core Conformance`
-- Section 18.2 = `Extension Conformance`
-- Section 18.3 = `Real Integration Profile`
-
-### 18.1 REQUIRED for Conformance
-
-- Workflow path selection supports explicit runtime path and cwd default
-- `WORKFLOW.md` loader with YAML front matter + prompt body split
-- Typed config layer with defaults and `$` resolution
-- Dynamic `WORKFLOW.md` watch/reload/re-apply for config and prompt
-- Immutable per-attempt configuration snapshots with explicit hot, next-attempt, and restart-required
-  reload categories
-- Polling orchestrator as the sole writer of durable control-plane state
-- Local transactional persistence for claims, leases, attempts, retries, outcomes, guard decisions,
-  side-effect intents/receipts, and configuration snapshots
-- Restart reconciliation across durable state, tracker state, workspace ownership, and live-process
-  evidence
-- Issue tracker client with candidate fetch + state refresh + terminal fetch
-- Workspace manager with sanitized per-issue workspaces
-- Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)
-- Hook timeout config (`hooks.timeout_ms`, default `60000`)
-- Versioned coding-agent adapter with protocol/schema capability checks, bounded transport,
-  backpressure, and verified process-tree cleanup
-- Codex launch command config (`codex.command`, default `codex app-server`)
-- Strict prompt rendering with `issue` and `attempt` variables
-- Exponential retry queue with continuation retries after normal exit
-- Structured terminal outcome contract with deterministic routing for `completed`, `needs_rework`,
-  `blocked`, `needs_input`, `no_progress`, and `failed`
-- Failure taxonomy, retry budgets, no-progress budget, and bounded compute escalation
-- Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)
-- Reconciliation that stops runs on terminal/non-active tracker states
-- Workspace cleanup for terminal issues (startup sweep + active transition)
-- Structured logs with `issue_id`, `issue_identifier`, and `session_id`
-- Logical compute profiles, deterministic phase/risk floors, pinned model/effort per attempt, and
-  fresh-thread escalation handoffs
-- Mandatory independent integrative review, conditional specialist fan-out, evidence-union merge,
-  and conflict-only adjudication
-- Narrow typed mutation tools with policy checks and idempotent orchestrator-owned side effects
-- Executable Core Conformance suite covering Sections 17.1 through 17.8
-- Operator-visible observability (structured logs; OPTIONAL snapshot/status surface)
-
-### 18.2 RECOMMENDED Extensions (Not REQUIRED for Conformance)
-
-- HTTP server extension honors CLI `--port` over `server.port`, uses a safe default bind host, and
-  exposes the baseline endpoints/error semantics in Section 13.8 if shipped.
-- `linear_graphql` and `github_graphql` compatibility extensions expose explicitly scoped raw access
-  only when a workflow opts in and the same mutation policy/audit controls remain enforced.
-- GitHub Issues + Projects v2 tracker adapter implements candidate fetch, state refresh, comments,
-  Project status updates, and readiness snapshots.
-- GitHub SDLC workflow extension implements persistent workpads, proof packets, PR feedback sweep,
-  readiness guards, fresh-context review guards, and lane routing.
-- SDLC outcome events are emitted to JSONL with the stable field schema in Section 13.7.
-- Remote or distributed durable-workflow execution, if single-host SQLite and process ownership no
-  longer meet measured reliability or scale requirements.
-
-### 18.3 Operational Validation Before Production (RECOMMENDED)
-
-- Run the `Real Integration Profile` from Section 17.9 with valid credentials and network access.
-- Verify hook execution and workflow path resolution on the target host OS/shell environment.
-- If the OPTIONAL HTTP server is shipped, verify the configured port behavior and loopback/default
-  bind expectations on the target environment.
-
-## Appendix A. SSH Worker Extension (OPTIONAL)
-
-This appendix describes a common extension profile in which Symphony keeps one central
-orchestrator but executes worker runs on one or more remote hosts over SSH.
-
-Extension config:
-
-- `worker.ssh_hosts` (list of SSH host strings, OPTIONAL)
-  - When omitted, work runs locally.
-- `worker.max_concurrent_agents_per_host` (positive integer, OPTIONAL)
-  - Shared per-host cap applied across configured SSH hosts.
-
-### A.1 Execution Model
-
-- The orchestrator remains the single source of truth for polling, claims, retries, and
-  reconciliation.
-- `worker.ssh_hosts` provides the candidate SSH destinations for remote execution.
-- Each worker run is assigned to one host at a time, and that host becomes part of the run's
-  effective execution identity along with the issue workspace.
-- `workspace.root` is interpreted on the remote host, not on the orchestrator host.
-- The coding-agent app-server is launched over SSH stdio instead of as a local subprocess, so the
-  orchestrator still owns the session lifecycle even though commands execute remotely.
-- Continuation turns inside one worker lifetime SHOULD stay on the same host and workspace.
-- A remote host SHOULD satisfy the same basic contract as a local worker environment: reachable
-  shell, writable workspace root, coding-agent executable, and any required auth or repository
-  prerequisites.
-
-### A.2 Scheduling Notes
-
-- SSH hosts MAY be treated as a pool for dispatch.
-- Implementations MAY prefer the previously used host on retries when that host is still
-  available.
-- `worker.max_concurrent_agents_per_host` is an OPTIONAL shared per-host cap across configured SSH
-  hosts.
-- When all SSH hosts are at capacity, dispatch SHOULD wait rather than silently falling back to a
-  different execution mode.
-- Implementations MAY fail over to another host when the original host is unavailable before work
-  has meaningfully started.
-- Once a run has already produced side effects, a transparent rerun on another host SHOULD be
-  treated as a new attempt, not as invisible failover.
-
-### A.3 Problems to Consider
-
-- Remote environment drift:
-  - Each host needs the expected shell environment, coding-agent executable, auth, and repository
-    prerequisites.
-- Workspace locality:
-  - Workspaces are usually host-local, so moving an issue to a different host is typically a cold
-    restart unless shared storage exists.
-- Path and command safety:
-  - Remote path resolution, shell quoting, and workspace-boundary checks matter more once execution
-    crosses a machine boundary.
-- Startup and failover semantics:
-  - Implementations SHOULD distinguish host-connectivity/startup failures from in-workspace agent
-    failures so the same ticket is not accidentally re-executed on multiple hosts.
-- Host health and saturation:
-  - A dead or overloaded host SHOULD reduce available capacity, not cause duplicate execution or an
-    accidental fallback to local work.
-- Cleanup and observability:
-  - Operators need to know which host owns a run, where its workspace lives, and whether cleanup
-    happened on the right machine.
-
-## Appendix B. TypeScript Implementation Profile (RECOMMENDED for Encore)
-
-This profile defines the first Encore implementation without making its libraries part of Core
-Conformance.
-
-Recommended repository layout:
 
 ```text
-SPEC.md
-apps/
-  dashboard/        # Next.js operator UI
-  worker/           # long-running Node.js orchestrator
-packages/
-  core/             # domain types, transition functions, routing, guards
-  persistence/      # SQLite schema, migrations, repositories
-  agents/           # versioned provider adapters and process control
-  trackers/         # GitHub and Linear adapters
-  observability/    # events, metrics, redaction, API projections
-  testkit/          # conformance fixtures and fake adapters
+control_mutation(operator, request):
+  authenticate; bind key to actor/endpoint/target/request hash
+  on idempotency conflict, CSRF/capability/version/validation rejection: store OperatorAction; return error
+  return original receipt only when the scoped key and request hash both match
+  authorize against pinned config + current immutable state/revision
+  commit accepted OperatorAction and the internal state change transactionally
+  only when external work is required: also commit MutationAuthorization + SideEffectIntent first
+  if external work exists: apply through adapter; commit receipt and resulting revision
+  publish durable event; return committed state
 ```
 
-Recommended baseline:
+## Appendix A. Changes from v2
 
-- Language/runtime: strict TypeScript on the current Node.js LTS line.
-- Workspace/package manager: pnpm workspaces.
-- Dashboard: Next.js. It reads projections and sends typed operator commands; it does not own agent
-  processes, polling, leases, or retry timers.
-- Worker HTTP/control surface: Fastify with Server-Sent Events for local live updates.
-- Validation/config: Zod, a YAML parser, and LiquidJS-compatible strict template rendering.
-- Persistence: SQLite on local disk, transactional migrations, foreign keys enabled, and one worker
-  process as the sole writer.
-- Integrations: Octokit for GitHub plus isolated provider adapters for other trackers.
-- Logging: Pino-compatible structured logs with centralized redaction.
-- Tests: Vitest for unit/contract/integration tests and Playwright for dashboard flows.
+Cut: nine lanes → six (rework/blocked/questions became attributes); the redundant config cheat
+sheet; SSH worker appendix; broad `linear_graphql` /
+`github_graphql` tools; per-state concurrency map; workpad-as-input (now projection-only);
+humanized event summaries; ~70% of the text.
 
-Process topology:
+Fixed: cost is durable and enforced through reservation plus priced/unpriced scopes; merge decisions
+read durable review records rather than tracker prose; each attempt pins one role/profile; synthesis
+is a SystemJob; infrastructure failures do not consume agent retry counts; retry and Human
+reservations survive restart; non-login credential-free environments replace inherited login-shell
+state; every executable/authority-changing candidate requires acknowledgment; provider model names
+remain adapter-owned.
 
-```text
-GitHub/Linear ----> worker ----> coding-agent app server
-                       |
-                       +----> local SQLite
-                       |
-                       +----> typed read model / SSE ----> Next.js dashboard
-```
+Added: typed plans and role results; staged classification; required verification; repository-hosting
+adapter; revision-pinned merge queue; repair PRs and reproducible audits; graduated autonomy;
+structured questions and notifications; learning synthesis and saturation; escaped-defect metrics;
+required authenticated UI/API; durable logs, stage timing, usage, prior-run history, and indefinite
+default retention; editable versioned operator overrides; a guided first-run setup contract with
+optional tracker schema remediation; Core, Extension, and Real Integration conformance profiles.
 
-The worker MUST remain correct when the dashboard is stopped. The dashboard MUST NOT access mutable
-SQLite tables directly or invent state transitions; it consumes a typed read model and submits typed
-commands to the worker.
+## Appendix B. Normalized Agent Events and the Codex Reference Adapter
 
-The first implementation SHOULD use ordinary TypeScript transition functions and SQL transactions.
-It SHOULD NOT adopt Temporal, LangGraph, or a distributed queue until measured requirements demand
-multi-host ownership, durable remote timers, or workflow histories that exceed the single-writer
-design. The boundaries in packages/core, packages/agents, and packages/trackers MUST make such a
-replacement possible without changing the core behavior contract.
+### B.1 Normalized Upstream Events (all adapters)
 
-Provider model slugs MUST live in deployment configuration or the active agent adapter. Workflow
-policy refers only to logical compute profiles. This avoids making the specification stale when
-providers add, rename, or retire models.
+Adapters translate their provider protocol into exactly this event set. Every event carries
+`event`, `timestamp` (UTC), and `attempt_id`; `session_id` is nullable until session identity is
+established. Process-bearing events carry the subprocess pid.
 
-The TypeScript profile is conformant only when it passes the applicable Section 17 suite, including
-crash/restart tests, adapter-contract fixtures, routing evals, and review-orchestration tests.
+- `session_started` — thread and turn identity established; payload: `thread_id`, `turn_id`,
+  `model`, `reasoning_effort`.
+- `startup_failed` — protocol handshake, capability, or schema incompatibility; payload:
+  `error_code`. MUST fire before the execution is charged where detectable.
+- `turn_completed` / `turn_failed` / `turn_cancelled` — turn end states; payload: provider reason.
+- `turn_input_required` — the agent requested operator input mid-turn.
+- `action_started` / `action_completed` / `action_failed` — a command, file change, tool call,
+  network fetch, or other agent action; payload: stable `action_id`, `kind`, scrubbed summary, `cwd`,
+  and, on completion, exit/result status plus bounded output reference. These events feed durable
+  stage-grouped UI history.
+- `approval_requested` / `approval_auto_approved` — approval flow per documented policy.
+- `unsupported_tool_call` — the agent invoked a tool the runtime does not implement; the adapter
+  MUST return a tool-failure result to the session and continue rather than stall.
+- `token_usage` — absolute session totals per Section 7.2.
+- `rate_limit` — latest provider rate-limit snapshot.
+- `terminal_result_reported` — the schema-validated result for the current Attempt role.
+- `notification` — informational passthrough (progress text); observability only.
+- `malformed` — an unparseable protocol message; counted, never interpreted.
 
-## Appendix C. Fork Capability Delta
+Orchestrator logic MUST depend only on these events, never on provider-specific payloads or
+humanized strings.
 
-The upstream `openai/symphony` specification is primarily a language-agnostic scheduler contract with
-a Linear-compatible tracker profile. This fork adds product and workflow behavior that should be
-preserved in successor implementations.
+### B.2 Normalized Error Mapping (all adapters)
 
-Capabilities added by this fork:
+Adapter-detected failures map to these codes, which map to Section 13 classes:
 
-- GitHub Issues + GitHub Projects v2 tracker mode.
-- GitHub Project `Status` as the workflow lane source of truth.
-- GitHub Project `Priority` dispatch ordering.
-- GitHub native `blockedBy` dependency gating.
-- GitHub issue comment create/read/update operations.
-- GitHub Project status mutation for guarded routing.
-- GitHub linked-PR readiness snapshots covering checks, reviews, review threads, PR comments, and
-  issue comments.
-- `github_graphql` dynamic tool for in-session GitHub GraphQL access.
-- Configurable required labels and assignee routing for pilot safety.
-- `codex.required_skills` preflight and repo/Codex/agent skill discovery.
-- Safer default Codex approval and sandbox policy, including workspace-rooted `workspaceWrite`
-  defaults.
-- Persistent `## Codex Workpad` comment as the durable issue handoff artifact.
-- Workpad environment stamp, plan, acceptance criteria, validation, proof packet, fresh-context
-  correctness review, guard result, notes, and confusions.
-- Required mirroring of issue-authored validation or test-plan sections into the workpad.
-- Mandatory PR feedback sweep before `Risk Review`.
-- Protected `In Progress` -> `Risk Review` readiness guard.
-- Protected `Risk Review` -> `Merging` fresh-review guard.
-- `Risk Review`, `Human Review`, `Merging`, `Rework`, and `Blocked` lane semantics.
-- Targeted rework policy with explicit full-reset conditions.
-- SDLC outcome JSONL events for session usage, readiness guard results, fresh-context review results,
-  risk-review routing, blocked/rework entry, and merge outcomes.
-- Optional HTTP/dashboard surface backed by orchestrator state.
+| Error code | Meaning | Failure class |
+|---|---|---|
+| `agent_not_found` | executable missing/unlaunchable | `configuration` |
+| `protocol_incompatible` | version/schema/capability mismatch | `configuration` |
+| `invalid_workspace_cwd` | workspace validation failed at launch | `policy` |
+| `auth_failed` | provider rejected credentials | `auth` |
+| `response_timeout` | startup/sync request exceeded read timeout | `agent_process` |
+| `turn_timeout` | turn exceeded `agent.turn_timeout_ms` | `agent_process` |
+| `stalled` | no events for `agent.stall_timeout_ms` | `agent_process` |
+| `process_exit` | subprocess died mid-turn | `agent_process` |
+| `turn_failed` / `turn_cancelled` | provider-reported turn failure | `agent_process` |
+| `turn_input_required` | input required and policy says fail | `task` |
+| `token_cap_exceeded` | `budget.per_attempt_tokens` reached | orchestrator-authored `budget_exhausted` ExecutionFailure |
+| `usd_cap_exceeded` | `budget.per_attempt_usd` reached | orchestrator-authored `budget_exhausted` ExecutionFailure |
+| `result_missing` / `result_invalid` | no valid role result after permitted salvage | `agent_process` |
+| `overloaded` | provider capacity / rate limited | `infrastructure` |
 
-Encore v2 adds these requirements over the fork baseline:
+### B.3 Codex App-Server Reference Profile
 
-- Durable single-writer control plane with transactional claims, leases, retries, attempt history,
-  outcomes, configuration snapshots, and side-effect receipts.
-- Explicit restart reconciliation across the database, tracker, workspaces, and process evidence.
-- Immutable per-attempt configuration and categorized hot/next-attempt/restart-required reloads.
-- Required structured run outcomes and factual fresh-thread handoffs.
-- Normalized failure taxonomy with bounded retries, no-progress limits, and compute escalations.
-- Versioned agent adapters with capability negotiation, schema compatibility, bounded buffering,
-  backpressure, and full process-tree cleanup.
-- Orchestrator-owned guarded mutations through narrow typed tools; raw GraphQL is opt-in
-  compatibility behavior.
-- Logical model/effort profiles, deterministic risk floors, phase-specific routing, escalation, and
-  sampled deep audits.
-- Mandatory integrative review, conditional systems/security and architecture/product specialists,
-  evidence-union findings, and conflict-only adjudication without majority voting.
-- Stronger secret isolation, prompt-injection boundaries, immutable revision pinning, and privileged
-  action auditing.
-- Executable conformance coverage for durability, routing quality, review behavior, adapter drift,
-  and recovery—not only happy-path orchestration.
-- Side-by-side implementation path where `elixir/` remains the reference implementation while
-  `typescript/` is developed toward conformance.
+- Launch: `bash -c "<agent.command>"` (default `codex app-server`), `cwd` = workspace path,
+  enforced write boundary (Section 6.1), scrubbed env (Section 15.2), stdio transport. Bound
+  protocol-line size (10 MB recommended) and a
+  bounded inbound queue with backpressure or fail-fast overflow.
+- The installed Codex version's generated schema
+  (`codex app-server generate-json-schema`) is the protocol source of truth; this specification
+  never restates protocol shapes. On conflict, Codex controls protocol; Symphony controls
+  orchestration.
+- Startup: initialize and negotiate capabilities per the targeted protocol **before** the Attempt
+  is charged; create or resume a thread with the workspace as the thread/turn `cwd`; supply the
+  documented approval/sandbox settings; advertise one `report_result` tool with the current
+  Attempt-role schema (Sections 3.3 and 3.17) plus conditional `submit_plan` and
+  other narrow typed tools; set the turn/session title to `<work-ref>: <title>` when supported.
+- Turns: first turn sends the rendered prompt; continuation turns within one Attempt reuse the
+  live thread and send only the Section 5.3 continuation guidance. `session_id =
+  <thread_id>-<turn_id>`.
+- Token payloads: prefer absolute thread totals (`thread/tokenUsage/updated`-style payloads);
+  ignore delta-style fields (`last_token_usage`) when computing totals.
+- Approvals: per documented deployment policy (Section 15.4); auto-approvals emit
+  `approval_auto_approved`.
+- Shutdown on any end state: cancel pending requests, close transport, terminate the process
+  group, confirm exit within a bounded grace period, then release the work-ref Claim.
