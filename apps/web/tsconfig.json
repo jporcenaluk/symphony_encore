@@ -3,6 +3,8 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["DOM", "DOM.Iterable", "ES2024"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "rootDir": ".",
     "types": ["vite/client", "vitest/globals"]
   },

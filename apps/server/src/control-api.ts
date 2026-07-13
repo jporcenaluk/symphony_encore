@@ -1,6 +1,5 @@
 import swagger from "@fastify/swagger";
 import { type TypeBoxTypeProvider, TypeBoxValidatorCompiler } from "@fastify/type-provider-typebox";
-import { Type } from "@sinclair/typebox";
 import {
   type ActiveServiceState,
   ConfigurationOverrideMutationResponseSchema,
@@ -185,8 +184,8 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
           200: ConfigurationOverrideMutationResponseSchema,
           401: ErrorEnvelopeSchema,
           403: ErrorEnvelopeSchema,
-          409: ConfigurationOverrideMutationResponseSchema,
-          422: Type.Union([ConfigurationOverrideMutationResponseSchema, ErrorEnvelopeSchema]),
+          409: ErrorEnvelopeSchema,
+          422: ErrorEnvelopeSchema,
           503: ErrorEnvelopeSchema,
         },
         security: [{ sessionCookie: [] }],
@@ -253,9 +252,21 @@ export async function createControlApi(dependencies: ControlApiDependencies) {
         reason: request.body.reason,
         ...(request.body.operation === "set" ? { value: request.body.value } : {}),
       });
-      const status =
-        result.result === "accepted" ? 200 : result.result === "validation_failed" ? 422 : 409;
-      return reply.code(status).send(result);
+      if (result.result === "accepted") return reply.code(200).send(result);
+      const message =
+        result.result === "version_conflict"
+          ? "The target version changed before this mutation was applied"
+          : result.result === "idempotency_conflict"
+            ? "The idempotency key was already used with a different request"
+            : "The configuration override candidate failed validation";
+      return reply.code(result.result === "validation_failed" ? 422 : 409).send({
+        error: {
+          code: result.result,
+          current_version: String(result.version),
+          details: { result: result.result, version: result.version },
+          message,
+        },
+      });
     },
   );
 

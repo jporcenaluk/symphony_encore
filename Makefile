@@ -32,7 +32,7 @@ test-integration:
 	@node scripts/not-implemented.ts test-integration
 
 test-e2e:
-	@node scripts/not-implemented.ts test-e2e
+	corepack pnpm test:e2e
 
 image:
 	@node scripts/not-implemented.ts image

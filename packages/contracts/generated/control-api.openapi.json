@@ -532,41 +532,43 @@
                   "additionalProperties": false,
                   "type": "object",
                   "required": [
-                    "result",
-                    "version"
+                    "error"
                   ],
                   "properties": {
-                    "result": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "enum": [
-                            "accepted"
+                    "error": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
+                          "anyOf": [
+                            {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
-                        {
-                          "type": "string",
-                          "enum": [
-                            "idempotency_conflict"
-                          ]
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
                         },
-                        {
-                          "type": "string",
-                          "enum": [
-                            "version_conflict"
-                          ]
-                        },
-                        {
-                          "type": "string",
-                          "enum": [
-                            "validation_failed"
-                          ]
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
                         }
-                      ]
-                    },
-                    "version": {
-                      "minimum": 0,
-                      "type": "integer"
+                      }
                     }
                   }
                 }
@@ -578,94 +580,48 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
                       "additionalProperties": false,
                       "type": "object",
                       "required": [
-                        "result",
-                        "version"
+                        "code",
+                        "current_version",
+                        "details",
+                        "message"
                       ],
                       "properties": {
-                        "result": {
+                        "code": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "current_version": {
                           "anyOf": [
                             {
-                              "type": "string",
-                              "enum": [
-                                "accepted"
-                              ]
+                              "minLength": 1,
+                              "type": "string"
                             },
                             {
-                              "type": "string",
-                              "enum": [
-                                "idempotency_conflict"
-                              ]
-                            },
-                            {
-                              "type": "string",
-                              "enum": [
-                                "version_conflict"
-                              ]
-                            },
-                            {
-                              "type": "string",
-                              "enum": [
-                                "validation_failed"
-                              ]
+                              "type": "null"
                             }
                           ]
                         },
-                        "version": {
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      }
-                    },
-                    {
-                      "additionalProperties": false,
-                      "type": "object",
-                      "required": [
-                        "error"
-                      ],
-                      "properties": {
-                        "error": {
-                          "additionalProperties": false,
+                        "details": {
                           "type": "object",
-                          "required": [
-                            "code",
-                            "current_version",
-                            "details",
-                            "message"
-                          ],
-                          "properties": {
-                            "code": {
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "current_version": {
-                              "anyOf": [
-                                {
-                                  "minLength": 1,
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "details": {
-                              "type": "object",
-                              "additionalProperties": {}
-                            },
-                            "message": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          }
+                          "additionalProperties": {}
+                        },
+                        "message": {
+                          "minLength": 1,
+                          "type": "string"
                         }
                       }
                     }
-                  ]
+                  }
                 }
               }
             }

@@ -17,11 +17,13 @@
     "openapi:generate": "node --import ./scripts/typescript-source-loader.mjs scripts/generate-openapi.ts",
     "policy": "node scripts/repository-policy.ts",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:coverage": "vitest run --coverage",
     "typecheck": "pnpm -r --if-present typecheck && tsc --noEmit -p tsconfig.scripts.json",
     "verify-fast": "pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@biomejs/biome": "2.5.3",
     "@types/node": "24.13.3",
     "@vitest/coverage-v8": "4.1.10",

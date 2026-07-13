@@ -242,7 +242,14 @@ describe("Control API", () => {
       headers: { authorization: "Session valid", "x-csrf-token": "csrf-valid" },
     });
     expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ result: "version_conflict", version: 7 });
+    expect(response.json()).toEqual({
+      error: {
+        code: "version_conflict",
+        current_version: "7",
+        details: { result: "version_conflict", version: 7 },
+        message: "The target version changed before this mutation was applied",
+      },
+    });
   });
 
   it("keeps configuration mutations disabled until recovery reaches ready", async () => {
