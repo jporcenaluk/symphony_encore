@@ -4,6 +4,8 @@ import {
   createCodexAppServerAdapter,
   createGhCliApiClient,
   createGitHubProjectsTransport,
+  createGitHubRepositoryHostingAdapter,
+  createGitHubRepositoryTransport,
   createGitHubTrackerAdapter,
   createGitHubWorkspaceRepositoryAdapter,
   createNodeGhCommandRunner,
@@ -190,7 +192,27 @@ export function createProductionScheduler(input: {
   const agent = input.agent ?? createLazyProductionAgent(values, input.environment);
   const repositoryAdapter =
     input.repositoryAdapter ?? createLazyGitHubWorkspaceAdapter(values, input.environment);
-  const repositoryHostingAdapter = input.repositoryHostingAdapter;
+  const repositoryName = `${stringValue(values, "tracker.repo_owner")}/${stringValue(
+    values,
+    "tracker.repo_name",
+  )}`;
+  const repositoryHostingAdapter =
+    input.repositoryHostingAdapter ??
+    createGitHubRepositoryHostingAdapter(
+      createGitHubRepositoryTransport({
+        api: createGhCliApiClient({
+          environment: input.environment,
+          runner: createNodeGhCommandRunner(),
+          timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+        }),
+        commandRunner: createNodeWorkspaceCommandRunner(),
+        configuredRequiredChecks: stringList(values, "review.required_checks"),
+        environment: input.environment,
+        repository: repositoryName,
+        timeoutMs: numberValue(values, "review.snapshot_timeout_ms"),
+      }),
+      { repository: repositoryName },
+    );
   const service = new SchedulerService({
     intervalMs: numberValue(values, "polling.interval_ms"),
     onError(error) {

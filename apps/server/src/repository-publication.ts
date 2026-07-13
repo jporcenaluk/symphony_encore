@@ -78,7 +78,7 @@ export async function executeRepositoryPublication(input: {
   );
   if (
     published.headSha !== input.target.targetSha ||
-    published.branch !== input.target.localBranch ||
+    !published.branch ||
     published.mutation.resultRevision !== input.target.targetSha
   ) {
     throw new Error("publication.published_branch_mismatch");

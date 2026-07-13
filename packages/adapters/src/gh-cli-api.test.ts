@@ -60,6 +60,38 @@ describe("gh CLI API transport", () => {
     });
   });
 
+  it("sends bounded REST requests and exposes complete-page metadata", async () => {
+    const command = runner({
+      stdout:
+        'HTTP/2.0 201 Created\r\nx-github-request-id: REQ_REST\r\nlink: <https://api.github.test/resource?page=2>; rel="next"\r\n\r\n{"number":42,"url":"https://api.github.test/pulls/42"}',
+    });
+    const client = createGhCliApiClient({
+      environment: { GH_TOKEN: "host-token", PATH: "/usr/bin" },
+      runner: command,
+      timeoutMs: 5_000,
+    });
+
+    await expect(
+      client.rest<{ number: number; url: string }>({
+        body: { base: "main", head: "symphony/issue-1" },
+        method: "POST",
+        path: "repos/owner/repo/pulls",
+      }),
+    ).resolves.toEqual({
+      data: { number: 42, url: "https://api.github.test/pulls/42" },
+      nextPageUrl: "https://api.github.test/resource?page=2",
+      requestId: "REQ_REST",
+    });
+    expect(command.run).toHaveBeenCalledWith({
+      arguments: ["api", "repos/owner/repo/pulls", "--include", "--method", "POST", "--input", "-"],
+      command: "gh",
+      environment: { GH_TOKEN: "host-token", PATH: "/usr/bin" },
+      maxOutputBytes: 2_000_000,
+      stdin: JSON.stringify({ base: "main", head: "symphony/issue-1" }),
+      timeoutMs: 5_000,
+    });
+  });
+
   it("classifies CLI authentication failures without returning provider prose", async () => {
     const client = createGhCliApiClient({
       environment: {},

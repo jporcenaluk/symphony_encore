@@ -22,6 +22,7 @@ afterEach(async () => {
 function api(data: unknown): GhCliApiClient {
   return {
     graphql: vi.fn(async () => ({ data, requestId: "REQ-1" })) as GhCliApiClient["graphql"],
+    rest: vi.fn() as GhCliApiClient["rest"],
   };
 }
 

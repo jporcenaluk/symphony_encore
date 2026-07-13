@@ -132,11 +132,22 @@ export interface GhApiResponse<T> {
   requestId: string;
 }
 
+export interface GhRestResponse<T> extends GhApiResponse<T> {
+  nextPageUrl: string | null;
+}
+
+export interface GhRestRequest {
+  body?: unknown;
+  method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
+  path: string;
+}
+
 export interface GhCliApiClient {
   graphql<T>(
     query: string,
     variables: Readonly<Record<string, unknown>>,
   ): Promise<GhApiResponse<T>>;
+  rest<T>(request: GhRestRequest): Promise<GhRestResponse<T>>;
 }
 
 export function createGhCliApiClient(options: {
@@ -170,6 +181,36 @@ export function createGhCliApiClient(options: {
       }
       return parseGraphqlResponse<T>(result.stdout);
     },
+    async rest<T>(request: GhRestRequest): Promise<GhRestResponse<T>> {
+      if (!request.path || request.path.startsWith("-") || /[\r\n]/u.test(request.path)) {
+        throw new GitHubApiError("github.transport_failed");
+      }
+      const arguments_ = ["api", request.path, "--include", "--method", request.method];
+      let stdin = "";
+      if (request.body !== undefined) {
+        arguments_.push("--input", "-");
+        stdin = JSON.stringify(request.body);
+      }
+      let result: Awaited<ReturnType<GhCommandRunner["run"]>>;
+      try {
+        result = await options.runner.run({
+          arguments: arguments_,
+          command: "gh",
+          environment,
+          maxOutputBytes: 2_000_000,
+          stdin,
+          timeoutMs: options.timeoutMs,
+        });
+      } catch {
+        throw new GitHubApiError("github.transport_failed");
+      }
+      if (result.exitCode !== 0) {
+        throw new GitHubApiError(
+          isAuthenticationFailure(result.stderr) ? "github.auth_failed" : "github.transport_failed",
+        );
+      }
+      return parseRestResponse<T>(result.stdout);
+    },
   };
 }
 
@@ -185,6 +226,41 @@ function allowlistedEnvironment(
 }
 
 function parseGraphqlResponse<T>(value: string): GhApiResponse<T> {
+  const response = parseIncludedResponse(value);
+  const payload = response.payload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new GitHubApiError("github.invalid_response");
+  }
+  if ("errors" in payload && Array.isArray(payload.errors) && payload.errors.length > 0) {
+    const forbidden = payload.errors.some(
+      (error) =>
+        typeof error === "object" &&
+        error !== null &&
+        "type" in error &&
+        (error.type === "FORBIDDEN" || error.type === "UNAUTHORIZED"),
+    );
+    throw new GitHubApiError(forbidden ? "github.auth_failed" : "github.graphql_error");
+  }
+  if (!("data" in payload) || payload.data === null || typeof payload.data !== "object") {
+    throw new GitHubApiError("github.invalid_response");
+  }
+  return { data: payload.data as T, requestId: response.requestId };
+}
+
+function parseRestResponse<T>(value: string): GhRestResponse<T> {
+  const response = parseIncludedResponse(value);
+  return {
+    data: response.payload as T,
+    nextPageUrl: nextLink(response.headers.get("link")),
+    requestId: response.requestId,
+  };
+}
+
+function parseIncludedResponse(value: string): {
+  headers: ReadonlyMap<string, string>;
+  payload: unknown;
+  requestId: string;
+} {
   const separator = /\r?\n\r?\n/u.exec(value);
   if (separator?.index === undefined) throw new GitHubApiError("github.invalid_response");
   const rawHeaders = value.slice(0, separator.index);
@@ -207,23 +283,16 @@ function parseGraphqlResponse<T>(value: string): GhApiResponse<T> {
   } catch {
     throw new GitHubApiError("github.invalid_response");
   }
-  if (typeof payload !== "object" || payload === null) {
-    throw new GitHubApiError("github.invalid_response");
+  return { headers, payload, requestId };
+}
+
+function nextLink(value: string | undefined): string | null {
+  if (!value) return null;
+  for (const part of value.split(",")) {
+    const match = /^\s*<([^>]+)>;\s*rel="([^"]+)"\s*$/u.exec(part);
+    if (match?.[2] === "next") return match[1] ?? null;
   }
-  if ("errors" in payload && Array.isArray(payload.errors) && payload.errors.length > 0) {
-    const forbidden = payload.errors.some(
-      (error) =>
-        typeof error === "object" &&
-        error !== null &&
-        "type" in error &&
-        (error.type === "FORBIDDEN" || error.type === "UNAUTHORIZED"),
-    );
-    throw new GitHubApiError(forbidden ? "github.auth_failed" : "github.graphql_error");
-  }
-  if (!("data" in payload) || payload.data === null || typeof payload.data !== "object") {
-    throw new GitHubApiError("github.invalid_response");
-  }
-  return { data: payload.data as T, requestId };
+  return null;
 }
 
 function isAuthenticationFailure(stderr: string): boolean {
