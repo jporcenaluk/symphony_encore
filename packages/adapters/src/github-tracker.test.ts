@@ -150,6 +150,23 @@ describe("GitHub Projects tracker adapter", () => {
     await expect(adapter.fetchCandidates(null)).rejects.toThrow("pagination.missing_cursor");
   });
 
+  it("normalizes the non-dispatchable Backlog lane for reconciliation", async () => {
+    const adapter = createGitHubTrackerAdapter(
+      transport({
+        fetchIssuesByStatesPage: vi.fn(async () => ({
+          cursor: null,
+          hasMore: false,
+          items: [{ ...item, status: "Backlog" }],
+        })),
+      }),
+      { acceptanceCriteriaHeading: "Acceptance Criteria" },
+    );
+
+    await expect(adapter.fetchIssuesByStates(["Backlog"], null)).resolves.toMatchObject({
+      items: [{ state: "Backlog" }],
+    });
+  });
+
   it("rechecks the provider revision before applying an exactly authorized lane mutation", async () => {
     const fetchIssueRevision = vi.fn(async () => "revision-4");
     const provider = transport({ fetchIssueRevision });

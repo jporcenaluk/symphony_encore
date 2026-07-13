@@ -132,11 +132,18 @@ export interface GhApiResponse<T> {
   requestId: string;
 }
 
+export interface GhCliApiClient {
+  graphql<T>(
+    query: string,
+    variables: Readonly<Record<string, unknown>>,
+  ): Promise<GhApiResponse<T>>;
+}
+
 export function createGhCliApiClient(options: {
   environment: Readonly<Record<string, string | undefined>>;
   runner: GhCommandRunner;
   timeoutMs: number;
-}) {
+}): GhCliApiClient {
   const environment = allowlistedEnvironment(options.environment);
   return {
     async graphql<T>(

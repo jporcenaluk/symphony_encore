@@ -13,7 +13,14 @@ import {
   type ProviderMutationAuthority,
 } from "./provider-authorization.js";
 
-const ISSUE_LANES = new Set<Issue["state"]>(["Todo", "In Progress", "Review", "Human", "Done"]);
+const ISSUE_LANES = new Set<Issue["state"]>([
+  "Backlog",
+  "Todo",
+  "In Progress",
+  "Review",
+  "Human",
+  "Done",
+]);
 
 export interface GitHubProjectItem {
   assigneeId: string | null;
