@@ -1,5 +1,11 @@
-import { isReviewResult, type ReviewResult } from "@symphony/contracts";
-import { type Kysely, sql } from "kysely";
+import {
+  isReviewRecord,
+  isReviewResult,
+  type ReviewRecord,
+  type ReviewResult,
+} from "@symphony/contracts";
+import { decideReviewSet } from "@symphony/domain";
+import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DatabaseSchema } from "./database.js";
 import { finishAttemptInTransaction } from "./finish-attempt.js";
@@ -24,6 +30,92 @@ export interface PendingIntegrativeReview {
   targetSha: string;
   verificationRecordId: string;
   workspacePath: string;
+}
+
+export interface PendingReviewCoordination {
+  changeClass: "standard" | "high_risk";
+  patchIdentity: string;
+  records: readonly {
+    decision: ReviewRecord["decision"];
+    findings: ReviewRecord["findings"];
+    id: string;
+    reviewer: string;
+    reviewerRole: ReviewRecord["reviewer_role"];
+    targetSha: string;
+  }[];
+  targetBaseSha: string;
+  targetSha: string;
+  verificationRecordId: string;
+}
+
+interface CoordinationTargetRow {
+  change_class: PendingReviewCoordination["changeClass"];
+  patch_identity: string;
+  target_base_sha: string;
+  target_sha: string;
+  verification_record_id: string;
+}
+
+interface CoordinationRecordRow {
+  attempt_id: string;
+  created_at: string;
+  decision: ReviewRecord["decision"];
+  findings_json: string;
+  id: string;
+  patch_identity: string;
+  reviewer_role: ReviewRecord["reviewer_role"];
+  routing_reasons_json: string;
+  target_base_sha: string;
+  target_sha: string;
+}
+
+export async function loadPendingReviewCoordination(
+  database: Kysely<DatabaseSchema> | Transaction<DatabaseSchema>,
+  workRef: WorkRef,
+): Promise<PendingReviewCoordination | null> {
+  const targets = await sql<CoordinationTargetRow>`
+    select attempt.change_class, record.patch_identity, record.target_base_sha,
+           record.target_sha, verification.id as verification_record_id
+    from claims claim
+    join review_records record
+      on record.work_ref_kind = claim.work_ref_kind
+      and record.work_ref_id = claim.work_ref_id
+      and record.reviewer_role = 'integrative_review'
+    join attempts attempt on attempt.id = record.attempt_id and attempt.status = 'closed'
+    join verification_records verification
+      on verification.work_ref_kind = claim.work_ref_kind
+      and verification.work_ref_id = claim.work_ref_id
+      and verification.target_revision = record.target_sha
+      and verification.result = 'passed'
+      and verification.exit_code = 0
+    where claim.work_ref_kind = ${workRef.kind}
+      and claim.work_ref_id = ${workRef.id}
+      and claim.mode = 'Ready'
+      and claim.reason = 'review_coordination_required'
+    order by attempt.attempt_number desc, verification.ended_at desc
+    limit 1
+  `.execute(database);
+  const target = targets.rows[0];
+  if (!target) return null;
+  const records = await sql<CoordinationRecordRow>`
+    select record.*, attempt.routing_reasons_json
+    from review_records record
+    join attempts attempt on attempt.id = record.attempt_id and attempt.status = 'closed'
+    where record.work_ref_kind = ${workRef.kind}
+      and record.work_ref_id = ${workRef.id}
+      and record.target_sha = ${target.target_sha}
+      and record.target_base_sha = ${target.target_base_sha}
+      and record.patch_identity = ${target.patch_identity}
+    order by attempt.attempt_number
+  `.execute(database);
+  return {
+    changeClass: target.change_class,
+    patchIdentity: target.patch_identity,
+    records: records.rows.map((row) => coordinationRecord(row, workRef)),
+    targetBaseSha: target.target_base_sha,
+    targetSha: target.target_sha,
+    verificationRecordId: target.verification_record_id,
+  };
 }
 
 export async function loadPendingIntegrativeReview(
@@ -147,6 +239,106 @@ export async function finishReviewAttempt(
   });
 }
 
+export async function commitOrdinaryReviewSet(
+  database: Kysely<DatabaseSchema>,
+  input: {
+    createdAt: string;
+    id: string;
+    requiredSpecialistNames: readonly string[];
+    workRef: WorkRef;
+  },
+): Promise<{ decision: ReviewRecord["decision"] }> {
+  validateReviewSetInput(input);
+  return database.transaction().execute(async (transaction) => {
+    const pending = await loadPendingReviewCoordination(transaction, input.workRef);
+    if (!pending) throw new Error("review_set.coordination_missing");
+    const requiredReviewers = ["integrative_review", ...input.requiredSpecialistNames];
+    for (const reviewer of requiredReviewers) {
+      const count = pending.records.filter((record) => record.reviewer === reviewer).length;
+      if (count === 0) throw new Error(`review_set.reviewer_missing:${reviewer}`);
+      if (count > 1) throw new Error(`review_set.reviewer_duplicate:${reviewer}`);
+    }
+    const decision = decideReviewSet({
+      guardDecisions: [],
+      records: pending.records.map((record) => ({
+        decision: record.decision,
+        findings: record.findings.map((finding) => ({
+          blocking: finding.blocking,
+          id: finding.id,
+        })),
+        reviewer: record.reviewer,
+        targetSha: record.targetSha,
+      })),
+      requiredReviewers,
+      targetSha: pending.targetSha,
+      verification: { passed: true, targetSha: pending.targetSha },
+    });
+    if (decision.decision === "blocked" && decision.reason.includes("required_reviewer")) {
+      throw new Error(`review_set.incomplete:${decision.reason}`);
+    }
+    const aggregateDecision = decision.decision;
+    const unresolved =
+      "unresolvedBlockingFindingIds" in decision
+        ? [...decision.unresolvedBlockingFindingIds]
+        : pending.records.flatMap((record) =>
+            record.decision === "blocked"
+              ? record.findings.filter((finding) => finding.blocking).map((finding) => finding.id)
+              : [],
+          );
+    const requiredRoles = [
+      "integrative_review",
+      ...(input.requiredSpecialistNames.length > 0 ? ["specialist_review"] : []),
+      ...(pending.records.some((record) => record.reviewerRole === "adjudication")
+        ? ["adjudication"]
+        : []),
+    ];
+    await sql`
+      insert into review_sets (
+        id, work_ref_kind, work_ref_id, target_sha, target_base_sha, patch_identity,
+        required_reviewer_roles_json, required_specialist_names_json,
+        verification_record_id, guard_decision_ids_json, review_record_ids_json,
+        unresolved_blocking_finding_ids_json, carried_from_review_set_id,
+        carry_forward_guard_decision_id, decision, created_at
+      ) values (
+        ${input.id}, ${input.workRef.kind}, ${input.workRef.id}, ${pending.targetSha},
+        ${pending.targetBaseSha}, ${pending.patchIdentity}, ${JSON.stringify(requiredRoles)},
+        ${JSON.stringify(input.requiredSpecialistNames)}, ${pending.verificationRecordId}, '[]',
+        ${JSON.stringify(pending.records.map((record) => record.id))},
+        ${JSON.stringify([...new Set(unresolved)])}, null, null, ${aggregateDecision},
+        ${input.createdAt}
+      )
+    `.execute(transaction);
+    const route = reviewSetRoute(aggregateDecision);
+    const claim = await sql`
+      update claims
+      set mode = ${route.mode}, reason = ${route.reason}, updated_at = ${input.createdAt},
+          expires_at = null, retry_due_at = null, blocker_predicate = null,
+          question_id = null, approval_request_id = null
+      where work_ref_kind = ${input.workRef.kind}
+        and work_ref_id = ${input.workRef.id}
+        and mode = 'Ready'
+        and reason = 'review_coordination_required'
+    `.execute(transaction);
+    if (claim.numAffectedRows !== 1n) throw new Error("review_set.claim_not_ready");
+    if (route.mode === "AwaitingHuman") {
+      await sql`
+        insert into parked_work (
+          work_ref_kind, work_ref_id, origin_stage, reason, blocker_predicate,
+          question_id, parked_at, last_checked_at, resolved_at
+        ) values (
+          ${input.workRef.kind}, ${input.workRef.id}, 'Review', ${route.reason}, null,
+          null, ${input.createdAt}, ${input.createdAt}, null
+        )
+        on conflict (work_ref_kind, work_ref_id) do update set
+          origin_stage = excluded.origin_stage, reason = excluded.reason,
+          blocker_predicate = null, question_id = null, parked_at = excluded.parked_at,
+          last_checked_at = excluded.last_checked_at, resolved_at = null
+      `.execute(transaction);
+    }
+    return { decision: aggregateDecision };
+  });
+}
+
 function validateFinishInput(input: FinishReviewAttemptInput): void {
   if (
     !input.attemptId ||
@@ -161,5 +353,70 @@ function validateFinishInput(input: FinishReviewAttemptInput): void {
   }
   if (input.result.target_sha !== input.targetSha) {
     throw new Error("review.target_sha_mismatch");
+  }
+}
+
+function coordinationRecord(row: CoordinationRecordRow, workRef: WorkRef) {
+  const findings: unknown = JSON.parse(row.findings_json);
+  const record = {
+    attempt_id: row.attempt_id,
+    created_at: row.created_at,
+    decision: row.decision,
+    findings,
+    id: row.id,
+    patch_identity: row.patch_identity,
+    reviewer_role: row.reviewer_role,
+    target_base_sha: row.target_base_sha,
+    target_sha: row.target_sha,
+    work_ref: workRef.kind === "issue" ? { issue_id: workRef.id } : { system_job_id: workRef.id },
+  };
+  if (!isReviewRecord(record)) throw new Error("review.persisted_record_invalid");
+  const reasons: unknown = JSON.parse(row.routing_reasons_json);
+  if (!Array.isArray(reasons) || reasons.some((reason) => typeof reason !== "string")) {
+    throw new Error("review.persisted_routing_reasons_invalid");
+  }
+  const reviewer =
+    row.reviewer_role === "specialist_review"
+      ? reasons.find((reason) => reason.startsWith("specialist.name:"))?.slice(16)
+      : row.reviewer_role;
+  if (!reviewer) throw new Error("review.persisted_specialist_identity_missing");
+  return {
+    decision: record.decision,
+    findings: record.findings,
+    id: record.id,
+    reviewer,
+    reviewerRole: record.reviewer_role,
+    targetSha: record.target_sha,
+  };
+}
+
+function validateReviewSetInput(input: {
+  createdAt: string;
+  id: string;
+  requiredSpecialistNames: readonly string[];
+}): void {
+  if (
+    !input.id ||
+    !Number.isFinite(Date.parse(input.createdAt)) ||
+    input.requiredSpecialistNames.some((name) => !name) ||
+    new Set(input.requiredSpecialistNames).size !== input.requiredSpecialistNames.length
+  ) {
+    throw new Error("review_set.input_invalid");
+  }
+}
+
+function reviewSetRoute(decision: ReviewRecord["decision"]): {
+  mode: "Ready" | "AwaitingHuman";
+  reason: string;
+} {
+  switch (decision) {
+    case "approve":
+      return { mode: "Ready", reason: "pull_request_required" };
+    case "needs_rework":
+      return { mode: "Ready", reason: "review_rework" };
+    case "needs_human":
+      return { mode: "AwaitingHuman", reason: "human_review" };
+    case "blocked":
+      return { mode: "AwaitingHuman", reason: "blocked" };
   }
 }

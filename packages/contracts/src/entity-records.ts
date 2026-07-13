@@ -287,6 +287,10 @@ export const ReviewRecordSchema = Type.Object(
 );
 export type ReviewRecord = Static<typeof ReviewRecordSchema>;
 
+export function isReviewRecord(value: unknown): value is ReviewRecord {
+  return Value.Check(ReviewRecordSchema, value);
+}
+
 export const GuardDecisionSchema = Type.Object(
   {
     created_at: NonEmptyString,

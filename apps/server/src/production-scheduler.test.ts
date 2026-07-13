@@ -392,6 +392,14 @@ describe("production reconciliation scheduler", () => {
         reason: "review_coordination_required",
       }),
     );
+    await vi.waitFor(() => expect(tracker.fetchCandidates).toHaveBeenCalledTimes(3));
+    await scheduler.trigger();
+    await vi.waitFor(() =>
+      expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+        mode: "Ready",
+        reason: "pull_request_required",
+      }),
+    );
     await scheduler.close();
 
     expect(logger.warn).not.toHaveBeenCalled();
@@ -410,7 +418,7 @@ describe("production reconciliation scheduler", () => {
     ]);
     expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
       mode: "Ready",
-      reason: "review_coordination_required",
+      reason: "pull_request_required",
     });
     expect(
       opened.sqlite.prepare("select target_revision, result from verification_records").get(),
@@ -424,6 +432,17 @@ describe("production reconciliation scheduler", () => {
     expect(
       opened.sqlite.prepare("select reviewer_role, target_sha, decision from review_records").get(),
     ).toEqual({ decision: "approve", reviewer_role: "integrative_review", target_sha: "abc1234" });
+    expect(
+      opened.sqlite
+        .prepare(
+          "select decision, required_reviewer_roles_json, review_record_ids_json from review_sets",
+        )
+        .get(),
+    ).toEqual({
+      decision: "approve",
+      required_reviewer_roles_json: '["integrative_review"]',
+      review_record_ids_json: expect.stringMatching(/^\[".+"\]$/u),
+    });
     expect(opened.sqlite.prepare("select status from plans").get()).toEqual({
       status: "validated",
     });

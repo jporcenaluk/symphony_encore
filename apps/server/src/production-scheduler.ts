@@ -30,6 +30,7 @@ import {
 } from "@symphony/orchestration";
 import {
   type ConfigurationSnapshot,
+  commitOrdinaryReviewSet,
   countRunningClaims,
   isWorkClaimed,
   loadClaimRecoveryState,
@@ -39,6 +40,7 @@ import {
   loadLatestValidatedPlan,
   loadPendingIndependentVerification,
   loadPendingIntegrativeReview,
+  loadPendingReviewCoordination,
   type OpenedDatabase,
   observeIssue,
 } from "@symphony/persistence";
@@ -173,7 +175,9 @@ export function createProductionScheduler(input: {
       );
       const recoveryState = await loadClaimRecoveryState(input.database, new Date().toISOString());
       for (const claim of recoveryState.ready) {
-        if (availableSlots < 1 || !safety.canDispatch()) break;
+        if (!safety.canDispatch()) break;
+        const isReviewCoordination = claim.reason === "review_coordination_required";
+        if (availableSlots < 1 && !isReviewCoordination) continue;
         const isPlanReview = claim.reason === "plan_review_required";
         const isIndependentVerification = claim.reason === "independent_verification_required";
         const isIntegrativeReview = claim.reason === "review_required";
@@ -184,6 +188,7 @@ export function createProductionScheduler(input: {
           (!isPlanReview &&
             !isIndependentVerification &&
             !isIntegrativeReview &&
+            !isReviewCoordination &&
             !isImplementationContinuation) ||
           !("issue_id" in claim.work_ref)
         ) {
@@ -193,6 +198,23 @@ export function createProductionScheduler(input: {
         try {
           const stored = await loadIssue(input.database, issueId);
           if (!stored) throw new Error(`scheduler.ready_issue_missing:${issueId}`);
+          if (isReviewCoordination) {
+            const pending = await loadPendingReviewCoordination(input.database, {
+              id: issueId,
+              kind: "issue",
+            });
+            if (!pending) throw new Error(`scheduler.review_coordination_missing:${issueId}`);
+            if (pending.changeClass === "high_risk") {
+              throw new Error(`scheduler.specialist_coordination_pending:${issueId}`);
+            }
+            await commitOrdinaryReviewSet(input.database, {
+              createdAt: new Date().toISOString(),
+              id: randomUUID(),
+              requiredSpecialistNames: [],
+              workRef: { id: issueId, kind: "issue" },
+            });
+            continue;
+          }
           if (isIndependentVerification) {
             const target = await loadPendingIndependentVerification(input.database, {
               id: issueId,

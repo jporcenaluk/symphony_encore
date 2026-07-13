@@ -6,7 +6,12 @@ import type { ReviewResult } from "@symphony/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { applyMigrations, type OpenedDatabase, openDatabase } from "./database.js";
-import { finishReviewAttempt, loadPendingIntegrativeReview } from "./review-store.js";
+import {
+  commitOrdinaryReviewSet,
+  finishReviewAttempt,
+  loadPendingIntegrativeReview,
+  loadPendingReviewCoordination,
+} from "./review-store.js";
 
 const directories: string[] = [];
 
@@ -88,6 +93,89 @@ describe("integrative review repository", () => {
     });
     expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
       count: 0,
+    });
+
+    await expect(
+      loadPendingReviewCoordination(opened.database, { id: "issue-1", kind: "issue" }),
+    ).resolves.toMatchObject({
+      changeClass: "standard",
+      records: [
+        {
+          decision: "needs_rework",
+          id: "review-record-1",
+          reviewer: "integrative_review",
+          targetSha: "def5678",
+        },
+      ],
+      targetBaseSha: "abc1234",
+      targetSha: "def5678",
+      verificationRecordId: "verification-1",
+    });
+    await commitOrdinaryReviewSet(opened.database, {
+      createdAt: "2026-07-13T10:06:00Z",
+      id: "review-set-1",
+      requiredSpecialistNames: [],
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+    expect(
+      opened.sqlite
+        .prepare(
+          `select decision, required_reviewer_roles_json, required_specialist_names_json,
+             review_record_ids_json, unresolved_blocking_finding_ids_json
+           from review_sets`,
+        )
+        .get(),
+    ).toEqual({
+      decision: "needs_rework",
+      required_reviewer_roles_json: '["integrative_review"]',
+      required_specialist_names_json: "[]",
+      review_record_ids_json: '["review-record-1"]',
+      unresolved_blocking_finding_ids_json: '["finding-1"]',
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "review_rework",
+    });
+    await opened.close();
+  });
+
+  it("does not create a partial ReviewSet when a required specialist is missing", async () => {
+    const opened = await fixture();
+    opened.sqlite
+      .prepare(
+        "update claims set mode = 'Running', expires_at = 't9', reason = 'integrative_review'",
+      )
+      .run();
+    await finishReviewAttempt(opened.database, {
+      attemptId: "review-1",
+      costUsd: null,
+      endedAt: "2026-07-13T10:05:00Z",
+      patchIdentity: "sha256:patch",
+      reservationId: "reservation-1",
+      result: { decision: "approve", evidence: [], findings: [], target_sha: "def5678" },
+      reviewRecordId: "review-record-1",
+      settledLedgers: [{ actualAmount: 0, id: "ledger-1" }],
+      targetBaseSha: "abc1234",
+      targetSha: "def5678",
+      terminalResultId: "review-result-1",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      workRef: { id: "issue-1", kind: "issue" },
+    });
+
+    await expect(
+      commitOrdinaryReviewSet(opened.database, {
+        createdAt: "2026-07-13T10:06:00Z",
+        id: "review-set-1",
+        requiredSpecialistNames: ["systems_security"],
+        workRef: { id: "issue-1", kind: "issue" },
+      }),
+    ).rejects.toThrow("review_set.reviewer_missing:systems_security");
+    expect(opened.sqlite.prepare("select count(*) as count from review_sets").get()).toEqual({
+      count: 0,
+    });
+    expect(opened.sqlite.prepare("select mode, reason from claims").get()).toEqual({
+      mode: "Ready",
+      reason: "review_coordination_required",
     });
     await opened.close();
   });
