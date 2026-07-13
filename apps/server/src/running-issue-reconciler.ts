@@ -1,4 +1,10 @@
-import { collectAllPages, type TrackerAdapter } from "@symphony/adapters";
+import {
+  collectAllPages,
+  removeTerminalWorkspace,
+  runLinuxHook,
+  type TrackerAdapter,
+  terminateLinuxProcessGroup,
+} from "@symphony/adapters";
 import type { Issue } from "@symphony/contracts";
 import {
   type PersistenceSafetyController,
@@ -6,6 +12,13 @@ import {
   type RunningReconciliationDecision,
   reconcileRunningAttempts,
 } from "@symphony/orchestration";
+import {
+  closeRunningAttemptForReconciliation,
+  listRunningIssueAttempts,
+  type OpenedDatabase,
+  observeIssue,
+  renewRunningClaim,
+} from "@symphony/persistence";
 
 const TRACKER_STATES = ["Backlog", "Todo", "In Progress", "Review", "Human", "Done"] as const;
 
@@ -51,7 +64,9 @@ export function createRunningIssueReconciler(input: RunningIssueReconcilerInput)
 
   return async (): Promise<void> => {
     const records = await input.loadRunning();
+    if (records.length === 0) return;
     const byAttempt = new Map(records.map((record) => [record.attemptId, record]));
+    let pendingObservations: Array<{ issue: Issue; providerRevision: string }> = [];
     await reconcileRunningAttempts(records, input.config, {
       async cleanupWorkspace(attempt) {
         await input.cleanupWorkspace(requireRecord(byAttempt, attempt.attemptId));
@@ -75,12 +90,10 @@ export function createRunningIssueReconciler(input: RunningIssueReconcilerInput)
             throw new Error(`tracker.running_issue_missing:${issueId}`);
           }
         }
-        for (const issueId of issueIds) {
-          await input.observeIssue(
-            issueById.get(issueId) as Issue,
-            revisionById.get(issueId) as string,
-          );
-        }
+        pendingObservations = issueIds.map((issueId) => ({
+          issue: issueById.get(issueId) as Issue,
+          providerRevision: revisionById.get(issueId) as string,
+        }));
         return new Map(
           issueIds.map((issueId) => {
             const issue = issueById.get(issueId) as Issue;
@@ -92,6 +105,12 @@ export function createRunningIssueReconciler(input: RunningIssueReconcilerInput)
         );
       },
       now: () => parseTime(input.now(), "scheduler.invalid_now"),
+      async persistObservations() {
+        for (const observation of pendingObservations) {
+          await input.observeIssue(observation.issue, observation.providerRevision);
+        }
+        pendingObservations = [];
+      },
       async renewLease(attempt) {
         const record = requireRecord(byAttempt, attempt.attemptId);
         const renewedAt = input.now();
@@ -108,6 +127,101 @@ export function createRunningIssueReconciler(input: RunningIssueReconcilerInput)
       },
     });
   };
+}
+
+export function createPersistentRunningIssueReconciler(input: {
+  allowlistedEnvironmentNames: readonly string[];
+  beforeRemoveCommand: string | null;
+  config: RunningIssueReconcilerInput["config"];
+  database: OpenedDatabase["database"];
+  hookTimeoutMs: number;
+  killWaitMs: number;
+  newId(): string;
+  now(): string;
+  onBeforeRemoveResult?: (result: Awaited<ReturnType<typeof runLinuxHook>>) => void;
+  onRunningLoaded?: (records: readonly RunningIssueRecord[]) => void;
+  safety: PersistenceSafetyController;
+  sourceEnvironment: Readonly<Record<string, string | undefined>>;
+  terminateWaitMs: number;
+  tracker: TrackerAdapter;
+  workspaceRoot: string;
+}) {
+  return createRunningIssueReconciler({
+    async cleanupWorkspace(record) {
+      await removeTerminalWorkspace({
+        assignedWorkspace: record.workspacePath,
+        ...(input.beforeRemoveCommand
+          ? {
+              async beforeRemove(workspace: string) {
+                const result = await runLinuxHook({
+                  allowlistedEnvironmentNames: input.allowlistedEnvironmentNames,
+                  command: input.beforeRemoveCommand as string,
+                  kind: "before_remove",
+                  sourceEnvironment: input.sourceEnvironment,
+                  timeoutMs: input.hookTimeoutMs,
+                  workspace,
+                  workspaceRoot: input.workspaceRoot,
+                });
+                input.onBeforeRemoveResult?.(result);
+              },
+            }
+          : {}),
+        workspaceRoot: input.workspaceRoot,
+      });
+    },
+    async closeAttempt(record, decision) {
+      const nextClaim =
+        decision.nextClaim === "release"
+          ? ({ mode: "Released", reason: decision.reason } as const)
+          : decision.nextClaim === "ready"
+            ? ({ mode: "Ready", reason: decision.reason } as const)
+            : ({
+                dueAt: requireRetryDueAt(decision),
+                mode: "RetryQueued",
+                reason: decision.reason,
+              } as const);
+      await closeRunningAttemptForReconciliation(input.database, {
+        attemptId: record.attemptId,
+        endedAt: input.now(),
+        failureClass: decision.failureClass,
+        nextClaim,
+        summary: decision.summary,
+        terminalResultId: decision.terminalResultId,
+      });
+    },
+    config: input.config,
+    async loadRunning() {
+      const records = await listRunningIssueAttempts(input.database);
+      input.onRunningLoaded?.(records);
+      return records;
+    },
+    newId: input.newId,
+    now: input.now,
+    observeIssue: (issue, providerRevision) =>
+      observeIssue(input.database, {
+        issue,
+        observedAt: input.now(),
+        providerRevision,
+        transitionId: input.newId(),
+      }),
+    renewLease: (record, renewedAt, newExpiresAt) =>
+      renewRunningClaim(input.database, {
+        expectedExpiresAt: record.expectedExpiresAt,
+        holder: record.holder,
+        newExpiresAt,
+        renewedAt,
+        workRef: { id: record.issueId, kind: "issue" },
+      }),
+    safety: input.safety,
+    stopWorker: (record) =>
+      terminateLinuxProcessGroup({
+        killWaitMs: input.killWaitMs,
+        processGroupId: record.processGroupId,
+        processId: record.processId,
+        terminateWaitMs: input.terminateWaitMs,
+      }),
+    tracker: input.tracker,
+  });
 }
 
 function closeDecision(
@@ -164,4 +278,9 @@ function parseTime(value: string, code: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) throw new Error(code);
   return parsed;
+}
+
+function requireRetryDueAt(decision: RunningIssueCloseDecision): string {
+  if (decision.retryDueAt === null) throw new Error("scheduler.retry_due_at_missing");
+  return decision.retryDueAt;
 }

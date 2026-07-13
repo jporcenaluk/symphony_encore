@@ -5,6 +5,7 @@ import { createRootLogger } from "@symphony/observability";
 import { loadWorkflowFile } from "@symphony/orchestration";
 
 import { buildBootstrapCandidate } from "./bootstrap-candidate.js";
+import { createProductionScheduler } from "./production-scheduler.js";
 import { parseRuntimeOptions } from "./runtime-options.js";
 import { startProductionService } from "./service-runtime.js";
 
@@ -50,6 +51,14 @@ export async function runProductionMain() {
       ...(bootstrap ? { bootstrap } : {}),
       logger,
       options,
+      schedulerFactory: ({ database, serviceRunId, snapshot }) =>
+        createProductionScheduler({
+          database,
+          environment: process.env,
+          logger,
+          serviceRunId,
+          snapshot,
+        }),
       startupConfiguration: {
         environment: process.env,
         home: homedir(),

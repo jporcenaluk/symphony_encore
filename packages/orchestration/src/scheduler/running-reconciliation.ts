@@ -46,6 +46,9 @@ export interface RunningReconciliationPorts {
     issueIds: readonly string[],
   ): Promise<ReadonlyMap<string, RunningIssueObservation>>;
   now(): number;
+  persistObservations?(
+    observations: ReadonlyMap<string, RunningIssueObservation>,
+  ): Promise<unknown>;
   renewLease(attempt: RunningAttemptSnapshot): Promise<unknown>;
   safety: PersistenceSafetyController;
   stopWorker(attempt: RunningAttemptSnapshot, reason: string): Promise<unknown>;
@@ -127,6 +130,16 @@ export async function reconcileRunningAttempts(
     observations = await ports.fetchObservations(attempts.map((attempt) => attempt.issueId));
   } catch {
     // Tracker state refresh is advisory: a failure must not terminate a healthy worker.
+  }
+
+  if (observations !== null && ports.persistObservations) {
+    try {
+      await ports.persistObservations(observations);
+    } catch (error) {
+      const failure = asError(error);
+      await ports.safety.recordFailure(failure);
+      throw failure;
+    }
   }
 
   const now = ports.now();

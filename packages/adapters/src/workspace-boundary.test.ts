@@ -8,6 +8,7 @@ import {
   isSensitiveEnvironmentName,
   issueWorkspacePath,
   reconcileWorkspaceOwnership,
+  removeTerminalWorkspace,
   resolveAssignedWorkspace,
   sanitizeWorkspaceIdentifier,
   systemJobWorkspacePath,
@@ -161,6 +162,29 @@ describe("workspace path boundary", () => {
     await expect(resolveAssignedWorkspace(root, path.join(root, "issue-1"))).rejects.toThrow(
       "workspace.outside_root",
     );
+  });
+
+  it("runs before_remove best effort and removes only a canonical descendant", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-workspace-"));
+    directories.push(parent);
+    const root = path.join(parent, "root");
+    const assigned = path.join(root, "issue-1");
+    await mkdir(assigned, { recursive: true });
+    await writeFile(path.join(assigned, "artifact.txt"), "terminal evidence already persisted");
+
+    await expect(
+      removeTerminalWorkspace({
+        assignedWorkspace: assigned,
+        beforeRemove: async () => {
+          throw new Error("hook.failed");
+        },
+        workspaceRoot: root,
+      }),
+    ).resolves.toMatchObject({
+      hookError: expect.objectContaining({ message: "hook.failed" }),
+      removed: await resolve(assigned),
+    });
+    await expect(access(assigned)).rejects.toThrow();
   });
 });
 

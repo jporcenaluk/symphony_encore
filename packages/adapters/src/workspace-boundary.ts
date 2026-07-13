@@ -1,4 +1,4 @@
-import { mkdir, readdir, realpath, rename } from "node:fs/promises";
+import { mkdir, readdir, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 const SENSITIVE_ENVIRONMENT_NAME =
@@ -41,6 +41,27 @@ export async function resolveAssignedWorkspace(
     throw new Error("workspace.outside_root");
   }
   return resolvedWorkspace;
+}
+
+export async function removeTerminalWorkspace(input: {
+  assignedWorkspace: string;
+  beforeRemove?: (resolvedWorkspace: string) => Promise<unknown>;
+  workspaceRoot: string;
+}): Promise<{ hookError: Error | null; removed: string }> {
+  const resolvedWorkspace = await resolveAssignedWorkspace(
+    input.workspaceRoot,
+    input.assignedWorkspace,
+  );
+  let hookError: Error | null = null;
+  if (input.beforeRemove) {
+    try {
+      await input.beforeRemove(resolvedWorkspace);
+    } catch (error) {
+      hookError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  await rm(resolvedWorkspace, { recursive: true });
+  return { hookError, removed: resolvedWorkspace };
 }
 
 export interface WorkspaceOwnership {

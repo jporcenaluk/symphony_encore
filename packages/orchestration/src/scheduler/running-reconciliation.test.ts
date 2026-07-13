@@ -195,4 +195,29 @@ describe("running reconciliation execution", () => {
     expect(stopAll).toHaveBeenCalledOnce();
     expect(safety.canDispatch()).toBe(false);
   });
+
+  it("latches observation persistence failure instead of treating it as tracker unavailability", async () => {
+    const stopAll = vi.fn(async () => undefined);
+    const renewLease = vi.fn();
+    const safety = new PersistenceSafetyController(stopAll);
+
+    await expect(
+      reconcileRunningAttempts([attempt], config, {
+        cleanupWorkspace: vi.fn(),
+        commitStop: vi.fn(),
+        fetchObservations: async () => new Map([[attempt.issueId, observation]]),
+        now: () => Date.parse("2026-07-13T10:01:00.000Z"),
+        persistObservations: async () => {
+          throw new Error("sqlite.disk_full");
+        },
+        renewLease,
+        safety,
+        stopWorker: vi.fn(),
+      }),
+    ).rejects.toThrow("sqlite.disk_full");
+
+    expect(stopAll).toHaveBeenCalledOnce();
+    expect(renewLease).not.toHaveBeenCalled();
+    expect(safety.canDispatch()).toBe(false);
+  });
 });
