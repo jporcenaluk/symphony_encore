@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildScrubbedWorkerEnvironment,
   isSensitiveEnvironmentName,
+  issueWorkspacePath,
+  reconcileWorkspaceOwnership,
   resolveAssignedWorkspace,
   sanitizeWorkspaceIdentifier,
   systemJobWorkspacePath,
@@ -22,9 +24,116 @@ afterEach(async () => {
 describe("workspace path boundary", () => {
   it("sanitizes issue and SystemJob identifiers deterministically", () => {
     expect(sanitizeWorkspaceIdentifier("owner/repo#42: auth fix")).toBe("owner_repo_42__auth_fix");
+    expect(issueWorkspacePath("/work", "owner/repo#42")).toBe(path.resolve("/work/owner_repo_42"));
     expect(systemJobWorkspacePath("/work", "repair", "job/42")).toBe(
       path.resolve("/work/_system/repair-job_42"),
     );
+  });
+
+  it("keeps claimed workspaces and quarantines unowned issue and SystemJob workspaces", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-workspace-"));
+    directories.push(parent);
+    const root = path.join(parent, "root");
+    const ownedIssue = path.join(root, "issue-1");
+    const staleIssue = path.join(root, "issue-2");
+    const ownedJob = path.join(root, "_system", "repair-job-1");
+    const staleJob = path.join(root, "_system", "synthesis-job-2");
+    await Promise.all(
+      [ownedIssue, staleIssue, ownedJob, staleJob].map((directory) =>
+        mkdir(directory, { recursive: true }),
+      ),
+    );
+    await writeFile(path.join(staleIssue, "evidence.txt"), "preserve me");
+
+    const result = await reconcileWorkspaceOwnership({
+      owned: [
+        { workRef: "issue:1", workspacePath: ownedIssue },
+        { workRef: "system_job:1", workspacePath: ownedJob },
+      ],
+      quarantineId: "startup-1",
+      workspaceRoot: root,
+    });
+
+    expect(result.owned).toEqual([await resolve(ownedIssue), await resolve(ownedJob)]);
+    expect(result.quarantined).toEqual([
+      {
+        from: path.resolve(staleIssue),
+        to: path.join(root, ".quarantine", "startup-1", "issue-2"),
+      },
+      {
+        from: path.resolve(staleJob),
+        to: path.join(root, ".quarantine", "startup-1", "_system", "synthesis-job-2"),
+      },
+    ]);
+    await expect(access(ownedIssue)).resolves.toBeUndefined();
+    await expect(access(ownedJob)).resolves.toBeUndefined();
+    await expect(access(staleIssue)).rejects.toThrow();
+    await expect(access(staleJob)).rejects.toThrow();
+    expect(await readdir(path.join(root, ".quarantine", "startup-1", "issue-2"))).toContain(
+      "evidence.txt",
+    );
+  });
+
+  it("rejects cross-work ownership of one canonical workspace", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-workspace-"));
+    directories.push(parent);
+    const root = path.join(parent, "root");
+    const workspace = path.join(root, "issue-1");
+    await mkdir(workspace, { recursive: true });
+
+    await expect(
+      reconcileWorkspaceOwnership({
+        owned: [
+          { workRef: "issue:1", workspacePath: workspace },
+          { workRef: "issue:2", workspacePath: workspace },
+        ],
+        quarantineId: "startup-1",
+        workspaceRoot: root,
+      }),
+    ).rejects.toThrow("workspace.cross_work_ownership");
+    await expect(access(workspace)).resolves.toBeUndefined();
+  });
+
+  it("rejects claimed paths outside the issue and SystemJob layout before mutation", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-workspace-"));
+    directories.push(parent);
+    const root = path.join(parent, "root");
+    const nested = path.join(root, "container", "issue-1");
+    await mkdir(nested, { recursive: true });
+
+    await expect(
+      reconcileWorkspaceOwnership({
+        owned: [{ workRef: "issue:1", workspacePath: nested }],
+        quarantineId: "startup-1",
+        workspaceRoot: root,
+      }),
+    ).rejects.toThrow("workspace.invalid_layout");
+    await expect(access(nested)).resolves.toBeUndefined();
+  });
+
+  it("quarantines an unclaimed symlink alias to an owned workspace", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "symphony-workspace-"));
+    directories.push(parent);
+    const root = path.join(parent, "root");
+    const workspace = path.join(root, "issue-1");
+    const alias = path.join(root, "alias");
+    await mkdir(workspace, { recursive: true });
+    await symlink(workspace, alias);
+
+    const result = await reconcileWorkspaceOwnership({
+      owned: [{ workRef: "issue:1", workspacePath: workspace }],
+      quarantineId: "startup-1",
+      workspaceRoot: root,
+    });
+
+    expect(result.quarantined).toEqual([
+      {
+        from: alias,
+        to: path.join(root, ".quarantine", "startup-1", "alias"),
+      },
+    ]);
+    await expect(access(workspace)).resolves.toBeUndefined();
+    await expect(access(alias)).rejects.toThrow();
   });
 
   it("accepts a real descendant and rejects a sibling-prefix path", async () => {

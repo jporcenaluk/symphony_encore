@@ -24,14 +24,14 @@ command. A green but narrower test does not complete a broader item.
 | S03 | Complete durable domain model | In progress | Strict schemas and constrained SQLite tables cover every Section 3 record; repository mappers beyond normalized issues remain pending |
 | S04 | Change classification and proportional process | In progress | Pure staged/upward policy passes; orchestration gates pending |
 | S05 | Issue and SystemJob lifecycle | In progress | Lane policy and atomic dispatch/closure pass; full routing pending |
-| S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, sandbox, process timeout, non-login hook semantics, independent verification, durable evidence, and exact passing lookup pass; macOS/full lifecycle pending |
+| S06 | Workspace isolation, hooks, and independent verification | In progress | Linux/WSL containment, sandbox, process timeout, non-login hooks, independent durable verification, stable claim ownership, and startup quarantine pass; macOS/population/cleanup pending |
 | S07 | Token and USD budget enforcement | In progress | Replay, estimate, reservation, and settlement foundations pass |
 | S08 | Compute routing | In progress | Deterministic role/class defaults, ordered risk floors, upward-only heuristics, and escalation caps pass; attempt pinning pending |
 | S09 | Review coordination and immutable ReviewSets | In progress | Role contracts and ordinary ReviewSet policy pass |
 | S10 | Git, pull requests, and serialized merge queues | In progress | Authorized intent/receipt durability passes; repository operations and merge queues pending |
 | S11 | Human questions, approvals, notifications, and controls | Not started | API capability and durable routing tests |
 | S12 | Lessons, synthesis, and saturation | Not started | Learning policy and SystemJob integration tests |
-| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, and atomic interrupted-attempt closure with exact ownership evidence pass; process termination adapter pending |
+| S13 | Failure classification, retry, and restart recovery | In progress | Failure routing, intent reconstruction, ServiceRun sequencing, interrupted-attempt closure, and fail-closed process/workspace recovery gating pass; process termination adapter pending |
 | S14 | Durable logs, events, quality metrics, and retention | Not started | Query, restart, retention, and tombstone tests |
 | S15 | Security, authentication, bootstrap, and sandboxing | In progress | Mutation envelope, bootstrap-key boundary, credential scrubbing, and Linux/WSL Bubblewrap isolation pass; auth/bootstrap/macOS posture pending |
 | S16 | GitHub tracker and repository-hosting adapters | In progress | Provider-independent contracts, complete-page enforcement, and normalized PR snapshot schema pass; GitHub implementation pending |
@@ -142,3 +142,5 @@ The test IDs below correspond in order to the bullets in `SPEC.md` Section 19.2.
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Sandboxed timeout and process-group termination |
 | 2026-07-13 | working tree | `make verify-fast` | 176 tests; lint, generated-contract drift, and typecheck passed | Non-login hooks, independent verifier, durable bounded evidence, exact guard lookup |
 | 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Non-login hooks, independent verifier, durable bounded evidence, exact guard lookup |
+| 2026-07-13 | working tree | `make verify-fast` | 185 tests; lint, generated-contract drift, and typecheck passed | Stable claimed workspace ownership, quarantine, and startup readiness gate |
+| 2026-07-13 | working tree | `make build` | All packages and production web bundle built | Stable claimed workspace ownership, quarantine, and startup readiness gate |

@@ -1,4 +1,4 @@
-import { mkdir, realpath } from "node:fs/promises";
+import { mkdir, readdir, realpath, rename } from "node:fs/promises";
 import path from "node:path";
 
 const SENSITIVE_ENVIRONMENT_NAME =
@@ -11,6 +11,10 @@ export function isSensitiveEnvironmentName(name: string): boolean {
 export function sanitizeWorkspaceIdentifier(identifier: string): string {
   const sanitized = identifier.replace(/[^A-Za-z0-9._-]/gu, "_");
   return sanitized.length > 0 ? sanitized : "_";
+}
+
+export function issueWorkspacePath(workspaceRoot: string, identifier: string): string {
+  return path.resolve(workspaceRoot, sanitizeWorkspaceIdentifier(identifier));
 }
 
 export function systemJobWorkspacePath(
@@ -37,6 +41,102 @@ export async function resolveAssignedWorkspace(
     throw new Error("workspace.outside_root");
   }
   return resolvedWorkspace;
+}
+
+export interface WorkspaceOwnership {
+  workRef: string;
+  workspacePath: string;
+}
+
+export interface WorkspaceReconciliationResult {
+  owned: string[];
+  quarantined: { from: string; to: string }[];
+}
+
+export async function reconcileWorkspaceOwnership(input: {
+  owned: readonly WorkspaceOwnership[];
+  quarantineId: string;
+  workspaceRoot: string;
+}): Promise<WorkspaceReconciliationResult> {
+  await mkdir(input.workspaceRoot, { recursive: true });
+  const lexicalRoot = path.resolve(input.workspaceRoot);
+  const workspaceRoot = await realpath(input.workspaceRoot);
+  const ownership = new Map<string, string>();
+  const ownedCandidates = new Set<string>();
+  const owned: string[] = [];
+
+  for (const record of input.owned) {
+    const relative = path.relative(lexicalRoot, path.resolve(record.workspacePath));
+    if (!isWorkspaceRelativePath(relative)) throw new Error("workspace.invalid_layout");
+    const resolved = await resolveAssignedWorkspace(workspaceRoot, record.workspacePath);
+    const currentOwner = ownership.get(resolved);
+    if (currentOwner !== undefined && currentOwner !== record.workRef) {
+      throw new Error("workspace.cross_work_ownership");
+    }
+    ownership.set(resolved, record.workRef);
+    ownedCandidates.add(path.join(workspaceRoot, relative));
+    ownedCandidates.add(resolved);
+    owned.push(resolved);
+  }
+
+  const candidates = await listWorkspaceCandidates(workspaceRoot);
+  const quarantineRoot = path.join(
+    workspaceRoot,
+    ".quarantine",
+    sanitizeWorkspaceIdentifier(input.quarantineId),
+  );
+  const quarantined: { from: string; to: string }[] = [];
+
+  for (const candidate of candidates) {
+    let candidateIdentity = candidate;
+    try {
+      candidateIdentity = await realpath(candidate);
+    } catch {
+      // A broken or racing symlink is still unowned and must be moved by its lexical path.
+    }
+    if (ownedCandidates.has(candidate) && ownership.has(candidateIdentity)) continue;
+
+    const relative = path.relative(workspaceRoot, candidate);
+    const destination = path.join(quarantineRoot, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await rename(candidate, destination);
+    quarantined.push({ from: candidate, to: destination });
+  }
+
+  return { owned, quarantined };
+}
+
+function isWorkspaceRelativePath(relative: string): boolean {
+  const parts = relative.split(path.sep);
+  if (parts.length === 1) {
+    return parts[0] !== "" && parts[0] !== ".quarantine" && parts[0] !== "_system";
+  }
+  return parts.length === 2 && parts[0] === "_system" && parts[1] !== "";
+}
+
+async function listWorkspaceCandidates(workspaceRoot: string): Promise<string[]> {
+  const entries = await readdir(workspaceRoot, { withFileTypes: true });
+  const direct = entries
+    .filter(
+      (entry) =>
+        entry.name !== ".quarantine" &&
+        entry.name !== "_system" &&
+        (entry.isDirectory() || entry.isSymbolicLink()),
+    )
+    .map((entry) => path.join(workspaceRoot, entry.name))
+    .sort();
+  const systemEntry = entries.find((entry) => entry.name === "_system");
+  if (systemEntry === undefined) return direct;
+  if (!systemEntry.isDirectory() || systemEntry.isSymbolicLink()) {
+    return [...direct, path.join(workspaceRoot, systemEntry.name)];
+  }
+
+  const systemRoot = path.join(workspaceRoot, "_system");
+  const system = (await readdir(systemRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => path.join(systemRoot, entry.name))
+    .sort();
+  return [...direct, ...system];
 }
 
 export async function prepareWorkerStateDirectories(workspace: string): Promise<void> {
