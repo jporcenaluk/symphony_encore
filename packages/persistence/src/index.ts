@@ -14,6 +14,7 @@ export * from "./finish-attempt.js";
 export * from "./interrupted-attempt-recovery.js";
 export * from "./issue-store.js";
 export * from "./lane-mutation-receipt.js";
+export * from "./live-session-store.js";
 export * from "./operator-auth-store.js";
 export * from "./service-run-store.js";
 export * from "./side-effect-store.js";

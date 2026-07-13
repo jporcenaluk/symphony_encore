@@ -357,6 +357,10 @@ export const LiveSessionSchema = Type.Object(
 );
 export type LiveSession = Static<typeof LiveSessionSchema>;
 
+export function isLiveSession(value: unknown): value is LiveSession {
+  return Value.Check(LiveSessionSchema, value);
+}
+
 export const RetryEntrySchema = Type.Object(
   {
     attempt_id: NonEmptyString,
