@@ -81,10 +81,10 @@ async function waitForProcessGroupExit(processGroupId: number, waitMs: number): 
 }
 
 async function hasLiveProcessGroupMember(processGroupId: number): Promise<boolean> {
-  const entries = await readdir("/proc", { withFileTypes: true });
+  const entries = await readdir("/proc");
   for (const entry of entries) {
-    if (!entry.isDirectory() || !/^[0-9]+$/u.test(entry.name)) continue;
-    const stat = await readProcessStat(Number(entry.name));
+    if (!/^[0-9]+$/u.test(entry)) continue;
+    const stat = await readProcessStat(Number(entry));
     if (stat?.processGroupId === processGroupId && stat.state !== "Z") return true;
   }
   return false;
