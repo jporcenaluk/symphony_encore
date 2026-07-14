@@ -201,7 +201,15 @@ function runGit(git: VerifiedGit, cwd: string, args: readonly string[]): GitProb
     timeout: 10_000,
     windowsHide: true,
   });
-  if (result.error !== undefined || result.status !== 0 || typeof result.stdout !== "string") {
+  const cleanupRaceOnly =
+    (result.error as NodeJS.ErrnoException | undefined)?.code === "EPERM" &&
+    result.status === 0 &&
+    result.signal === null;
+  if (
+    (result.error !== undefined && !cleanupRaceOnly) ||
+    result.status !== 0 ||
+    typeof result.stdout !== "string"
+  ) {
     return { diagnostic: "evidence.git.command_failed", ok: false };
   }
   if (typeof result.stderr === "string" && result.stderr.length > 0) {

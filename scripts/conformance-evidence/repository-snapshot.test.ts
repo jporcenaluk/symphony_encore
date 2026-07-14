@@ -137,7 +137,13 @@ describe("repository snapshot validation", () => {
               : command === "show -s --format=%ct HEAD"
                 ? "1767225600\n"
                 : `${tree}\n`;
-      return { status: 0, stderr: "", stdout } as SpawnSyncReturns<string>;
+      return {
+        error: Object.assign(new Error("cleanup race"), { code: "EPERM" }),
+        signal: null,
+        status: 0,
+        stderr: "",
+        stdout,
+      } as unknown as SpawnSyncReturns<string>;
     }) as typeof spawnSync);
 
     const result = await captureRepositorySnapshot();
@@ -172,5 +178,41 @@ describe("repository snapshot validation", () => {
       expect(options?.env).not.toHaveProperty("PATH");
       expect(options?.env).not.toHaveProperty("GIT_DIR");
     }
+  });
+
+  it.each([
+    ["EPERM without an exit status", "EPERM", null, null],
+    ["EPERM with a nonzero exit status", "EPERM", 1, null],
+    ["EPERM terminated by a signal", "EPERM", 0, "SIGTERM"],
+    ["a different error code", "EACCES", 0, null],
+  ])("rejects %s", async (_label, code, status, signal) => {
+    spawnSyncMock.mockImplementation(((_file: string, args?: readonly string[]) => {
+      if (!Array.isArray(args)) {
+        return { status: 1, stderr: "", stdout: "" } as SpawnSyncReturns<string>;
+      }
+      const command = args.slice(6).join(" ");
+      const stdout =
+        command === "rev-parse HEAD"
+          ? `${revision}\n`
+          : command === "rev-parse --show-toplevel"
+            ? `${process.cwd()}\n`
+            : command === "status --porcelain=v1 --untracked-files=all"
+              ? ""
+              : command === "show -s --format=%ct HEAD"
+                ? "1767225600\n"
+                : `${tree}\n`;
+      return {
+        error: Object.assign(new Error("spawn failure"), { code }),
+        signal,
+        status,
+        stderr: "",
+        stdout,
+      } as unknown as SpawnSyncReturns<string>;
+    }) as typeof spawnSync);
+
+    await expect(captureRepositorySnapshot()).resolves.toMatchObject({
+      diagnostics: ["evidence.repository.status_failed", "evidence.git.command_failed"],
+      revision: null,
+    });
   });
 });
