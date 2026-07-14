@@ -89,4 +89,14 @@ describe("generated OpenAPI contract", () => {
       renderControlApiClientFromDocument(document),
     );
   });
+
+  it("never interpolates operation-derived values into generated TypeScript", async () => {
+    const source = await readFile(
+      path.join(process.cwd(), "scripts", "generate-openapi.ts"),
+      "utf8",
+    );
+
+    expect(source).not.toMatch(/\$\{operation\./u);
+    expect(source).not.toMatch(/JSON\.stringify\(operation\./u);
+  });
 });

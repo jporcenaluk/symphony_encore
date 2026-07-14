@@ -153,45 +153,9 @@ export function renderControlApiClientFromDocument(document: OpenApiDocument): s
   // The document is an untrusted contract input: validate it above, then render
   // exclusively from this repository-owned registry so no schema value can
   // participate in generated TypeScript source construction.
-  const operations = Object.values(OPERATIONS);
-  const methods = operations
-    .map((operation) => {
-      if (operation.operationId === "listEvents") {
-        return `    listEvents: (input = {}) => {
-      const query = new URLSearchParams();
-      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
-      if (input.limit !== undefined) query.set("limit", String(input.limit));
-      const suffix = query.size === 0 ? "" : \`?\${query}\`;
-      return request<EventRecordPage>(\`${operation.path}\${suffix}\`, ${JSON.stringify(operation.method)});
-    },`;
-      }
-      if (operation.operationId === "streamEvents") {
-        return `    streamEvents: (input = {}) => {
-      const suffix = input.afterCursor === undefined ? "" : \`?after_cursor=\${input.afterCursor}\`;
-      return {
-        url: \`\${normalizedBaseUrl}${operation.path}\${suffix}\`,
-        withCredentials: true as const,
-      };
-    },`;
-      }
-      if (operation.operationId === "login") {
-        return `    login: (input) => request<LoginResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
-      }
-      if (operation.operationId === "completeBootstrap") {
-        return `    completeBootstrap: (input) => request<BootstrapResponse>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}, input),`;
-      }
-      if (operation.operationId === "mutateConfigurationOverride") {
-        return `    mutateConfigurationOverride: (key, input, csrfToken) =>
-      request<ConfigurationOverrideMutationResponse>(
-        \`/api/v1/config/overrides/\${encodeURIComponent(key)}\`,
-        ${JSON.stringify(operation.method)},
-        input,
-        csrfToken,
-      ),`;
-      }
-      return `    ${operation.operationId}: () => request<${operation.returnType}>(${JSON.stringify(operation.path)}, ${JSON.stringify(operation.method)}),`;
-    })
-    .join("\n");
+  const operationIds = Object.keys(OPERATIONS);
+  const methods = operationIds.map(renderClientMethod).join("\n");
+  const methodSignatures = operationIds.map(renderClientMethodSignature).join("\n");
   return `/**
  * Generated from the registered Control API OpenAPI document.
  * Do not edit by hand; run \`pnpm openapi:generate\`.
@@ -223,25 +187,7 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-${operations
-  .map((operation) =>
-    operation.operationId === "listEvents"
-      ? "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;"
-      : operation.operationId === "streamEvents"
-        ? "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;"
-        : operation.operationId === "login"
-          ? "  login(input: LoginRequest): Promise<LoginResponse>;"
-          : operation.operationId === "completeBootstrap"
-            ? "  completeBootstrap(input: BootstrapRequest): Promise<BootstrapResponse>;"
-            : operation.operationId === "mutateConfigurationOverride"
-              ? `  mutateConfigurationOverride(
-    key: string,
-    input: ConfigurationOverrideMutation,
-    csrfToken: string,
-  ): Promise<ConfigurationOverrideMutationResponse>;`
-              : `  ${operation.operationId}(): Promise<${operation.returnType}>;`,
-  )
-  .join("\n")}
+${methodSignatures}
 }
 
 export interface ControlEventStreamRequest {
@@ -279,6 +225,78 @@ ${methods}
   };
 }
 `;
+}
+
+function renderClientMethod(operationId: string): string {
+  switch (operationId) {
+    case "listEvents":
+      return `    listEvents: (input = {}) => {
+      const query = new URLSearchParams();
+      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const suffix = query.size === 0 ? "" : \`?\${query}\`;
+      return request<EventRecordPage>(\`/api/v1/events\${suffix}\`, "GET");
+    },`;
+    case "streamEvents":
+      return `    streamEvents: (input = {}) => {
+      const suffix = input.afterCursor === undefined ? "" : \`?after_cursor=\${input.afterCursor}\`;
+      return {
+        url: \`\${normalizedBaseUrl}/api/v1/events/stream\${suffix}\`,
+        withCredentials: true as const,
+      };
+    },`;
+    case "login":
+      return '    login: (input) => request<LoginResponse>("/api/v1/auth/login", "POST", input),';
+    case "completeBootstrap":
+      return '    completeBootstrap: (input) => request<BootstrapResponse>("/api/v1/bootstrap", "POST", input),';
+    case "mutateConfigurationOverride":
+      return `    mutateConfigurationOverride: (key, input, csrfToken) =>
+      request<ConfigurationOverrideMutationResponse>(
+        \`/api/v1/config/overrides/\${encodeURIComponent(key)}\`,
+        "PUT",
+        input,
+        csrfToken,
+      ),`;
+    case "getBootstrapStatus":
+      return '    getBootstrapStatus: () => request<BootstrapStatusResponse>("/api/v1/bootstrap", "GET"),';
+    case "getControlState":
+      return '    getControlState: () => request<ControlState>("/api/v1/state", "GET"),';
+    case "getHealth":
+      return '    getHealth: () => request<HealthResponse>("/health", "GET"),';
+    case "getReady":
+      return '    getReady: () => request<ReadyResponse>("/ready", "GET"),';
+    default:
+      throw new Error(`openapi.unsupported_operation:${operationId}`);
+  }
+}
+
+function renderClientMethodSignature(operationId: string): string {
+  switch (operationId) {
+    case "listEvents":
+      return "  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;";
+    case "streamEvents":
+      return "  streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;";
+    case "login":
+      return "  login(input: LoginRequest): Promise<LoginResponse>;";
+    case "completeBootstrap":
+      return "  completeBootstrap(input: BootstrapRequest): Promise<BootstrapResponse>;";
+    case "mutateConfigurationOverride":
+      return `  mutateConfigurationOverride(
+    key: string,
+    input: ConfigurationOverrideMutation,
+    csrfToken: string,
+  ): Promise<ConfigurationOverrideMutationResponse>;`;
+    case "getBootstrapStatus":
+      return "  getBootstrapStatus(): Promise<BootstrapStatusResponse>;";
+    case "getControlState":
+      return "  getControlState(): Promise<ControlState>;";
+    case "getHealth":
+      return "  getHealth(): Promise<HealthResponse>;";
+    case "getReady":
+      return "  getReady(): Promise<ReadyResponse>;";
+    default:
+      throw new Error(`openapi.unsupported_operation:${operationId}`);
+  }
 }
 
 function resolveOperationDefinition(operationId: string): OperationDefinition {
