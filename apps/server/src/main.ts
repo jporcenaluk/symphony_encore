@@ -27,8 +27,35 @@ export function installShutdownHandlers(
   register("SIGTERM", stop);
 }
 
+export function createDeferredShutdown() {
+  let closeService: (() => Promise<void>) | undefined;
+  let closePromise: Promise<void> | undefined;
+  let requested = false;
+  const closeOnce = (): Promise<void> => {
+    if (!closeService) return Promise.resolve();
+    closePromise ??= closeService();
+    return closePromise;
+  };
+  return {
+    async attach(close: () => Promise<void>): Promise<void> {
+      if (closeService) throw new Error("shutdown.service_already_attached");
+      closeService = close;
+      if (requested) await closeOnce();
+    },
+    async request(): Promise<void> {
+      requested = true;
+      await closeOnce();
+    },
+  };
+}
+
 export async function runProductionMain() {
   const logger = createRootLogger({ level: process.env.LOG_LEVEL ?? "info" });
+  const shutdown = createDeferredShutdown();
+  installShutdownHandlers(shutdown.request, undefined, (error) => {
+    logger.fatal({ error }, "service shutdown failed");
+    process.exitCode = 1;
+  });
   try {
     const options = parseRuntimeOptions(process.env, process.cwd());
     const workflow = await loadWorkflowFile({
@@ -67,10 +94,7 @@ export async function runProductionMain() {
         workflow,
       },
     });
-    installShutdownHandlers(service.close, undefined, (error) => {
-      logger.fatal({ error }, "service shutdown failed");
-      process.exitCode = 1;
-    });
+    await shutdown.attach(service.close);
     return service;
   } catch (error) {
     logger.fatal({ error }, "service startup failed");

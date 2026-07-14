@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openDatabase } from "../packages/persistence/src/index.ts";
+import { waitForHttpReady } from "./runtime-readiness.ts";
 
 const root = await mkdtemp(path.join(tmpdir(), "symphony-production-smoke-"));
 const databasePath = path.join(root, "symphony.sqlite3");
@@ -125,7 +126,7 @@ Complete {{ issue.title }}.
   const restartedClosed = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
   const restarted = await waitForStartup(child, false);
   assert.equal(restarted.url, url);
-  assert.equal((await fetch(`${url}/ready`)).status, 200);
+  await waitForHttpReady(url);
   assert.equal((await fetch(`${url}/api/v1/bootstrap`)).status, 404);
   child.kill("SIGTERM");
   const [restartExitCode, restartSignal] = await restartedClosed;
