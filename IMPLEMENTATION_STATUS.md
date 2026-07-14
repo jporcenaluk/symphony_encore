@@ -15,13 +15,13 @@ historical test counts are not completion evidence.
 - Traceability audit baseline: `090cd6b818097e72524d462ab03208625a94155e`.
 - Architecture decision first committed at `1302c0b5342d854ab2a62481786a60faa0733d5f`.
 - Pull request: draft PR `#3`, <https://github.com/jporcenaluk/wheelsparrow/pull/3>.
-- Current verified implementation head: `810dd025e1a3661ac734035defeafedaf7a299f5`.
-- Current deterministic baseline: `make verify-fast` passes 175 test files and 767 tests, including
-  the 761-row normative registry and its fail-closed CLI boundary.
-- Latest revision with all applicable PR checks green: `810dd025e1a3661ac734035defeafedaf7a299f5`.
-  Linux verification, integration, production browser E2E, macOS verification, supply-chain checks,
-  image build, non-root/read-only container verification, Trivy, CodeQL, and the aggregate required
-  job passed.
+- Current working-tree deterministic baseline: `make verify-fast` passes 175 test files and 771
+  tests, including the 761-row normative registry and its fail-closed CLI boundary.
+- Most recent externally verified PR checkpoint preceding this ledger revision:
+  `9f1983e634ca75c5f91df721129551fdae03ae8d`. Linux verification, mocked-API Playwright E2E, a
+  separate production-server integration smoke, macOS verification, supply-chain checks, image
+  build, non-root/read-only container verification, Trivy, CodeQL, and the aggregate required job
+  passed.
 - Core Conformance: not achieved.
 - Real Integration Profile: not run.
 - Production readiness: false.
@@ -46,11 +46,14 @@ Each row records implementation, direct evidence, status, remaining work, depend
 
 Reviewed machine registries now bind every row to the exact raw source-document digest, cited source
 fragment, RFC strength, statement, semantic kind, applicability, and aggregate membership. The
-canonical validator rejects semantic reassignment and reports 761 requirements.
+canonical validator rejects semantic reassignment and reports 761 requirements. The schema-version 2
+conformance report accepts this identity only from an invocation-authenticated, deeply frozen
+summary; this does not change normative coverage from `unproven`.
 
 The normalized baseline contains 761 source-ordered registry rows with explicit
-aggregate/profile/reference relationships. At the `090cd6b` traceability audit baseline, the rows
-were categorized as follows:
+aggregate/profile/reference relationships. The current human-authored matrices contain the
+following mixed-revision editorial dispositions, which still require complete evidence
+reconciliation:
 
 - `SPEC.md`: 54 implemented, 242 partial, 28 missing, and 3 awaiting external proof out of 327;
 - `TECH_STACK.md`: 66 implemented, 112 partial, 8 missing, and 18 awaiting external proof out of
@@ -126,10 +129,11 @@ failure classes.
 | 2026-07-13 | `090cd6b` | GitHub CodeQL | Passed | Remote CodeQL workflow at PR head |
 | 2026-07-13 | `090cd6b` | GitHub CI | Failed | Corepack/pnpm runner recursion, actionlint/ShellCheck, image smoke, and aggregate required check |
 | 2026-07-13 | `090cd6b` | `make conformance` | Correctly exited nonzero, but report trust/format defects remain | Incomplete Core report; not conformance evidence |
-| 2026-07-14 | `a37874f` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verify/integration/E2E, macOS verify, supply chain, image/container/Trivy, CodeQL, and aggregate required |
+| 2026-07-14 | `a37874f` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verification, mocked-API Playwright E2E, production-server integration smoke, macOS verification, supply chain, image/container/Trivy, CodeQL, and aggregate required |
 | 2026-07-14 | `810dd02` | `make verify-fast` | Passed: 175 files, 767 tests | Includes exact 761-row normative validation and CLI failure-path verification |
 | 2026-07-14 | `810dd02` | `make conformance` | Correctly exits nonzero and publishes a deterministic private report | Trusted incomplete evidence; 35 missing and 35 unmapped; both completion booleans false |
-| 2026-07-14 | `810dd02` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verify/integration/E2E, macOS verify, supply chain, image/container/Trivy, CodeQL, and aggregate required |
+| 2026-07-14 | `810dd02` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verification, mocked-API Playwright E2E, production-server integration smoke, macOS verification, supply chain, image/container/Trivy, CodeQL, and aggregate required |
+| 2026-07-14 | `9f1983e` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Documentation-only status reconciliation; Linux, macOS, supply chain, image/container, required aggregate, and CodeQL passed |
 
 Not yet proven at one exact revision: full local `make verify`, a successful `make conformance` with
 mapped evidence, WSL release smoke, mutation thresholds, Real Integration, and

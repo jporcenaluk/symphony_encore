@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isReviewedNormativeRegistry,
+  loadReviewedNormativeRegistry,
   runNormativeRegistryCli,
   sourceFragmentForReference,
   validateNormativeRegistry,
@@ -115,6 +117,56 @@ describe("normative requirement registry", () => {
 
   it("validates every source-bound normative requirement", async () => {
     await expect(validateNormativeRegistry()).resolves.toBe(761);
+  });
+
+  it("produces an immutable, invocation-trusted reviewed inventory", async () => {
+    const registry = await loadReviewedNormativeRegistry();
+
+    expect(registry).toEqual({
+      documents: [
+        {
+          document: "SPEC",
+          registry_file: "docs/compliance/registry/spec.requirements.json",
+          registry_sha256: "d3344f5bbd0f1400e9437cbdcfcd94fe02b28b83c523b9efcad9ddc823a76f2e",
+          requirement_count: 327,
+          source_file: "SPEC.md",
+          source_sha256: "e247f8f1c634d7d1b02e84ca48b557264aa34b66323ece1698fc6e867812df23",
+          status: "Draft v3",
+          strengths: { MUST: 291, "MUST NOT": 34, SHOULD: 2 },
+        },
+        {
+          document: "TECH_STACK",
+          registry_file: "docs/compliance/registry/tech-stack.requirements.json",
+          registry_sha256: "ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46",
+          requirement_count: 204,
+          source_file: "TECH_STACK.md",
+          source_sha256: "edcfcfa293c4346e479458d127903e6435ab7a0f9373a7e166b64c3a8442b4c6",
+          status: "Draft v1",
+          strengths: { MUST: 147, "MUST NOT": 46, SHOULD: 11 },
+        },
+        {
+          document: "CICD",
+          registry_file: "docs/compliance/registry/cicd.requirements.json",
+          registry_sha256: "046f32c7a2a93296136c15d7b6e4395055fc9a5a6e49d7b8338e19e2641800ce",
+          requirement_count: 230,
+          source_file: "CICD.md",
+          source_sha256: "55e7cd08c5c9d0300077423fead4c29bf1fb14fd8610b3ca85e8d60ce9c151bd",
+          status: "Draft v1",
+          strengths: { MUST: 165, "MUST NOT": 33, SHOULD: 32 },
+        },
+      ],
+      kind: "reviewed_normative_registry",
+      schema_version: 1,
+      total_requirements: 761,
+    });
+    expect(isReviewedNormativeRegistry(registry)).toBe(true);
+    expect(isReviewedNormativeRegistry(structuredClone(registry))).toBe(false);
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(Object.isFrozen(registry.documents)).toBe(true);
+    expect(registry.documents.every((document) => Object.isFrozen(document))).toBe(true);
+    expect(registry.documents.every((document) => Object.isFrozen(document.strengths))).toBe(true);
+    expect(Reflect.set(registry.documents[0]?.strengths ?? {}, "MUST", 0)).toBe(false);
+    expect(registry.documents[0]?.strengths.MUST).toBe(291);
   });
 
   it("rejects a whitespace-only normative statement", async () => {

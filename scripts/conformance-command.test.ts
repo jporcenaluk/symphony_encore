@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +52,24 @@ async function repository(manifest: unknown = { name: "fixture", version: "0.0.0
   git(root, ["init", "--quiet"]);
   git(root, ["add", "package.json"]);
   git(root, ["commit", "--quiet", "-m", "fixture"]);
+  return root;
+}
+
+async function repositoryWithNormativeRegistry() {
+  const root = await repository();
+  await mkdir(path.join(root, "docs/compliance/registry"), { recursive: true });
+  await Promise.all(
+    [
+      "SPEC.md",
+      "TECH_STACK.md",
+      "CICD.md",
+      "docs/compliance/registry/spec.requirements.json",
+      "docs/compliance/registry/tech-stack.requirements.json",
+      "docs/compliance/registry/cicd.requirements.json",
+    ].map(async (file) => copyFile(file, path.join(root, file))),
+  );
+  git(root, ["add", "."]);
+  git(root, ["commit", "--quiet", "-m", "registry"]);
   return root;
 }
 
@@ -92,9 +119,66 @@ describe("conformance command", () => {
     };
     expect(report).toMatchObject({
       core_conformance: false,
+      normative_registry: {
+        diagnostic: "conformance.normative_registry.unavailable",
+        status: "unavailable",
+      },
       production_ready: false,
       results: { core_evidence: { trusted: true } },
     });
+  });
+
+  it("loads the reviewed normative identity without claiming normative evidence", async () => {
+    const root = await repositoryWithNormativeRegistry();
+    const command = fileURLToPath(new URL("./conformance-command.ts", import.meta.url));
+    const loader = fileURLToPath(new URL("./typescript-source-loader.mjs", import.meta.url));
+    const environment = { ...process.env };
+    delete environment.GITHUB_SHA;
+    delete environment.SOURCE_DATE_EPOCH;
+    const execution = spawnSync(
+      process.execPath,
+      ["--conditions=development", "--import", loader, command],
+      { cwd: root, encoding: "utf8", env: environment, shell: false },
+    );
+    expect({ status: execution.status, stderr: execution.stderr }).toEqual({
+      status: 1,
+      stderr: "",
+    });
+    const report = JSON.parse(
+      await readFile(path.join(root, CONFORMANCE_REPORT_RELATIVE_PATH), "utf8"),
+    );
+
+    expect(report).toMatchObject({
+      core_conformance: false,
+      normative_registry: {
+        diagnostic: null,
+        status: "validated_identity",
+        total_requirements: 761,
+      },
+      production_ready: false,
+      results: { normative_coverage: { status: "unproven" } },
+      schema_version: 2,
+    });
+    expect(report.specifications).toEqual([
+      {
+        document: "SPEC.md",
+        registry_sha256: "d3344f5bbd0f1400e9437cbdcfcd94fe02b28b83c523b9efcad9ddc823a76f2e",
+        source_sha256: "e247f8f1c634d7d1b02e84ca48b557264aa34b66323ece1698fc6e867812df23",
+        status: "Draft v3",
+      },
+      {
+        document: "TECH_STACK.md",
+        registry_sha256: "ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46",
+        source_sha256: "edcfcfa293c4346e479458d127903e6435ab7a0f9373a7e166b64c3a8442b4c6",
+        status: "Draft v1",
+      },
+      {
+        document: "CICD.md",
+        registry_sha256: "046f32c7a2a93296136c15d7b6e4395055fc9a5a6e49d7b8338e19e2641800ce",
+        source_sha256: "55e7cd08c5c9d0300077423fead4c29bf1fb14fd8610b3ca85e8d60ce9c151bd",
+        status: "Draft v1",
+      },
+    ]);
   });
 
   it("publishes a useful rejected report when implementation provenance is invalid", async () => {

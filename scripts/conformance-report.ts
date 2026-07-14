@@ -5,6 +5,7 @@ import {
   REAL_INTEGRATION_CASE_IDS,
 } from "../packages/contracts/src/index.ts";
 import { isTrustedEvidenceRun } from "./conformance-evidence.js";
+import { consumeReviewedNormativeRegistry } from "./normative-registry.js";
 
 const SELECTED_ADAPTER_KINDS = ["tracker", "repository_host", "agent", "authentication"] as const;
 
@@ -12,6 +13,7 @@ export interface BuildConformanceReportInput {
   readonly commandDiagnostics?: readonly string[];
   readonly evidence: unknown;
   readonly implementationVersion: string | null;
+  readonly normativeRegistry: unknown;
 }
 
 export function generatedAtFromSourceEpoch(sourceDateEpoch: number | null): string | null {
@@ -31,6 +33,9 @@ export function generatedAtFromSourceEpoch(sourceDateEpoch: number | null): stri
 export function buildConformanceReport(input: BuildConformanceReportInput) {
   const trusted = isTrustedEvidenceRun(input.evidence);
   const evidence = trusted ? input.evidence : null;
+  const normativeRegistry = consumeReviewedNormativeRegistry(input.normativeRegistry)
+    ? input.normativeRegistry
+    : null;
   const diagnostics = [
     ...(trusted ? (evidence?.diagnostics ?? []) : ["conformance.evidence.unavailable"]),
     ...(input.commandDiagnostics ?? []),
@@ -60,6 +65,20 @@ export function buildConformanceReport(input: BuildConformanceReportInput) {
       "loopback-only first-run bootstrap",
       "supervised learning synthesis",
     ],
+    normative_registry:
+      normativeRegistry === null
+        ? {
+            diagnostic: "conformance.normative_registry.unavailable" as const,
+            documents: [],
+            status: "unavailable" as const,
+            total_requirements: null,
+          }
+        : {
+            diagnostic: null,
+            documents: normativeRegistry.documents,
+            status: "validated_identity" as const,
+            total_requirements: normativeRegistry.total_requirements,
+          },
     production_ready: false as const,
     results: {
       core_evidence: {
@@ -96,12 +115,16 @@ export function buildConformanceReport(input: BuildConformanceReportInput) {
         status: "unproven" as const,
       },
     },
-    schema_version: 1,
-    specifications: [
-      { document: "SPEC.md", status: "Draft v3" },
-      { document: "TECH_STACK.md", status: "Draft v1" },
-      { document: "CICD.md", status: "Draft v1" },
-    ],
+    schema_version: 2,
+    specifications: NORMATIVE_DOCUMENTS.map((document) => {
+      const reviewed = normativeRegistry?.documents.find((item) => item.document === document);
+      return {
+        document: `${document}.md`,
+        registry_sha256: reviewed?.registry_sha256 ?? null,
+        source_sha256: reviewed?.source_sha256 ?? null,
+        status: reviewed?.status ?? null,
+      };
+    }),
     test_command: "make conformance",
   };
 }

@@ -14,6 +14,7 @@ import {
   type ConformanceReport,
   serializeConformanceReport,
 } from "./conformance-report.js";
+import { loadReviewedNormativeRegistry } from "./normative-registry.js";
 
 export const CONFORMANCE_REPORT_RELATIVE_PATH = "artifacts/conformance/core.json" as const;
 
@@ -111,6 +112,7 @@ export async function runConformanceCommand(): Promise<ConformanceCommandResult>
   const commandDiagnostics: string[] = [];
   let evidence: unknown = null;
   let implementationVersion: string | null = null;
+  let normativeRegistry: unknown = null;
   try {
     try {
       evidence = await produceTrustedEvidence(privateEvidenceDirectory);
@@ -122,10 +124,16 @@ export async function runConformanceCommand(): Promise<ConformanceCommandResult>
     } catch {
       commandDiagnostics.push("conformance.implementation_version_invalid");
     }
+    try {
+      normativeRegistry = await loadReviewedNormativeRegistry(root);
+    } catch {
+      normativeRegistry = null;
+    }
     const report = buildConformanceReport({
       commandDiagnostics,
       evidence,
       implementationVersion,
+      normativeRegistry,
     });
     const reportPath = await publishConformanceReport(root, report);
     return { exitCode: 1, report, reportPath };

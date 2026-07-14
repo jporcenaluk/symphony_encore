@@ -15,6 +15,7 @@ import {
   generatedAtFromSourceEpoch,
   serializeConformanceReport,
 } from "./conformance-report.js";
+import { loadReviewedNormativeRegistry } from "./normative-registry.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -43,6 +44,12 @@ describe("fail-closed conformance report", () => {
         suite_results: CORE_CONFORMANCE_IDS.map((id) => ({ id, status: "passed" })),
       },
       implementationVersion: "0.0.0",
+      normativeRegistry: {
+        documents: [],
+        kind: "reviewed_normative_registry",
+        schema_version: 1,
+        total_requirements: 761,
+      },
     });
 
     expect(report.core_conformance).toBe(false);
@@ -58,11 +65,22 @@ describe("fail-closed conformance report", () => {
     expect(report.implementation.revision).toBeNull();
     expect(report.results.deterministic.completed_ids).toEqual([]);
     expect(report.results.deterministic.missing_ids).toEqual(CORE_CONFORMANCE_IDS);
+    expect(report.normative_registry).toEqual({
+      diagnostic: "conformance.normative_registry.unavailable",
+      documents: [],
+      status: "unavailable",
+      total_requirements: null,
+    });
   });
 
   it("reports every trusted but unmapped Core case as missing", async () => {
     const evidence = await produceTrustedEvidence(await privateDirectory());
-    const report = buildConformanceReport({ evidence, implementationVersion: "0.0.0" });
+    const normativeRegistry = await loadReviewedNormativeRegistry();
+    const report = buildConformanceReport({
+      evidence,
+      implementationVersion: "0.0.0",
+      normativeRegistry,
+    });
 
     expect(report.core_conformance).toBe(false);
     expect(report.production_ready).toBe(false);
@@ -77,6 +95,57 @@ describe("fail-closed conformance report", () => {
       status: "incomplete",
       unmapped_ids: CORE_CONFORMANCE_IDS,
     });
+    expect(report.normative_registry).toEqual({
+      diagnostic: null,
+      documents: normativeRegistry.documents,
+      status: "validated_identity",
+      total_requirements: 761,
+    });
+    expect(report.results.normative_coverage.status).toBe("unproven");
+    expect(report.schema_version).toBe(2);
+    expect(report.specifications).toEqual([
+      {
+        document: "SPEC.md",
+        registry_sha256: "d3344f5bbd0f1400e9437cbdcfcd94fe02b28b83c523b9efcad9ddc823a76f2e",
+        source_sha256: "e247f8f1c634d7d1b02e84ca48b557264aa34b66323ece1698fc6e867812df23",
+        status: "Draft v3",
+      },
+      {
+        document: "TECH_STACK.md",
+        registry_sha256: "ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46",
+        source_sha256: "edcfcfa293c4346e479458d127903e6435ab7a0f9373a7e166b64c3a8442b4c6",
+        status: "Draft v1",
+      },
+      {
+        document: "CICD.md",
+        registry_sha256: "046f32c7a2a93296136c15d7b6e4395055fc9a5a6e49d7b8338e19e2641800ce",
+        source_sha256: "55e7cd08c5c9d0300077423fead4c29bf1fb14fd8610b3ca85e8d60ce9c151bd",
+        status: "Draft v1",
+      },
+    ]);
+  });
+
+  it("does not accept replayed reviewed-registry capabilities", async () => {
+    const normativeRegistry = await loadReviewedNormativeRegistry();
+    const evidence = await produceTrustedEvidence(await privateDirectory());
+    const first = buildConformanceReport({
+      evidence,
+      implementationVersion: "0.0.0",
+      normativeRegistry,
+    });
+    const replay = buildConformanceReport({
+      evidence,
+      implementationVersion: "0.0.0",
+      normativeRegistry,
+    });
+
+    expect(first.normative_registry.status).toBe("validated_identity");
+    expect(replay.normative_registry).toEqual({
+      diagnostic: "conformance.normative_registry.unavailable",
+      documents: [],
+      status: "unavailable",
+      total_requirements: null,
+    });
   });
 
   it("derives its timestamp from the immutable source epoch", () => {
@@ -87,7 +156,11 @@ describe("fail-closed conformance report", () => {
 
   it("keeps normative, adapter, real-integration, and external gates unproven", async () => {
     const evidence = await produceTrustedEvidence(await privateDirectory());
-    const report = buildConformanceReport({ evidence, implementationVersion: "0.0.0" });
+    const report = buildConformanceReport({
+      evidence,
+      implementationVersion: "0.0.0",
+      normativeRegistry: await loadReviewedNormativeRegistry(),
+    });
 
     expect(report.adapters.map(({ kind, status }) => ({ kind, status }))).toEqual([
       { kind: "tracker", status: "unproven" },
@@ -114,11 +187,21 @@ describe("fail-closed conformance report", () => {
 
   it("serializes the same evidence to byte-identical repository-formatted JSON", async () => {
     const evidence = await produceTrustedEvidence(await privateDirectory());
+    const firstRegistry = await loadReviewedNormativeRegistry();
+    const secondRegistry = await loadReviewedNormativeRegistry();
     const first = serializeConformanceReport(
-      buildConformanceReport({ evidence, implementationVersion: "0.0.0" }),
+      buildConformanceReport({
+        evidence,
+        implementationVersion: "0.0.0",
+        normativeRegistry: firstRegistry,
+      }),
     );
     const second = serializeConformanceReport(
-      buildConformanceReport({ evidence, implementationVersion: "0.0.0" }),
+      buildConformanceReport({
+        evidence,
+        implementationVersion: "0.0.0",
+        normativeRegistry: secondRegistry,
+      }),
     );
 
     expect(second).toBe(first);
