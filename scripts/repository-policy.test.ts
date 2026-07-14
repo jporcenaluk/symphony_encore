@@ -653,6 +653,185 @@ test("rejects workspace dependencies that point outward", async () => {
   );
 });
 
+test("keeps production runtime primitives behind the Node adapter", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "apps/server/src/production-scheduler.ts": `
+import { randomUUID } from "node:crypto";
+const id = randomUUID();
+const iso = new Date().toISOString();
+const epoch = Date.now();
+const jitter = Math.random();
+`,
+    "apps/server/src/node-runtime-services.ts": `
+import { randomUUID } from "node:crypto";
+export const id = randomUUID();
+export const iso = new Date().toISOString();
+export const epoch = Date.now();
+export const jitter = Math.random();
+export const timer = setInterval(() => undefined, 1);
+clearInterval(timer);
+`,
+    "packages/orchestration/src/scheduler/service.ts": `
+const timer = setInterval(() => undefined, 1);
+clearInterval(timer);
+`,
+  });
+
+  const violations = await validateRepository(root);
+  for (const primitive of [
+    "node:crypto",
+    "randomUUID",
+    "zero-argument new Date",
+    "Date.now",
+    "Math.random",
+  ]) {
+    assert(
+      violations.some(
+        (item) => item.includes("production-scheduler.ts") && item.includes(primitive),
+      ),
+      `expected production scheduler ${primitive} violation: ${JSON.stringify(violations)}`,
+    );
+  }
+  for (const primitive of ["setInterval", "clearInterval"]) {
+    assert(
+      violations.some((item) => item.includes("scheduler/service.ts") && item.includes(primitive)),
+      `expected scheduler service ${primitive} violation: ${JSON.stringify(violations)}`,
+    );
+  }
+  assert(!violations.some((item) => item.includes("node-runtime-services.ts")));
+});
+
+test("allows value-based Date construction in the production scheduler", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "apps/server/src/production-scheduler.ts": `
+export const expiresAt = new Date(epochMs + leaseTtlMs).toISOString();
+`,
+    "packages/orchestration/src/scheduler/service.ts": "export class SchedulerService {}\n",
+  });
+
+  const violations = await validateRepository(root);
+  assert(!violations.some((item) => item.includes("production-scheduler.ts")));
+});
+
+test("rejects aliased and global runtime primitives in the production scheduler", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "apps/server/src/production-scheduler.ts": `
+import { randomUUID as makeId } from "node:crypto";
+const WallDate = globalThis.Date;
+const RandomMath = globalThis.Math;
+export const id = makeId();
+export const iso = new WallDate().toISOString();
+export const epoch = WallDate.now();
+export const jitter = RandomMath.random();
+`,
+    "packages/orchestration/src/scheduler/service.ts": "export class SchedulerService {}\n",
+  });
+
+  const violations = await validateRepository(root);
+  for (const primitive of [
+    "node:crypto",
+    "randomUUID",
+    "zero-argument new Date",
+    "Date.now",
+    "Math.random",
+  ]) {
+    assert(
+      violations.some(
+        (item) => item.includes("production-scheduler.ts") && item.includes(primitive),
+      ),
+      `expected aliased ${primitive} violation: ${JSON.stringify(violations)}`,
+    );
+  }
+});
+
+test("ignores forbidden primitive spellings in comments and string literals", async () => {
+  const root = await fixture({
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "apps/server/src/production-scheduler.ts": `
+export const marker = "🧭";
+// import { randomUUID } from "node:crypto";
+/* new Date(); Date.now(); Math.random(); */
+export const documentation = "node:crypto randomUUID new Date() Date.now() Math.random()";
+export const value = new Date(epochMs).toISOString();
+`,
+    "packages/orchestration/src/scheduler/service.ts": `
+// setInterval(() => undefined, 1);
+export const documentation = "clearInterval(timer)";
+`,
+  });
+
+  const violations = await validateRepository(root);
+  assert(!violations.some((item) => item.includes("production-scheduler.ts")));
+  assert(!violations.some((item) => item.includes("scheduler/service.ts")));
+});
+
+test("allows server tests, but not server production code, to depend on test support", async () => {
+  const common = {
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+    "apps/server/src/index.ts": "export {};\n",
+    "packages/test-support/src/index.ts": "export {};\n",
+    "packages/test-support/package.json": JSON.stringify({ name: "@symphony/test-support" }),
+  };
+  const devRoot = await fixture({
+    ...common,
+    "apps/server/package.json": JSON.stringify({
+      name: "@symphony/server",
+      devDependencies: { "@symphony/test-support": "workspace:*" },
+    }),
+  });
+  const productionRoot = await fixture({
+    ...common,
+    "apps/server/package.json": JSON.stringify({
+      name: "@symphony/server",
+      dependencies: { "@symphony/test-support": "workspace:*" },
+    }),
+  });
+
+  assert(
+    !(await validateRepository(devRoot)).some((item) =>
+      item.includes("@symphony/server must not depend on @symphony/test-support"),
+    ),
+  );
+  assert(
+    (await validateRepository(productionRoot)).some((item) =>
+      item.includes("@symphony/server must not depend on @symphony/test-support"),
+    ),
+  );
+});
+
 test("rejects Node package builds that resolve production imports to TypeScript source", async () => {
   const root = await fixture({
     "package.json": JSON.stringify({

@@ -21,6 +21,7 @@
   "dependencies": {
     "@symphony/contracts": "workspace:*",
     "@symphony/domain": "workspace:*",
+    "@symphony/orchestration": "workspace:*",
     "@symphony/persistence": "workspace:*"
   }
 }

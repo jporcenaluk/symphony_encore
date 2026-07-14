@@ -5,6 +5,7 @@ import { createRootLogger } from "@symphony/observability";
 import { loadWorkflowFile } from "@symphony/orchestration";
 
 import { buildBootstrapCandidate } from "./bootstrap-candidate.js";
+import { createNodeRuntimeServices } from "./node-runtime-services.js";
 import { createProductionScheduler } from "./production-scheduler.js";
 import { parseRuntimeOptions } from "./runtime-options.js";
 import { startProductionService } from "./service-runtime.js";
@@ -58,6 +59,7 @@ export async function runProductionMain() {
   });
   try {
     const options = parseRuntimeOptions(process.env, process.cwd());
+    const runtimeServices = createNodeRuntimeServices();
     const workflow = await loadWorkflowFile({
       cwd: process.cwd(),
       readFile: (filename) => readFile(filename, "utf8"),
@@ -84,6 +86,7 @@ export async function runProductionMain() {
           environment: process.env,
           logger,
           prompt,
+          runtimeServices,
           serviceRunId,
           snapshot,
         }),

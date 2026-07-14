@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   type AgentAdapter,
   createCodexAppServerAdapter,
@@ -38,6 +37,7 @@ import {
   type ProvisionalClassification,
 } from "@symphony/domain";
 import {
+  type DeterministicRuntimeServices,
   evaluateIssueEligibility,
   PersistenceSafetyController,
   parseComputeRoutingPolicy,
@@ -154,9 +154,13 @@ export function createProductionScheduler(input: {
   snapshot: ConfigurationSnapshot;
   tracker?: TrackerAdapter;
   review?: { collectEvidence?: typeof collectIntegrativeReviewContext };
+  runtimeServices: DeterministicRuntimeServices;
   verification?: { execute?: VerificationExecutor; readRevision?: RevisionReader };
 }) {
   const values = input.snapshot.effectiveConfig;
+  const { clock, identifiers, intervals, jitter } = input.runtimeServices;
+  const newId = () => identifiers.nextId();
+  const now = () => clock.wallIso();
   const tracker =
     input.tracker ??
     createGitHubTrackerAdapter(
@@ -211,8 +215,8 @@ export function createProductionScheduler(input: {
     database: input.database,
     hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
     killWaitMs: 5_000,
-    newId: randomUUID,
-    now: () => new Date().toISOString(),
+    newId: newId,
+    now: now,
     onBeforeRemoveResult(result) {
       if (result.status !== "passed") {
         input.logger?.warn({ hook: "before_remove", result }, "workspace hook failed");
@@ -238,8 +242,8 @@ export function createProductionScheduler(input: {
     },
     database: input.database,
     killWaitMs: 5_000,
-    newId: randomUUID,
-    now: () => new Date().toISOString(),
+    newId: newId,
+    now: now,
     onRunningLoaded(records) {
       const loaded = new Set(records.map((record) => record.attemptId));
       for (const attemptId of runningSystemJobAttempts) {
@@ -282,6 +286,7 @@ export function createProductionScheduler(input: {
     );
   const service = new SchedulerService({
     intervalMs: numberValue(values, "polling.interval_ms"),
+    intervals,
     onError(error) {
       input.logger?.error(
         { error, service_run_id: input.serviceRunId },
@@ -296,7 +301,7 @@ export function createProductionScheduler(input: {
         0,
         numberValue(values, "agent.max_concurrent") - (await countRunningClaims(input.database)),
       );
-      const recoveryNow = new Date().toISOString();
+      const recoveryNow = now();
       await promoteDueRetryClaims(input.database, recoveryNow);
       const synthesisContext = await loadSynthesisTriggerState(input.database, {
         ruleDecayIssues: numberValue(values, "learning.rule_decay_issues"),
@@ -308,7 +313,7 @@ export function createProductionScheduler(input: {
         operatorRequested: false,
       });
       if (synthesisTrigger.decision === "queue") {
-        const synthesisId = randomUUID();
+        const synthesisId = newId();
         await queueSynthesisSystemJob(input.database, {
           acceptanceCriteria: [
             "Every proposed rule change cites durable lesson ids",
@@ -321,7 +326,7 @@ export function createProductionScheduler(input: {
           id: synthesisId,
           repository: repositoryName,
           serviceRunId: input.serviceRunId,
-          transitionId: randomUUID(),
+          transitionId: newId(),
           trigger: synthesisTrigger.trigger,
           workspacePath: systemJobWorkspacePath(
             stringValue(values, "workspace.root"),
@@ -422,8 +427,8 @@ export function createProductionScheduler(input: {
                 job,
                 maxPromptTokens: numberValue(values, "learning.max_prompt_tokens"),
                 maxRules: numberValue(values, "learning.max_rules"),
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 serviceRunId: input.serviceRunId,
                 terminalResultSchema: SynthesisResultSchema,
               });
@@ -441,8 +446,8 @@ export function createProductionScheduler(input: {
                 maxPromptTokens: numberValue(values, "learning.max_prompt_tokens"),
                 maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
                 maxRules: numberValue(values, "learning.max_rules"),
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 planned,
                 readWorkspaceRevision: (workspace) =>
                   input.verification?.readRevision
@@ -460,7 +465,7 @@ export function createProductionScheduler(input: {
                         workspaceRoot: stringValue(values, "workspace.root"),
                       }),
                 repositoryAdapter,
-                retryJitterSample: Math.random(),
+                retryJitterSample: jitter.sample(),
                 safety,
                 serviceRunId: input.serviceRunId,
                 sourceEnvironment: input.environment,
@@ -503,8 +508,8 @@ export function createProductionScheduler(input: {
               configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
               database: input.database,
               job,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               serviceRunId: input.serviceRunId,
               submitPlanSchema: PlanSchema,
               terminalResultSchema: ImplementationOutcomeSchema,
@@ -522,13 +527,13 @@ export function createProductionScheduler(input: {
               maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
               maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
               maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               onPlanSubmitted: createInitialPlanSubmissionHandler({
                 attemptId: planned.attemptId,
                 database: input.database,
                 issue: job,
-                now: () => new Date().toISOString(),
+                now: now,
                 provisionalClassification: provisionalClassificationForAttempt(
                   planned.dispatch.attempt,
                 ),
@@ -540,7 +545,7 @@ export function createProductionScheduler(input: {
               }),
               planned,
               repositoryAdapter,
-              retryJitterSample: Math.random(),
+              retryJitterSample: jitter.sample(),
               safety,
               serviceRunId: input.serviceRunId,
               sourceEnvironment: input.environment,
@@ -605,8 +610,8 @@ export function createProductionScheduler(input: {
                 configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
                 database: input.database,
                 issue: job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 plan,
                 serviceRunId: input.serviceRunId,
                 terminalResultSchema: PlanReviewResultSchema,
@@ -622,8 +627,8 @@ export function createProductionScheduler(input: {
                 hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
                 issue: job,
                 maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 plan,
                 planned,
                 repositoryAdapter,
@@ -705,8 +710,8 @@ export function createProductionScheduler(input: {
                 database: input.database,
                 issue: job,
                 mode,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 plan,
                 source,
                 serviceRunId: input.serviceRunId,
@@ -726,13 +731,13 @@ export function createProductionScheduler(input: {
                 maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
                 maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
                 maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 onPlanSubmitted: createInitialPlanSubmissionHandler({
                   attemptId: implementationPlanned.attemptId,
                   database: input.database,
                   issue: job,
-                  now: () => new Date().toISOString(),
+                  now: now,
                   provisionalClassification: {
                     changeClass,
                     floor: changeClass,
@@ -746,7 +751,7 @@ export function createProductionScheduler(input: {
                 }),
                 planned: implementationPlanned,
                 repositoryAdapter,
-                retryJitterSample: Math.random(),
+                retryJitterSample: jitter.sample(),
                 safety,
                 serviceRunId: input.serviceRunId,
                 sourceEnvironment: input.environment,
@@ -823,7 +828,7 @@ export function createProductionScheduler(input: {
               database: input.database,
               expectedReadyReason: claim.reason,
               ...(input.verification?.execute ? { execute: input.verification.execute } : {}),
-              newId: randomUUID,
+              newId: newId,
               ...(input.verification?.readRevision
                 ? { readRevision: input.verification.readRevision }
                 : {}),
@@ -864,12 +869,12 @@ export function createProductionScheduler(input: {
               await executeRepairRepositoryPublication({
                 database: input.database,
                 expiresAt: new Date(
-                  Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                  clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
                 ).toISOString(),
                 failedMergeSha: target.failedMergeSha,
                 job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 readWorkspaceRevision: () =>
                   readSchedulerWorkspaceRevision(input, values, target.workspacePath),
                 repository: repositoryHostingAdapter,
@@ -890,11 +895,11 @@ export function createProductionScheduler(input: {
               await executeSynthesisRepositoryPublication({
                 database: input.database,
                 expiresAt: new Date(
-                  Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                  clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
                 ).toISOString(),
                 job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 proposal: proposal.result,
                 readWorkspaceRevision: () =>
                   readSchedulerWorkspaceRevision(input, values, target.workspacePath),
@@ -929,7 +934,7 @@ export function createProductionScheduler(input: {
               database: input.database,
               fetchPullRequestSnapshot: (workRef) =>
                 repositoryHostingAdapter.fetchPullRequestSnapshot(workRef, job.kind),
-              now: () => new Date().toISOString(),
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               quietPeriodMs: numberValue(values, "review.quiet_period_ms"),
               requiredChecks: stringList(values, "review.required_checks"),
@@ -976,8 +981,8 @@ export function createProductionScheduler(input: {
               context,
               database: input.database,
               issue: job,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               serviceRunId: input.serviceRunId,
               terminalResultSchema: ReviewResultSchema,
             });
@@ -991,8 +996,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: job,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               planned,
               repositoryAdapter,
               safety,
@@ -1075,19 +1080,19 @@ export function createProductionScheduler(input: {
               ).map((required) => required.specialist.name);
               const routed = await routeNextReviewSpecialist(input.database, {
                 requiredSpecialistNames,
-                updatedAt: new Date().toISOString(),
+                updatedAt: now(),
                 workRef: { id: systemJobId, kind: "system_job" },
               });
               if (routed) continue;
             }
             const conflicts = await routeReviewAdjudication(input.database, {
-              updatedAt: new Date().toISOString(),
+              updatedAt: now(),
               workRef: { id: systemJobId, kind: "system_job" },
             });
             if (conflicts.length > 0) continue;
             await commitOrdinaryReviewSet(input.database, {
-              createdAt: new Date().toISOString(),
-              id: randomUUID(),
+              createdAt: now(),
+              id: newId(),
               maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
               requiredSpecialistNames,
               workRef: { id: systemJobId, kind: "system_job" },
@@ -1148,8 +1153,8 @@ export function createProductionScheduler(input: {
                 context,
                 database: input.database,
                 issue: job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 selection,
                 serviceRunId: input.serviceRunId,
                 terminalResultSchema: ReviewResultSchema,
@@ -1164,8 +1169,8 @@ export function createProductionScheduler(input: {
                 database: input.database,
                 hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
                 issue: job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 planned,
                 repositoryAdapter,
                 safety,
@@ -1218,8 +1223,8 @@ export function createProductionScheduler(input: {
                 context,
                 database: input.database,
                 issue: job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 serviceRunId: input.serviceRunId,
                 terminalResultSchema: AdjudicationResultSchema,
               });
@@ -1233,8 +1238,8 @@ export function createProductionScheduler(input: {
                 database: input.database,
                 hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
                 issue: job,
-                newId: randomUUID,
-                now: () => new Date().toISOString(),
+                newId: newId,
+                now: now,
                 planned,
                 repositoryAdapter,
                 safety,
@@ -1295,11 +1300,11 @@ export function createProductionScheduler(input: {
               acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
               landingPolicy: "squash",
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               repository: repositoryHostingAdapter,
               requiredChecks: stringList(values, "review.required_checks"),
@@ -1333,8 +1338,8 @@ export function createProductionScheduler(input: {
               acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
               database: input.database,
               job,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               repository: repositoryHostingAdapter,
               requiredChecks: stringList(values, "review.required_checks"),
@@ -1368,10 +1373,10 @@ export function createProductionScheduler(input: {
             await executeBaseUpdate({
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               repository: repositoryHostingAdapter,
               safety,
               serviceRunId: input.serviceRunId,
@@ -1410,12 +1415,12 @@ export function createProductionScheduler(input: {
               configSnapshotId: input.snapshot.id,
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
               issueId,
               lane: claim.reason === "repair_completed" ? "Review" : "Done",
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               providerRevision: stored.providerRevision,
               safety,
               serviceRunId: input.serviceRunId,
@@ -1433,11 +1438,11 @@ export function createProductionScheduler(input: {
             await executeRepositoryPublication({
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               providerRevision: stored.providerRevision,
               readWorkspaceRevision: () =>
                 input.verification?.readRevision
@@ -1474,7 +1479,7 @@ export function createProductionScheduler(input: {
               database: input.database,
               fetchPullRequestSnapshot: (workRef) =>
                 repositoryHostingAdapter.fetchPullRequestSnapshot(workRef),
-              now: () => new Date().toISOString(),
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               quietPeriodMs: numberValue(values, "review.quiet_period_ms"),
               requiredChecks: stringList(values, "review.required_checks"),
@@ -1496,11 +1501,11 @@ export function createProductionScheduler(input: {
               acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
               landingPolicy: "squash",
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               repository: repositoryHostingAdapter,
               requiredChecks: stringList(values, "review.required_checks"),
@@ -1522,11 +1527,11 @@ export function createProductionScheduler(input: {
               acceptedCheckConclusions: stringList(values, "review.accepted_check_conclusions"),
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               pollIntervalMs: numberValue(values, "polling.interval_ms"),
               repository: repositoryHostingAdapter,
               requiredChecks: stringList(values, "review.required_checks"),
@@ -1575,19 +1580,19 @@ export function createProductionScheduler(input: {
               ).map((required) => required.specialist.name);
               const routed = await routeNextReviewSpecialist(input.database, {
                 requiredSpecialistNames,
-                updatedAt: new Date().toISOString(),
+                updatedAt: now(),
                 workRef: { id: issueId, kind: "issue" },
               });
               if (routed) continue;
             }
             const conflicts = await routeReviewAdjudication(input.database, {
-              updatedAt: new Date().toISOString(),
+              updatedAt: now(),
               workRef: { id: issueId, kind: "issue" },
             });
             if (conflicts.length > 0) continue;
             await commitOrdinaryReviewSet(input.database, {
-              createdAt: new Date().toISOString(),
-              id: randomUUID(),
+              createdAt: now(),
+              id: newId(),
               maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
               requiredSpecialistNames,
               workRef: { id: issueId, kind: "issue" },
@@ -1610,7 +1615,7 @@ export function createProductionScheduler(input: {
               database: input.database,
               expectedReadyReason: claim.reason,
               ...(input.verification?.execute ? { execute: input.verification.execute } : {}),
-              newId: randomUUID,
+              newId: newId,
               ...(input.verification?.readRevision
                 ? { readRevision: input.verification.readRevision }
                 : {}),
@@ -1638,10 +1643,10 @@ export function createProductionScheduler(input: {
             await executeBaseUpdate({
               database: input.database,
               expiresAt: new Date(
-                Date.now() + numberValue(values, "persistence.lease_ttl_ms"),
+                clock.wallEpochMs() + numberValue(values, "persistence.lease_ttl_ms"),
               ).toISOString(),
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               repository: repositoryHostingAdapter,
               safety,
               serviceRunId: input.serviceRunId,
@@ -1686,8 +1691,8 @@ export function createProductionScheduler(input: {
               context,
               database: input.database,
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               serviceRunId: input.serviceRunId,
               terminalResultSchema: ReviewResultSchema,
             });
@@ -1701,8 +1706,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               planned: reviewPlanned,
               repositoryAdapter,
               safety,
@@ -1777,8 +1782,8 @@ export function createProductionScheduler(input: {
               context,
               database: input.database,
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               selection,
               serviceRunId: input.serviceRunId,
               terminalResultSchema: ReviewResultSchema,
@@ -1793,8 +1798,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               planned: specialistPlanned,
               repositoryAdapter,
               safety,
@@ -1889,8 +1894,8 @@ export function createProductionScheduler(input: {
               context,
               database: input.database,
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               serviceRunId: input.serviceRunId,
               terminalResultSchema: AdjudicationResultSchema,
             });
@@ -1904,8 +1909,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               planned: adjudicationPlanned,
               repositoryAdapter,
               safety,
@@ -1956,8 +1961,8 @@ export function createProductionScheduler(input: {
               configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
               database: input.database,
               issue: stored.issue,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               plan,
               serviceRunId: input.serviceRunId,
               terminalResultSchema: PlanReviewResultSchema,
@@ -1973,8 +1978,8 @@ export function createProductionScheduler(input: {
               hookTimeoutMs: numberValue(values, "hooks.timeout_ms"),
               issue: stored.issue,
               maxPlanRevisions: numberValue(values, "agent.max_plan_revisions"),
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               plan,
               planned,
               repositoryAdapter,
@@ -2057,8 +2062,8 @@ export function createProductionScheduler(input: {
               database: input.database,
               issue: stored.issue,
               mode,
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               plan,
               source,
               serviceRunId: input.serviceRunId,
@@ -2078,13 +2083,13 @@ export function createProductionScheduler(input: {
               maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
               maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
               maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
-              newId: randomUUID,
-              now: () => new Date().toISOString(),
+              newId: newId,
+              now: now,
               onPlanSubmitted: createInitialPlanSubmissionHandler({
                 attemptId: implementationPlanned.attemptId,
                 database: input.database,
                 issue: stored.issue,
-                now: () => new Date().toISOString(),
+                now: now,
                 provisionalClassification: {
                   changeClass,
                   floor: changeClass,
@@ -2104,7 +2109,7 @@ export function createProductionScheduler(input: {
               }),
               planned: implementationPlanned,
               repositoryAdapter,
-              retryJitterSample: Math.random(),
+              retryJitterSample: jitter.sample(),
               safety,
               serviceRunId: input.serviceRunId,
               sourceEnvironment: input.environment,
@@ -2149,9 +2154,9 @@ export function createProductionScheduler(input: {
           observeIssue: (issue, providerRevision) =>
             observeIssue(input.database, {
               issue,
-              observedAt: new Date().toISOString(),
+              observedAt: now(),
               providerRevision,
-              transitionId: randomUUID(),
+              transitionId: newId(),
             }),
           safety,
           tracker,
@@ -2186,8 +2191,8 @@ export function createProductionScheduler(input: {
             configuration: initialAttemptConfiguration(values, input.prompt, input.environment),
             database: input.database,
             issue: stored.issue,
-            newId: randomUUID,
-            now: () => new Date().toISOString(),
+            newId: newId,
+            now: now,
             providerRevision: stored.providerRevision,
             routingFacts: issueRoutingFacts(stored.issue),
             serviceRunId: input.serviceRunId,
@@ -2207,13 +2212,13 @@ export function createProductionScheduler(input: {
             maxFailureRetries: numberValue(values, "agent.max_failure_retries"),
             maxRetryBackoffMs: numberValue(values, "agent.max_retry_backoff_ms"),
             maxReworkCycles: numberValue(values, "agent.max_rework_cycles"),
-            newId: randomUUID,
-            now: () => new Date().toISOString(),
+            newId: newId,
+            now: now,
             onPlanSubmitted: createInitialPlanSubmissionHandler({
               attemptId: planned.attemptId,
               database: input.database,
               issue: stored.issue,
-              now: () => new Date().toISOString(),
+              now: now,
               provisionalClassification: plannedProvisionalClassification(planned),
               riskPathPatterns: stringList(values, "class.risk_paths"),
               safety,
@@ -2223,7 +2228,7 @@ export function createProductionScheduler(input: {
             }),
             planned,
             repositoryAdapter,
-            retryJitterSample: Math.random(),
+            retryJitterSample: jitter.sample(),
             safety,
             serviceRunId: input.serviceRunId,
             sourceEnvironment: input.environment,

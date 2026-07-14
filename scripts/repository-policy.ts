@@ -304,8 +304,21 @@ export async function validateRepository(root: string): Promise<string[]> {
     const workspaceDependencies = Object.keys(dependencies).filter((item) => manifests.has(item));
     graph.set(name, workspaceDependencies);
     const allowedDependencies = ALLOWED_WORKSPACE_DEPENDENCIES[name] ?? [];
-    for (const dependency of workspaceDependencies) {
+    const productionWorkspaceDependencies = Object.keys(manifest.dependencies ?? {}).filter(
+      (item) => manifests.has(item),
+    );
+    for (const dependency of productionWorkspaceDependencies) {
       if (!allowedDependencies.includes(dependency)) {
+        violations.push(`${name} must not depend on ${dependency}`);
+      }
+    }
+    const developmentWorkspaceDependencies = Object.keys(manifest.devDependencies ?? {}).filter(
+      (item) => manifests.has(item),
+    );
+    for (const dependency of developmentWorkspaceDependencies) {
+      const isServerTestSupport =
+        name === "@symphony/server" && dependency === "@symphony/test-support";
+      if (!isServerTestSupport && !allowedDependencies.includes(dependency)) {
         violations.push(`${name} must not depend on ${dependency}`);
       }
     }
@@ -333,6 +346,22 @@ export async function validateRepository(root: string): Promise<string[]> {
 
   const cycle = findCycle(graph);
   if (cycle) violations.push(`workspace dependency cycle: ${cycle.join(" -> ")}`);
+
+  const productionSchedulerPath = path.join(root, "apps/server/src/production-scheduler.ts");
+  const productionScheduler = await optionalRead(productionSchedulerPath);
+  if (productionScheduler !== undefined) {
+    for (const primitive of productionRuntimePrimitives(productionScheduler)) {
+      violations.push(`apps/server/src/production-scheduler.ts must not use ${primitive}`);
+    }
+  }
+
+  const schedulerServicePath = path.join(root, "packages/orchestration/src/scheduler/service.ts");
+  const schedulerService = await optionalRead(schedulerServicePath);
+  if (schedulerService !== undefined) {
+    for (const primitive of schedulerIntervalPrimitives(schedulerService)) {
+      violations.push(`packages/orchestration/src/scheduler/service.ts must not use ${primitive}`);
+    }
+  }
 
   for (const file of await repositoryTextFiles(root)) {
     const source = await readFile(file, "utf8");
@@ -440,6 +469,152 @@ export async function validateRepository(root: string): Promise<string[]> {
   }
 
   return violations;
+}
+
+type ProductionRuntimePrimitive =
+  | "Date.now"
+  | "Math.random"
+  | "node:crypto"
+  | "randomUUID"
+  | "zero-argument new Date";
+type SchedulerIntervalPrimitive = "clearInterval" | "setInterval";
+
+function productionRuntimePrimitives(source: string): readonly ProductionRuntimePrimitive[] {
+  const found = new Set<ProductionRuntimePrimitive>();
+  const scanned = sanitizeTypeScript(source);
+  const code = scanned.code;
+  if (scanned.modules.includes("node:crypto")) found.add("node:crypto");
+  if (/\brandomUUID\b/u.test(code)) found.add("randomUUID");
+
+  const dateAliases = runtimeObjectAliases(code, "Date");
+  const mathAliases = runtimeObjectAliases(code, "Math");
+  const dateNames = identifierAlternation(dateAliases);
+  const mathNames = identifierAlternation(mathAliases);
+  if (
+    new RegExp(`\\bnew\\s+(?:(?:globalThis)\\s*\\.\\s*)?(?:${dateNames})\\s*\\(\\s*\\)`, "u").test(
+      code,
+    )
+  ) {
+    found.add("zero-argument new Date");
+  }
+  if (
+    new RegExp(
+      `(?:(?:globalThis)\\s*\\.\\s*)?(?:${dateNames})\\s*\\.\\s*now\\b|\\{[^}]*\\bnow\\b[^}]*\\}\\s*=\\s*(?:${dateNames})\\b`,
+      "u",
+    ).test(code)
+  ) {
+    found.add("Date.now");
+  }
+  if (
+    new RegExp(
+      `(?:(?:globalThis)\\s*\\.\\s*)?(?:${mathNames})\\s*\\.\\s*random\\b|\\{[^}]*\\brandom\\b[^}]*\\}\\s*=\\s*(?:${mathNames})\\b`,
+      "u",
+    ).test(code)
+  ) {
+    found.add("Math.random");
+  }
+  return [...found];
+}
+
+function schedulerIntervalPrimitives(source: string): readonly SchedulerIntervalPrimitive[] {
+  const found = new Set<SchedulerIntervalPrimitive>();
+  const scanned = sanitizeTypeScript(source);
+  for (const primitive of ["clearInterval", "setInterval"] as const) {
+    const direct = new RegExp(`(?:(?:globalThis)\\s*\\.\\s*)?\\b${primitive}\\s*\\(`, "u").test(
+      scanned.code,
+    );
+    const alias = new RegExp(
+      `\\b(?:const|let|var)\\s+[A-Za-z_$][\\w$]*\\s*=\\s*(?:(?:globalThis)\\s*\\.\\s*)?${primitive}\\b`,
+      "u",
+    ).test(scanned.code);
+    const imported =
+      scanned.modules.some(
+        (module) => module === "node:timers" || module === "node:timers/promises",
+      ) && new RegExp(`\\b${primitive}\\b`, "u").test(scanned.code);
+    if (direct || alias || imported) found.add(primitive);
+  }
+  return [...found];
+}
+
+function runtimeObjectAliases(source: string, globalName: "Date" | "Math"): Set<string> {
+  const aliases = new Set<string>([globalName]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const known = identifierAlternation(aliases);
+    const pattern = new RegExp(
+      `\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:(?:globalThis)\\s*\\.\\s*)?(?:${known})\\b`,
+      "gu",
+    );
+    for (const match of source.matchAll(pattern)) {
+      const alias = match[1];
+      if (alias && !aliases.has(alias)) {
+        aliases.add(alias);
+        changed = true;
+      }
+    }
+  }
+  return aliases;
+}
+
+function identifierAlternation(identifiers: ReadonlySet<string>): string {
+  return [...identifiers].map((value) => value.replaceAll("$", "\\$")).join("|");
+}
+
+function sanitizeTypeScript(source: string): { code: string; modules: string[] } {
+  const code = [...source];
+  const modules: string[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const current = source[index];
+    const next = source[index + 1];
+    if (current === "/" && next === "/") {
+      const end = source.indexOf("\n", index + 2);
+      blank(code, index, end < 0 ? source.length : end);
+      index = end < 0 ? source.length : end;
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      const closing = source.indexOf("*/", index + 2);
+      const end = closing < 0 ? source.length : closing + 2;
+      blank(code, index, end);
+      index = end;
+      continue;
+    }
+    if (current === '"' || current === "'" || current === "`") {
+      const quote = current;
+      const start = index;
+      let value = "";
+      index += 1;
+      while (index < source.length) {
+        const character = source[index];
+        if (character === "\\") {
+          index += 2;
+          continue;
+        }
+        if (character === quote) {
+          index += 1;
+          break;
+        }
+        value += character;
+        index += 1;
+      }
+      const prefix = code.slice(0, start).join("");
+      if (/(?:\bfrom|\bimport|\brequire\s*\(|\bimport\s*\()\s*$/u.test(prefix)) {
+        modules.push(value);
+      }
+      blank(code, start, index);
+      continue;
+    }
+    index += 1;
+  }
+  return { code: code.join(""), modules };
+}
+
+function blank(characters: string[], start: number, end: number): void {
+  for (let index = start; index < end; index += 1) {
+    if (characters[index] !== "\n" && characters[index] !== "\r") characters[index] = " ";
+  }
 }
 
 async function main(): Promise<void> {

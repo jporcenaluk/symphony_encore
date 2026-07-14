@@ -1,7 +1,9 @@
+import type { IntervalCancellation, IntervalScheduler } from "../runtime-services.js";
 import { PollLoop } from "./poll-loop.js";
 
 export interface SchedulerServiceInput {
   intervalMs: number;
+  intervals: IntervalScheduler;
   onError?: (error: Error) => void;
   tick: () => Promise<unknown>;
 }
@@ -9,15 +11,17 @@ export interface SchedulerServiceInput {
 export class SchedulerService {
   private closed = false;
   private readonly intervalMs: number;
+  private readonly intervals: IntervalScheduler;
   private readonly loop: PollLoop;
   private readonly onError: (error: Error) => void;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: IntervalCancellation | null = null;
 
   constructor(input: SchedulerServiceInput) {
     if (!Number.isInteger(input.intervalMs) || input.intervalMs < 1) {
       throw new Error("scheduler.invalid_interval");
     }
     this.intervalMs = input.intervalMs;
+    this.intervals = input.intervals;
     this.loop = new PollLoop(input.tick);
     this.onError = input.onError ?? (() => undefined);
   }
@@ -25,9 +29,11 @@ export class SchedulerService {
   async start(): Promise<void> {
     if (this.closed) throw new Error("scheduler.closed");
     if (this.timer !== null) return;
-    this.timer = setInterval(() => {
-      void this.loop.trigger().catch((error: unknown) => this.onError(asError(error)));
-    }, this.intervalMs);
+    this.timer = this.intervals.schedule({
+      intervalMs: this.intervalMs,
+      onError: this.onError,
+      task: () => (this.closed ? Promise.resolve() : this.loop.trigger()),
+    });
     await this.loop.trigger();
   }
 
@@ -40,13 +46,9 @@ export class SchedulerService {
     if (this.closed) return;
     this.closed = true;
     if (this.timer !== null) {
-      clearInterval(this.timer);
+      this.timer.cancel();
       this.timer = null;
     }
     await this.loop.waitForIdle();
   }
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }

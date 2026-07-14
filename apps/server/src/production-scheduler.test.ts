@@ -13,11 +13,22 @@ import {
 } from "@symphony/adapters";
 import { type AgentAdapterManifest, type Issue, PlanSchema } from "@symphony/contracts";
 import { applyMigrations, observeIssue, openDatabase } from "@symphony/persistence";
+import { createDeterministicRuntimeServices } from "@symphony/test-support";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createProductionScheduler } from "./production-scheduler.js";
 
 const directories: string[] = [];
+const deterministicWallIso = "2026-07-14T12:00:00.000Z";
+
+function testRuntimeServices() {
+  return createDeterministicRuntimeServices({
+    ids: Array.from({ length: 1_000 }, (_, index) => `runtime-id-${index}`),
+    jitter: Array.from({ length: 100 }, () => 0.25),
+    monotonicMs: 10,
+    wallEpochMs: Date.parse(deterministicWallIso),
+  });
+}
 
 afterEach(async () => {
   for (const directory of directories.splice(0)) {
@@ -150,6 +161,7 @@ describe("production reconciliation scheduler", () => {
       database: opened.database,
       environment: {},
       prompt: "Issue: {{ issue.title }}",
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: { effectiveConfig } as never,
       tracker,
@@ -169,6 +181,7 @@ describe("production reconciliation scheduler", () => {
         database: {} as never,
         environment: {},
         prompt: "Issue: {{ issue.title }}",
+        runtimeServices: testRuntimeServices(),
         serviceRunId: "run-1",
         snapshot: { effectiveConfig: {} } as never,
         tracker: {} as never,
@@ -458,6 +471,8 @@ describe("production reconciliation scheduler", () => {
       }),
     };
     const logger = { error: vi.fn(), warn: vi.fn() };
+    const deterministic = testRuntimeServices();
+    const jitterSample = vi.fn(() => 0.25);
     const scheduler = createProductionScheduler({
       agent,
       database: opened.database,
@@ -480,6 +495,7 @@ describe("production reconciliation scheduler", () => {
           verificationRecordId: request.verificationRecordId,
         })),
       },
+      runtimeServices: { ...deterministic, jitter: { sample: jitterSample } },
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
@@ -613,6 +629,7 @@ describe("production reconciliation scheduler", () => {
 
     expect(logger.warn).not.toHaveBeenCalled();
     expect(agent.launch).toHaveBeenCalledTimes(3);
+    expect(jitterSample).toHaveBeenCalledOnce();
     expect(tracker.updateIssueLane).toHaveBeenCalledWith(
       candidate.id,
       "In Progress",
@@ -625,6 +642,16 @@ describe("production reconciliation scheduler", () => {
       { role: "implementation", status: "closed" },
       { role: "integrative_review", status: "closed" },
       { role: "integrative_review", status: "closed" },
+    ]);
+    const durableAttempts = opened.sqlite
+      .prepare("select id, started_at from attempts order by attempt_number")
+      .all() as Array<{ id: string; started_at: string }>;
+    expect(durableAttempts).toHaveLength(3);
+    expect(durableAttempts.every((attempt) => attempt.id.startsWith("runtime-id-"))).toBe(true);
+    expect(durableAttempts.map((attempt) => attempt.started_at)).toEqual([
+      deterministicWallIso,
+      deterministicWallIso,
+      deterministicWallIso,
     ]);
     expect(opened.sqlite.prepare("select state from issues").get()).toEqual({ state: "Done" });
     expect(opened.sqlite.prepare("select state from repository_merge_queue_entries").get()).toEqual(
@@ -867,6 +894,7 @@ describe("production reconciliation scheduler", () => {
       environment: {},
       prompt: "Implement {{ issue.title }}.",
       repositoryAdapter,
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
@@ -1059,6 +1087,7 @@ describe("production reconciliation scheduler", () => {
           verificationRecordId: request.verificationRecordId,
         })),
       },
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: { ...effectiveConfig, "workspace.root": workspaceRoot },
@@ -1158,6 +1187,7 @@ describe("production reconciliation scheduler", () => {
       database: opened.database,
       environment: {},
       prompt: "Implement {{ issue.title }}.",
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: { effectiveConfig, id: "config-1" } as never,
       tracker,
@@ -1434,6 +1464,7 @@ describe("production reconciliation scheduler", () => {
           verificationRecordId: request.verificationRecordId,
         })),
       },
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: {
@@ -1672,6 +1703,7 @@ describe("production reconciliation scheduler", () => {
       prompt: "<!-- rules:start --><!-- rules:end -->",
       repositoryAdapter,
       repositoryHostingAdapter,
+      runtimeServices: testRuntimeServices(),
       serviceRunId: "run-1",
       snapshot: {
         effectiveConfig: {

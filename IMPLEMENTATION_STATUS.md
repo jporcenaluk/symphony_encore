@@ -15,10 +15,10 @@ historical test counts are not completion evidence.
 - Traceability audit baseline: `090cd6b818097e72524d462ab03208625a94155e`.
 - Architecture decision first committed at `1302c0b5342d854ab2a62481786a60faa0733d5f`.
 - Pull request: draft PR `#3`, <https://github.com/jporcenaluk/wheelsparrow/pull/3>.
-- Current working-tree deterministic baseline: `make verify-fast` passes 176 test files and 805
+- Current working-tree deterministic baseline: `make verify-fast` passes 179 test files and 824
   tests, including the 761-row normative registry and its fail-closed CLI boundary.
 - Most recent externally verified PR checkpoint preceding this ledger revision:
-  `485732b7046d8be291e0574da69da80dd88e84e5`. Linux verification, mocked-API Playwright E2E, a
+  `9706315c469c30762f89a8a768d7132ec6193d25`. Linux verification, mocked-API Playwright E2E, a
   separate production-server integration smoke, macOS verification, supply-chain checks, image
   build, non-root/read-only container verification, Trivy, CodeQL, and the aggregate required job
   passed.
@@ -60,7 +60,7 @@ reconciliation.
 | Document | Assessment basis | Assessed revision | Registry SHA-256 | Semantic matrix SHA-256 | Implemented | Partial | Missing | External proof | Total |
 |---|---|---|---|---|---:|---:|---:|---:|---:|
 | `SPEC.md` | legacy mixed | — | `d3344f5bbd0f1400e9437cbdcfcd94fe02b28b83c523b9efcad9ddc823a76f2e` | `1137e50768cf7bceaa09882cb81d4b4913f590c29fb7b260fd5c4ef6872694ad` | 54 | 242 | 28 | 3 | 327 |
-| `TECH_STACK.md` | legacy mixed | — | `ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46` | `5544d31ffab2f3a50500a5d436cbdad00f30f390188fc9a752d4c0d481333000` | 66 | 112 | 8 | 18 | 204 |
+| `TECH_STACK.md` | legacy mixed | — | `ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46` | `1f10e40aa14adf134156d01d651a0d910c3ad35da1ba93f958e541fff2f256aa` | 66 | 112 | 8 | 18 | 204 |
 | `CICD.md` | legacy mixed | — | `046f32c7a2a93296136c15d7b6e4395055fc9a5a6e49d7b8338e19e2641800ce` | `b580643116919c9c1292ccd804a6bc6fb6e3631780aa24d5c3f77b76c500399f` | 34 | 137 | 39 | 20 | 230 |
 <!-- traceability-status:end -->
 
@@ -71,7 +71,7 @@ in size and risk, and no partial row counts as conformance.
 |---|---|---|
 | `SPEC.md` | Partial. Substantial domain, persistence, scheduler, review, merge, repair, and synthesis code exists, but sole-writer, normal-startup intent recovery, persistence gating, agent isolation, rolling budgets, complete ReviewSet guards, Control API/UI breadth, durable logs, retention, and Real Integration remain incomplete. | `docs/compliance/spec-traceability.md` |
 | `TECH_STACK.md` | Partial. The pinned TypeScript workspace and most selected libraries/builds exist, but typed Kysely boundaries, coverage, real production browser testing, dispatch-capable distribution, macOS runtime containment, and current WSL/container evidence remain incomplete. | `docs/compliance/tech-stack-traceability.md` |
-| `CICD.md` | Partial. Linux, macOS, supply-chain, CodeQL, image, container, Trivy, and aggregate PR checks pass at `485732b`, but required repository settings are absent and artifact publication, provenance, promotion, rollback, WSL, and release evidence remain incomplete. | `docs/compliance/cicd-traceability.md` |
+| `CICD.md` | Partial. Linux, macOS, supply-chain, CodeQL, image, container, Trivy, and aggregate PR checks pass at `9706315`, but required repository settings are absent and artifact publication, provenance, promotion, rollback, WSL, and release evidence remain incomplete. | `docs/compliance/cicd-traceability.md` |
 
 ## Core Conformance
 

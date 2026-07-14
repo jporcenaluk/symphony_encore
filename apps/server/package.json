@@ -31,5 +31,8 @@
     "@symphony/orchestration": "workspace:*",
     "@symphony/persistence": "workspace:*",
     "fastify": "5.10.0"
+  },
+  "devDependencies": {
+    "@symphony/test-support": "workspace:*"
   }
 }

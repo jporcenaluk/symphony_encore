@@ -71,6 +71,10 @@ importers:
       fastify:
         specifier: 5.10.0
         version: 5.10.0
+    devDependencies:
+      '@symphony/test-support':
+        specifier: workspace:*
+        version: link:../../packages/test-support
 
   apps/web:
     dependencies:
@@ -177,6 +181,9 @@ importers:
       '@symphony/domain':
         specifier: workspace:*
         version: link:../domain
+      '@symphony/orchestration':
+        specifier: workspace:*
+        version: link:../orchestration
       '@symphony/persistence':
         specifier: workspace:*
         version: link:../persistence

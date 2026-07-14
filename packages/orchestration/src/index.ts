@@ -8,6 +8,7 @@ export * from "./config/runtime.js";
 export * from "./outcomes/implementation-routing.js";
 export * from "./plan-gate.js";
 export * from "./review-specialists.js";
+export * from "./runtime-services.js";
 export * from "./scheduler/claim-recovery.js";
 export * from "./scheduler/issue-dispatch.js";
 export * from "./scheduler/persistence-safety.js";
