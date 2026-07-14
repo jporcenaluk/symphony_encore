@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentAdapterManifest } from "@symphony/contracts";
@@ -24,6 +24,7 @@ describe("required agent skill resolution", () => {
     await mkdir(path.join(homeRoot, "review"), { recursive: true });
     await writeFile(path.join(repositoryRoot, "review", "SKILL.md"), "repository review\n");
     await writeFile(path.join(homeRoot, "review", "SKILL.md"), "home review\n");
+    const resolvedSkillPath = await realpath(path.join(repositoryRoot, "review", "SKILL.md"));
 
     await expect(
       resolveRequiredSkills({ names: ["review"], roots: [repositoryRoot, homeRoot] }),
@@ -31,7 +32,7 @@ describe("required agent skill resolution", () => {
       {
         contentHash: "sha256:254fc11dc6ed2ebd6d7cb83746ea57da44aafee2e9be7063a3384bcef95da7cb",
         name: "review",
-        resolvedPath: path.join(repositoryRoot, "review", "SKILL.md"),
+        resolvedPath: resolvedSkillPath,
       },
     ]);
   });

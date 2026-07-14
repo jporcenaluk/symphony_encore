@@ -109,7 +109,8 @@ async function validatePopulation(
   const resolvedRoot = await realpath(input.workspaceRoot);
   const expected = systemJobWorkspacePath(resolvedRoot, input.job.kind, input.job.id);
   const resolved = await resolveAssignedWorkspace(resolvedRoot, population.workspacePath);
-  if (resolved !== expected || resolved !== input.job.workspace_path) {
+  const assigned = await resolveAssignedWorkspace(resolvedRoot, input.job.workspace_path);
+  if (resolved !== expected || resolved !== assigned) {
     throw new Error("workspace.assignment_mismatch");
   }
 }

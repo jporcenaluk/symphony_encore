@@ -116,13 +116,14 @@ describe("startup recovery coordination", () => {
       serviceRunId: "run-1",
       workspaceRoot: root,
     });
+    const canonicalRoot = await real(root);
 
     expect(result).toEqual({
       owned: [await real(owned)],
       quarantined: [
         {
-          from: path.resolve(stale),
-          to: path.join(root, ".quarantine", "run-1", "issue-2"),
+          from: path.join(canonicalRoot, "issue-2"),
+          to: path.join(canonicalRoot, ".quarantine", "run-1", "issue-2"),
         },
       ],
     });

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -49,8 +49,10 @@ describe("initial synthesis attempt lifecycle", () => {
   it("commits dispatch before launch and closes a typed no-change result", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "symphony-synthesis-lifecycle-"));
     directories.push(directory);
+    const canonicalWorkspaceRoot = path.join(directory, "canonical-workspaces");
     const workspaceRoot = path.join(directory, "workspaces");
-    await mkdir(workspaceRoot);
+    await mkdir(canonicalWorkspaceRoot);
+    await symlink(canonicalWorkspaceRoot, workspaceRoot, "dir");
     const opened = openDatabase(path.join(directory, "state.sqlite3"));
     await applyMigrations(opened.database);
     opened.sqlite

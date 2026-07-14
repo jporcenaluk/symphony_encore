@@ -45,6 +45,7 @@ describe("workspace path boundary", () => {
       ),
     );
     await writeFile(path.join(staleIssue, "evidence.txt"), "preserve me");
+    const canonicalRoot = await resolve(root);
 
     const result = await reconcileWorkspaceOwnership({
       owned: [
@@ -58,12 +59,12 @@ describe("workspace path boundary", () => {
     expect(result.owned).toEqual([await resolve(ownedIssue), await resolve(ownedJob)]);
     expect(result.quarantined).toEqual([
       {
-        from: path.resolve(staleIssue),
-        to: path.join(root, ".quarantine", "startup-1", "issue-2"),
+        from: path.join(canonicalRoot, "issue-2"),
+        to: path.join(canonicalRoot, ".quarantine", "startup-1", "issue-2"),
       },
       {
-        from: path.resolve(staleJob),
-        to: path.join(root, ".quarantine", "startup-1", "_system", "synthesis-job-2"),
+        from: path.join(canonicalRoot, "_system", "synthesis-job-2"),
+        to: path.join(canonicalRoot, ".quarantine", "startup-1", "_system", "synthesis-job-2"),
       },
     ]);
     await expect(access(ownedIssue)).resolves.toBeUndefined();
@@ -120,6 +121,7 @@ describe("workspace path boundary", () => {
     const alias = path.join(root, "alias");
     await mkdir(workspace, { recursive: true });
     await symlink(workspace, alias);
+    const canonicalRoot = await resolve(root);
 
     const result = await reconcileWorkspaceOwnership({
       owned: [{ workRef: "issue:1", workspacePath: workspace }],
@@ -129,8 +131,8 @@ describe("workspace path boundary", () => {
 
     expect(result.quarantined).toEqual([
       {
-        from: alias,
-        to: path.join(root, ".quarantine", "startup-1", "alias"),
+        from: path.join(canonicalRoot, "alias"),
+        to: path.join(canonicalRoot, ".quarantine", "startup-1", "alias"),
       },
     ]);
     await expect(access(workspace)).resolves.toBeUndefined();

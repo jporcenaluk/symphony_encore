@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,6 +19,7 @@ describe("integrative review evidence", () => {
     directories.push(root);
     const workspace = path.join(root, "ORG-21");
     await mkdir(workspace);
+    const canonicalWorkspace = await realpath(workspace);
     const diff = "diff --git a/src/worker.ts b/src/worker.ts\nnew behavior\n";
     const responses = [
       { exitCode: 0, stderr: "", stdout: "def5678\n" },
@@ -69,7 +70,7 @@ describe("integrative review evidence", () => {
     expect(vi.mocked(runner.run).mock.calls[0]?.[0].environment).toEqual({ PATH: "/usr/bin" });
     expect(vi.mocked(runner.run).mock.calls[5]?.[0].arguments).toEqual([
       "-C",
-      workspace,
+      canonicalWorkspace,
       "diff",
       "--binary",
       "--full-index",
