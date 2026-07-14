@@ -1,3 +1,14 @@
+import { spawn } from "node:child_process";
+
+import {
+  bindPosixSupervisor,
+  type PosixProcessGroupBinding,
+  type PosixProcessGroupOperations,
+  PosixProcessTreeError,
+  posixSupervisorInvocation,
+  terminateBoundPosixProcessGroup,
+} from "./posix-process-tree.js";
+
 const GH_ENVIRONMENT_KEYS = [
   "GH_CONFIG_DIR",
   "GH_ENTERPRISE_TOKEN",
@@ -39,17 +50,41 @@ export function createNodeGhCommandRunner(): GhCommandRunner {
         return Promise.reject(new Error("gh.invalid_output_limit"));
       }
       return new Promise((resolve, reject) => {
-        const child = spawn(request.command, [...request.arguments], {
+        const invocation =
+          process.platform === "win32"
+            ? { arguments: request.arguments, command: request.command }
+            : posixSupervisorInvocation(request.command, request.arguments);
+        const child = spawn(invocation.command, [...invocation.arguments], {
           detached: process.platform !== "win32",
           env: { ...request.environment },
-          stdio: ["pipe", "pipe", "pipe"],
+          stdio:
+            process.platform === "win32"
+              ? ["pipe", "pipe", "pipe"]
+              : ["pipe", "pipe", "pipe", "ipc"],
         });
+        let posixBinding:
+          | {
+              readonly binding: PosixProcessGroupBinding;
+              readonly operations: PosixProcessGroupOperations;
+            }
+          | undefined;
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          posixBinding = bindPosixSupervisor(child);
+        }
+        const childStderr = child.stderr;
+        const childStdin = child.stdin;
+        const childStdout = child.stdout;
+        if (childStderr === null || childStdin === null || childStdout === null) {
+          reject(new Error("gh.process_stdio_unavailable"));
+          return;
+        }
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         let outputBytes = 0;
         let failure: Error | null = null;
         let settled = false;
         let killTimer: NodeJS.Timeout | undefined;
+        let termination: Promise<void> | null = null;
 
         const finish = (operation: () => void) => {
           if (settled) return;
@@ -58,23 +93,36 @@ export function createNodeGhCommandRunner(): GhCommandRunner {
           if (killTimer) clearTimeout(killTimer);
           operation();
         };
-        const signal = (name: NodeJS.Signals) => {
+        const signalChild = (name: NodeJS.Signals) => {
           try {
-            if (child.pid !== undefined && process.platform !== "win32") {
-              process.kill(-child.pid, name);
-            } else {
-              child.kill(name);
-            }
+            child.kill(name);
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              finish(() => reject(processTreeFailure("gh", error)));
+            }
           }
         };
         const terminate = (error: Error) => {
           if (failure !== null) return;
           failure = error;
-          signal("SIGTERM");
-          killTimer = setTimeout(() => signal("SIGKILL"), 250);
-          killTimer.unref();
+          if (process.platform === "win32") {
+            signalChild("SIGTERM");
+            killTimer = setTimeout(() => signalChild("SIGKILL"), 250);
+            killTimer.unref();
+            return;
+          }
+          if (posixBinding === undefined) {
+            finish(() => reject(processTreeFailure("gh", undefined)));
+            return;
+          }
+          termination = terminateBoundPosixProcessGroup(posixBinding.binding, {
+            operations: posixBinding.operations,
+          });
+          void termination.then(
+            () => finish(() => reject(error)),
+            (terminationError: unknown) =>
+              finish(() => reject(processTreeFailure("gh", terminationError))),
+          );
         };
         const append = (target: Buffer[], chunk: Buffer) => {
           outputBytes += chunk.byteLength;
@@ -84,13 +132,14 @@ export function createNodeGhCommandRunner(): GhCommandRunner {
           }
           target.push(Buffer.from(chunk));
         };
-        child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
-        child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk));
-        child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+        childStdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+        childStderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+        childStdin.on("error", (error: NodeJS.ErrnoException) => {
           if (error.code !== "EPIPE") terminate(error);
         });
         child.once("error", (error) => finish(() => reject(error)));
-        child.once("close", (code) =>
+        child.once("close", (code) => {
+          if (termination !== null) return;
           finish(() => {
             if (failure) reject(failure);
             else {
@@ -100,14 +149,20 @@ export function createNodeGhCommandRunner(): GhCommandRunner {
                 stdout: Buffer.concat(stdout).toString("utf8"),
               });
             }
-          }),
-        );
+          });
+        });
         const timeout = setTimeout(() => terminate(new Error("gh.timeout")), request.timeoutMs);
         timeout.unref();
-        child.stdin.end(request.stdin);
+        childStdin.end(request.stdin);
       });
     },
   };
+}
+
+function processTreeFailure(prefix: "gh", cause: unknown): Error {
+  const diagnostic =
+    cause instanceof PosixProcessTreeError ? cause.code : "process_tree.signal_failed";
+  return new Error(`${prefix}.process_tree_termination_failed:${diagnostic}`, { cause });
 }
 
 export type GitHubApiErrorCode =
@@ -298,5 +353,3 @@ function nextLink(value: string | undefined): string | null {
 function isAuthenticationFailure(stderr: string): boolean {
   return /(?:401|bad credentials|authentication|not logged in)/iu.test(stderr);
 }
-
-import { spawn } from "node:child_process";

@@ -5,6 +5,14 @@ import path from "node:path";
 import type { WorkspaceRepositoryAdapter } from "./contracts.js";
 import type { GhCliApiClient } from "./gh-cli-api.js";
 import {
+  bindPosixSupervisor,
+  type PosixProcessGroupBinding,
+  type PosixProcessGroupOperations,
+  PosixProcessTreeError,
+  posixSupervisorInvocation,
+  terminateBoundPosixProcessGroup,
+} from "./posix-process-tree.js";
+import {
   issueWorkspacePath,
   resolveAssignedWorkspace,
   systemJobWorkspacePath,
@@ -241,33 +249,78 @@ export function createNodeWorkspaceCommandRunner(): WorkspaceCommandRunner {
         return Promise.reject(new Error("workspace.command_output_limit_invalid"));
       }
       return new Promise((resolve, reject) => {
-        const child = spawn(request.command, [...request.arguments], {
+        const invocation =
+          process.platform === "win32"
+            ? { arguments: request.arguments, command: request.command }
+            : posixSupervisorInvocation(request.command, request.arguments);
+        const child = spawn(invocation.command, [...invocation.arguments], {
           cwd: request.cwd,
           detached: process.platform !== "win32",
           env: { ...request.environment },
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio:
+            process.platform === "win32"
+              ? ["ignore", "pipe", "pipe"]
+              : ["ignore", "pipe", "pipe", "ipc"],
         });
+        let posixBinding:
+          | {
+              readonly binding: PosixProcessGroupBinding;
+              readonly operations: PosixProcessGroupOperations;
+            }
+          | undefined;
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          posixBinding = bindPosixSupervisor(child);
+        }
+        const childStderr = child.stderr;
+        const childStdout = child.stdout;
+        if (childStderr === null || childStdout === null) {
+          reject(new Error("workspace.command_stdio_unavailable"));
+          return;
+        }
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];
         let outputBytes = 0;
         let failure: Error | null = null;
         let settled = false;
         let killTimer: NodeJS.Timeout | undefined;
-        const signal = (name: NodeJS.Signals) => {
+        let termination: Promise<void> | null = null;
+        const finish = (operation: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (killTimer) clearTimeout(killTimer);
+          operation();
+        };
+        const signalChild = (name: NodeJS.Signals) => {
           try {
-            if (child.pid !== undefined && process.platform !== "win32")
-              process.kill(-child.pid, name);
-            else child.kill(name);
+            child.kill(name);
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              finish(() => reject(processTreeFailure("workspace.command", error)));
+            }
           }
         };
         const terminate = (error: Error) => {
           if (failure) return;
           failure = error;
-          signal("SIGTERM");
-          killTimer = setTimeout(() => signal("SIGKILL"), 250);
-          killTimer.unref();
+          if (process.platform === "win32") {
+            signalChild("SIGTERM");
+            killTimer = setTimeout(() => signalChild("SIGKILL"), 250);
+            killTimer.unref();
+            return;
+          }
+          if (posixBinding === undefined) {
+            finish(() => reject(processTreeFailure("workspace.command", undefined)));
+            return;
+          }
+          termination = terminateBoundPosixProcessGroup(posixBinding.binding, {
+            operations: posixBinding.operations,
+          });
+          void termination.then(
+            () => finish(() => reject(error)),
+            (terminationError: unknown) =>
+              finish(() => reject(processTreeFailure("workspace.command", terminationError))),
+          );
         };
         const append = (target: Buffer[], chunk: Buffer) => {
           outputBytes += chunk.byteLength;
@@ -275,16 +328,11 @@ export function createNodeWorkspaceCommandRunner(): WorkspaceCommandRunner {
             terminate(new Error("workspace.command_output_limit"));
           else target.push(Buffer.from(chunk));
         };
-        child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
-        child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk));
-        child.once("error", (error) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          if (killTimer) clearTimeout(killTimer);
-          reject(error);
-        });
+        childStdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+        childStderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+        child.once("error", (error) => finish(() => reject(error)));
         child.once("close", (code) => {
+          if (termination !== null) return;
           if (settled) return;
           settled = true;
           clearTimeout(timeout);
@@ -414,13 +462,20 @@ function allowlistedEnvironment<const Keys extends readonly string[]>(
 }
 
 function localBranchName(identifier: string): string {
-  const label =
-    identifier
-      .replace(/[^A-Za-z0-9_-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 48) || "work";
+  const normalized = identifier.replace(/[^A-Za-z0-9_-]+/gu, "-");
+  let start = 0;
+  while (normalized[start] === "-") start += 1;
+  let end = normalized.length;
+  while (end > start && normalized[end - 1] === "-") end -= 1;
+  const label = normalized.slice(start, end).slice(0, 48) || "work";
   const digest = createHash("sha256").update(identifier).digest("hex").slice(0, 12);
   return `symphony/${label}-${digest}`;
+}
+
+function processTreeFailure(prefix: "workspace.command", cause: unknown): Error {
+  const diagnostic =
+    cause instanceof PosixProcessTreeError ? cause.code : "process_tree.signal_failed";
+  return new Error(`${prefix}.process_tree_termination_failed:${diagnostic}`, { cause });
 }
 
 function systemJobLocalBranchName(kind: "repair" | "synthesis", id: string): string {
