@@ -132,7 +132,6 @@ export async function renderControlApiClient(): Promise<string> {
 }
 
 export function renderControlApiClientFromDocument(document: OpenApiDocument): string {
-  const operations: OperationDefinition[] = [];
   const seen = new Set<string>();
   for (const [operationPath, pathItem] of Object.entries(document.paths ?? {})) {
     for (const [method, operation] of Object.entries(pathItem)) {
@@ -145,13 +144,16 @@ export function renderControlApiClientFromDocument(document: OpenApiDocument): s
         throw new Error(`openapi.duplicate_operation:${definition.operationId}`);
       }
       seen.add(definition.operationId);
-      operations.push(definition);
     }
   }
   if (seen.size !== Object.keys(OPERATIONS).length) {
     throw new Error("openapi.operation_set_incomplete");
   }
 
+  // The document is an untrusted contract input: validate it above, then render
+  // exclusively from this repository-owned registry so no schema value can
+  // participate in generated TypeScript source construction.
+  const operations = Object.values(OPERATIONS);
   const methods = operations
     .map((operation) => {
       if (operation.operationId === "listEvents") {

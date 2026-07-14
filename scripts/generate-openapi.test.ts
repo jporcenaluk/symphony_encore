@@ -76,4 +76,17 @@ describe("generated OpenAPI contract", () => {
       }),
     ).toThrow("openapi.unsupported_operation:getHealth(); globalThis.compromised = true");
   });
+
+  it("renders client source independently of untrusted schema traversal order", async () => {
+    const document = JSON.parse(await renderOpenApi()) as {
+      paths: Record<string, Record<string, { operationId?: string }>>;
+    };
+    const reversed = {
+      paths: Object.fromEntries(Object.entries(document.paths).reverse()),
+    };
+
+    expect(renderControlApiClientFromDocument(reversed)).toBe(
+      renderControlApiClientFromDocument(document),
+    );
+  });
 });

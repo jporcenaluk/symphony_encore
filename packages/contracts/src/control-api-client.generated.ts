@@ -29,19 +29,19 @@ export class ControlApiClientError extends Error {
 }
 
 export interface ControlApiClient {
-  getBootstrapStatus(): Promise<BootstrapStatusResponse>;
   completeBootstrap(input: BootstrapRequest): Promise<BootstrapResponse>;
+  getBootstrapStatus(): Promise<BootstrapStatusResponse>;
+  getControlState(): Promise<ControlState>;
   getHealth(): Promise<HealthResponse>;
+  getReady(): Promise<ReadyResponse>;
+  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
   login(input: LoginRequest): Promise<LoginResponse>;
   mutateConfigurationOverride(
     key: string,
     input: ConfigurationOverrideMutation,
     csrfToken: string,
   ): Promise<ConfigurationOverrideMutationResponse>;
-  getReady(): Promise<ReadyResponse>;
   streamEvents(input?: { afterCursor?: number }): ControlEventStreamRequest;
-  listEvents(input?: { afterCursor?: number; limit?: number }): Promise<EventRecordPage>;
-  getControlState(): Promise<ControlState>;
 }
 
 export interface ControlEventStreamRequest {
@@ -75,9 +75,18 @@ export function createControlApiClient(
     return payload as T;
   };
   return {
-    getBootstrapStatus: () => request<BootstrapStatusResponse>("/api/v1/bootstrap", "GET"),
     completeBootstrap: (input) => request<BootstrapResponse>("/api/v1/bootstrap", "POST", input),
+    getBootstrapStatus: () => request<BootstrapStatusResponse>("/api/v1/bootstrap", "GET"),
+    getControlState: () => request<ControlState>("/api/v1/state", "GET"),
     getHealth: () => request<HealthResponse>("/health", "GET"),
+    getReady: () => request<ReadyResponse>("/ready", "GET"),
+    listEvents: (input = {}) => {
+      const query = new URLSearchParams();
+      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const suffix = query.size === 0 ? "" : `?${query}`;
+      return request<EventRecordPage>(`/api/v1/events${suffix}`, "GET");
+    },
     login: (input) => request<LoginResponse>("/api/v1/auth/login", "POST", input),
     mutateConfigurationOverride: (key, input, csrfToken) =>
       request<ConfigurationOverrideMutationResponse>(
@@ -86,7 +95,6 @@ export function createControlApiClient(
         input,
         csrfToken,
       ),
-    getReady: () => request<ReadyResponse>("/ready", "GET"),
     streamEvents: (input = {}) => {
       const suffix = input.afterCursor === undefined ? "" : `?after_cursor=${input.afterCursor}`;
       return {
@@ -94,13 +102,5 @@ export function createControlApiClient(
         withCredentials: true as const,
       };
     },
-    listEvents: (input = {}) => {
-      const query = new URLSearchParams();
-      if (input.afterCursor !== undefined) query.set("after_cursor", String(input.afterCursor));
-      if (input.limit !== undefined) query.set("limit", String(input.limit));
-      const suffix = query.size === 0 ? "" : `?${query}`;
-      return request<EventRecordPage>(`/api/v1/events${suffix}`, "GET");
-    },
-    getControlState: () => request<ControlState>("/api/v1/state", "GET"),
   };
 }
