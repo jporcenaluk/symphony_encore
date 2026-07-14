@@ -80,7 +80,50 @@ test("installs and verifies the pinned Linux sandbox runtime before verification
   assert.match(sandboxInstall, /dpkg-query[\s\S]*installed_version/u);
   assert.match(sandboxInstall, /test "\$installed_version" = "\$BUBBLEWRAP_VERSION"/u);
   assert.match(sandboxInstall, /test "\$\(command -v bwrap\)" = \/usr\/bin\/bwrap/u);
+  assert.match(
+    sandboxInstall,
+    /install --owner=root --group=root --mode=0644 \.github\/apparmor\/usr\.bin\.bwrap \/etc\/apparmor\.d\/symphony-encore-bwrap/u,
+  );
+  assert.match(
+    sandboxInstall,
+    /apparmor_parser --replace \/etc\/apparmor\.d\/symphony-encore-bwrap/u,
+  );
+  assert.match(
+    sandboxInstall,
+    /grep --fixed-strings --quiet "symphony-encore-bwrap" \/sys\/kernel\/security\/apparmor\/profiles/u,
+  );
+  const profileInstall = sandboxInstall.indexOf(
+    "install --owner=root --group=root --mode=0644 .github/apparmor/usr.bin.bwrap",
+  );
+  const profileLoad = sandboxInstall.indexOf(
+    "apparmor_parser --replace /etc/apparmor.d/symphony-encore-bwrap",
+  );
+  const profileVerify = sandboxInstall.indexOf(
+    'grep --fixed-strings --quiet "symphony-encore-bwrap"',
+  );
+  assert(profileInstall >= 0 && profileInstall < profileLoad && profileLoad < profileVerify);
   assert(source.indexOf(sandboxInstall) < source.indexOf("      - run: make verify-fast"));
+});
+
+test("grants only the pinned Bubblewrap executable the Ubuntu user-namespace exception", async () => {
+  const profile = await readFile(
+    path.join(process.cwd(), ".github", "apparmor", "usr.bin.bwrap"),
+    "utf8",
+  );
+
+  assert.equal(
+    profile,
+    `# Ubuntu 24.04 restricts unprivileged user namespaces to explicitly named
+# applications. Bubblewrap creates the namespace that enforces Encore's
+# subprocess sandbox, so grant only the pinned system executable that ability.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile symphony-encore-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
+`,
+  );
 });
 
 test("holds every Dependabot version ecosystem for the reviewed cooldown", async () => {
@@ -93,6 +136,88 @@ test("holds every Dependabot version ecosystem for the reviewed cooldown", async
     assert(block, `expected ${ecosystem} updater`);
     assert.match(block, /^ {4}cooldown:\n {6}default-days: 7$/mu);
   }
+});
+
+test("runs least-privilege Gitleaks scans for PR, merge queue, and release events", async () => {
+  const ci = await readFile(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf8");
+  const ciAction = ci.match(
+    / {6}- if: github\.event_name != 'merge_group'\n {8}uses: gitleaks\/gitleaks-action@[a-f0-9]{40}[^\n]*\n([\s\S]*?)(?=\n {6}- )/u,
+  )?.[0];
+  assert(ciAction, "expected the supported-event Gitleaks action in ci.yml");
+  assert.match(ciAction, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/u);
+  assert.match(ciAction, /GITLEAKS_ENABLE_COMMENTS: "false"/u);
+  assert.match(
+    ci,
+    /supply-chain:[\s\S]*?permissions:\n {6}contents: read[^\n]*\n {6}pull-requests: read/u,
+  );
+  const mergeScan = ci.match(
+    / {6}- name: Scan merge-group commits with pinned Gitleaks\n([\s\S]*?)(?=\n {6}- )/u,
+  )?.[0];
+  assert(mergeScan, "expected a direct merge-group Gitleaks scan");
+  assert.match(mergeScan, /if: github\.event_name == 'merge_group'/u);
+  assert.match(mergeScan, /GITLEAKS_VERSION: 8\.30\.1/u);
+  assert.match(
+    mergeScan,
+    /GITLEAKS_ARCHIVE_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb/u,
+  );
+  assert.match(mergeScan, /\[\[ "\$BASE_SHA" =~ \^\[a-f0-9\]\{40\}\$ \]\]/u);
+  assert.match(mergeScan, /\[\[ "\$HEAD_SHA" =~ \^\[a-f0-9\]\{40\}\$ \]\]/u);
+  assert.match(mergeScan, /curl --fail --location --silent --show-error/u);
+  assert.match(
+    mergeScan,
+    /https:\/\/github\.com\/gitleaks\/gitleaks\/releases\/download\/v\$\{GITLEAKS_VERSION\}\/gitleaks_\$\{GITLEAKS_VERSION\}_linux_x64\.tar\.gz/u,
+  );
+  assert.match(mergeScan, /sha256sum --check/u);
+  assert.match(
+    mergeScan,
+    /tar --extract --gzip --file "\$archive" --directory "\$RUNNER_TEMP" gitleaks/u,
+  );
+  assert.match(
+    mergeScan,
+    /test "\$\("\$\{RUNNER_TEMP\}\/gitleaks" version\)" = "\$GITLEAKS_VERSION"/u,
+  );
+  assert.match(
+    mergeScan,
+    /"\$\{RUNNER_TEMP\}\/gitleaks" git[\s\S]*--log-opts="\$\{BASE_SHA\}\.\.\$\{HEAD_SHA\}"/u,
+  );
+
+  const release = await readFile(
+    path.join(process.cwd(), ".github", "workflows", "release.yml"),
+    "utf8",
+  );
+  assert.match(
+    release,
+    /secret-scan:\n {4}name: secret scan\n {4}permissions:\n {6}contents: read/u,
+  );
+  const releaseScan = release.match(
+    / {6}- name: Scan the immutable release commit with pinned Gitleaks\n([\s\S]*?)(?=\n {2}[a-z]|\n {6}- )/u,
+  )?.[0];
+  assert(releaseScan, "expected the release job to scan its exact commit with the pinned CLI");
+  assert.match(releaseScan, /SHA: \$\{\{ github\.sha \}\}/u);
+  assert.match(releaseScan, /GITLEAKS_VERSION: 8\.30\.1/u);
+  assert.match(
+    releaseScan,
+    /GITLEAKS_ARCHIVE_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb/u,
+  );
+  assert.match(releaseScan, /\[\[ "\$SHA" =~ \^\[a-f0-9\]\{40\}\$ \]\]/u);
+  assert.match(releaseScan, /curl --fail --location --silent --show-error/u);
+  assert.match(
+    releaseScan,
+    /https:\/\/github\.com\/gitleaks\/gitleaks\/releases\/download\/v\$\{GITLEAKS_VERSION\}\/gitleaks_\$\{GITLEAKS_VERSION\}_linux_x64\.tar\.gz/u,
+  );
+  assert.match(releaseScan, /sha256sum --check/u);
+  assert.match(
+    releaseScan,
+    /tar --extract --gzip --file "\$archive" --directory "\$RUNNER_TEMP" gitleaks/u,
+  );
+  assert.match(
+    releaseScan,
+    /test "\$\("\$\{RUNNER_TEMP\}\/gitleaks" version\)" = "\$GITLEAKS_VERSION"/u,
+  );
+  assert.match(releaseScan, /--log-opts="\$\{SHA\}\^!"/u);
+  assert.match(release, /promote:[\s\S]*?needs: \[secret-scan\]/u);
+  const promote = release.match(/\n {2}promote:\n([\s\S]*)/u)?.[0] ?? "";
+  assert.doesNotMatch(promote, /gitleaks\/gitleaks-action/u);
 });
 
 test("rejects bare pnpm in root package scripts", async () => {

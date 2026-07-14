@@ -1,0 +1,9 @@
+# Ubuntu 24.04 restricts unprivileged user namespaces to explicitly named
+# applications. Bubblewrap creates the namespace that enforces Encore's
+# subprocess sandbox, so grant only the pinned system executable that ability.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile symphony-encore-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
