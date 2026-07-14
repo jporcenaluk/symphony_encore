@@ -64,6 +64,16 @@ test("declares the required workspace and Make target contract", () => {
   ]);
 });
 
+test("keeps generated verification artifacts outside the Biome source set", async () => {
+  const config = JSON.parse(await readFile(path.join(process.cwd(), "biome.json"), "utf8")) as {
+    files: { includes: string[] };
+  };
+
+  assert.ok(config.files.includes.includes("!!**/playwright-report"));
+  assert.ok(config.files.includes.includes("!!**/test-results"));
+  assert.ok(config.files.includes.includes("!!**/artifacts"));
+});
+
 test("installs and verifies the pinned Linux sandbox runtime before verification", async () => {
   const source = await readFile(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf8");
   const sandboxInstall = source.match(

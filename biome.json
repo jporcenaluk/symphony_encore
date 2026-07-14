@@ -20,6 +20,8 @@
       "!!**/dist",
       "!!**/node_modules",
       "!!**/playwright-report",
+      "!!**/test-results",
+      "!!**/artifacts",
       "!!packages/contracts/generated"
     ]
   },

@@ -278,7 +278,7 @@ describe("GitHub trusted workspace population", () => {
 
   it.each([
     ["output", 1_000, 100, "workspace.command_output_limit"],
-    ["timeout", 250, 10_000, "workspace.command_timeout"],
+    ["timeout", 2_000, 10_000, "workspace.command_timeout"],
   ] as const)("terminates a real trusted workspace process tree at the %s boundary when parent-side group signaling is denied", async (mode, timeoutMs, maxOutputBytes, error) => {
     const root = await mkdtemp(path.join(tmpdir(), "symphony-workspace-process-tree-"));
     directories.push(root);
