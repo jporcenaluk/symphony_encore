@@ -1,27 +1,27 @@
 # Symphony Encore implementation status
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 This ledger records current verified coverage. The normative sources remain `SPEC.md`,
-`TECH_STACK.md`, and `CICD.md`; the exhaustive source-level assessment lives in
-`docs/compliance/`. A checked Core item means its complete named behavior has direct evidence at the
-stated revision. File existence, authored workflows, fake-adapter success, and historical test
-counts are not completion evidence.
+`TECH_STACK.md`, and `CICD.md`; the exhaustive source-level audit baseline lives in
+`docs/compliance/`. This ledger records subsequent evidence while those matrices await a complete
+status-and-evidence reconciliation. A checked Core item means its complete named behavior has direct
+evidence at the stated revision. File existence, authored workflows, fake-adapter success, and
+historical test counts are not completion evidence.
 
 ## Current state
 
 - Branch: `feat/symphony-encore-core`.
-- Audited runtime revision: `090cd6b818097e72524d462ab03208625a94155e`.
-- Architecture decision first committed at `1302c0b5342d854ab2a62481786a60faa0733d5f`; the local feature
-  branch is documentation-ahead of the pull-request head until the next intentional push.
+- Traceability audit baseline: `090cd6b818097e72524d462ab03208625a94155e`.
+- Architecture decision first committed at `1302c0b5342d854ab2a62481786a60faa0733d5f`.
 - Pull request: draft PR `#3`, <https://github.com/jporcenaluk/wheelsparrow/pull/3>.
-- Pull-request head: `090cd6b818097e72524d462ab03208625a94155e`.
-- Local deterministic baseline at the audited runtime revision: `make verify-fast` passed 161 test
-  files and 581 tests. The current working tree passes the repaired Corepack command graph with 163
-  files and 617 tests, lint, Markdown, repository policy, strict TypeScript, generated contract,
-  OpenAPI/client drift, and `make build`; exact-head remote proof remains pending.
-- Remote state at that revision: CodeQL passed; the main CI workflow failed; the required aggregate
-  check is not green.
+- Current verified implementation head: `810dd025e1a3661ac734035defeafedaf7a299f5`.
+- Current deterministic baseline: `make verify-fast` passes 175 test files and 767 tests, including
+  the 761-row normative registry and its fail-closed CLI boundary.
+- Latest revision with all applicable PR checks green: `810dd025e1a3661ac734035defeafedaf7a299f5`.
+  Linux verification, integration, production browser E2E, macOS verification, supply-chain checks,
+  image build, non-root/read-only container verification, Trivy, CodeQL, and the aggregate required
+  job passed.
 - Core Conformance: not achieved.
 - Real Integration Profile: not run.
 - Production readiness: false.
@@ -44,7 +44,13 @@ to the schemas, enums, transitions, configuration tables, required surfaces, ada
 event/error mappings, and algorithm invariants that the documents separately declare normative.
 Each row records implementation, direct evidence, status, remaining work, dependency, and owner.
 
-The normalized baseline contains 761 independently statusable contracts:
+Reviewed machine registries now bind every row to the exact raw source-document digest, cited source
+fragment, RFC strength, statement, semantic kind, applicability, and aggregate membership. The
+canonical validator rejects semantic reassignment and reports 761 requirements.
+
+The normalized baseline contains 761 source-ordered registry rows with explicit
+aggregate/profile/reference relationships. At the `090cd6b` traceability audit baseline, the rows
+were categorized as follows:
 
 - `SPEC.md`: 54 implemented, 242 partial, 28 missing, and 3 awaiting external proof out of 327;
 - `TECH_STACK.md`: 66 implemented, 112 partial, 8 missing, and 18 awaiting external proof out of
@@ -54,22 +60,24 @@ The normalized baseline contains 761 independently statusable contracts:
 These counts describe requirement disposition, not percentage completion: rows differ substantially
 in size and risk, and no partial row counts as conformance.
 
-| Document | Current assessment | Matrix |
+| Document | Current assessment | Audit-baseline matrix |
 |---|---|---|
 | `SPEC.md` | Partial. Substantial domain, persistence, scheduler, review, merge, repair, and synthesis code exists, but sole-writer, normal-startup intent recovery, persistence gating, agent isolation, rolling budgets, complete ReviewSet guards, Control API/UI breadth, durable logs, retention, and Real Integration remain incomplete. | `docs/compliance/spec-traceability.md` |
 | `TECH_STACK.md` | Partial. The pinned TypeScript workspace and most selected libraries/builds exist, but typed Kysely boundaries, coverage, real production browser testing, dispatch-capable distribution, macOS runtime containment, and current WSL/container evidence remain incomplete. | `docs/compliance/tech-stack-traceability.md` |
-| `CICD.md` | Partial. Workflows and release machinery are authored, but clean-runner CI is failing, required repository settings are absent, and artifact publication, provenance, promotion, rollback, platform, and release evidence have not passed remotely. | `docs/compliance/cicd-traceability.md` |
+| `CICD.md` | Partial. Linux, macOS, supply-chain, CodeQL, image, container, Trivy, and aggregate PR checks pass at `810dd02`, but required repository settings are absent and artifact publication, provenance, promotion, rollback, WSL, and release evidence remain incomplete. | `docs/compliance/cicd-traceability.md` |
 
 ## Core Conformance
 
 The exact 35-ID registry is now a typed, SPEC-bound evidence contract in
 `packages/contracts/src/conformance.ts`. Its tests bind the seven headings, bullet order, normalized
-requirement hashes, required platforms, and the four selected Core adapter kinds. This is a trust
-boundary for future evidence, not proof that the cases ran: the canonical producer and fail-closed
-reporter remain pending. At present, only `C-DUR-03` has direct behavioral evidence strong enough to
-retain a checked status.
+requirement hashes, required platforms, and the four selected Core adapter kinds. The canonical
+producer now creates same-invocation, exact-repository evidence, and the reporter rejects prose,
+forged objects, stale provenance, and caller-selected output paths. This is still an intentionally
+incomplete foundation: all 35 cases remain missing and unmapped, and both completion booleans remain
+false.
 
-- [x] `C-DUR-03` Process ownership verification, tree termination, and interrupted-attempt closure.
+- [ ] `C-DUR-03` — focused process-ownership behavior exists, but the canonical producer does not yet
+  map and execute the complete case as immutable Core evidence.
 - [ ] `C-WF-01` through `C-WF-07` — workflow/configuration compositions remain incomplete.
 - [ ] `C-DUR-01`, `C-DUR-02`, `C-DUR-04`, and `C-DUR-05` — sole writer, complete restart,
   normal-startup intent recovery, and mutation shutdown remain incomplete.
@@ -104,11 +112,10 @@ failure classes.
    Guard Decision/ReviewSet behavior are not implemented.
 8. The Control API, accessible operator UI, durable LogRecord history, notifications, quality
    metrics, retention, and tombstones are incomplete.
-9. The current conformance reporter still derives status from ledger prose and produces an
-   output-formatting regression after an incomplete run; the new typed evidence contract is not yet
-   connected to canonical execution or reporting.
-10. Clean-runner package-manager, workflow-shell, and image-smoke defects are repaired in the
-    current working tree, but none has fresh exact-head remote proof yet.
+9. The conformance producer has no immutable selector execution or hosted attestation path yet; all
+   35 Core cases therefore remain explicitly unmapped.
+10. Normative rows have reviewed machine identities but no exhaustive per-row machine-evidence
+    mapping, so normative coverage remains unproven.
 
 ## Current verification evidence
 
@@ -119,10 +126,13 @@ failure classes.
 | 2026-07-13 | `090cd6b` | GitHub CodeQL | Passed | Remote CodeQL workflow at PR head |
 | 2026-07-13 | `090cd6b` | GitHub CI | Failed | Corepack/pnpm runner recursion, actionlint/ShellCheck, image smoke, and aggregate required check |
 | 2026-07-13 | `090cd6b` | `make conformance` | Correctly exited nonzero, but report trust/format defects remain | Incomplete Core report; not conformance evidence |
+| 2026-07-14 | `a37874f` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verify/integration/E2E, macOS verify, supply chain, image/container/Trivy, CodeQL, and aggregate required |
+| 2026-07-14 | `810dd02` | `make verify-fast` | Passed: 175 files, 767 tests | Includes exact 761-row normative validation and CLI failure-path verification |
+| 2026-07-14 | `810dd02` | `make conformance` | Correctly exits nonzero and publishes a deterministic private report | Trusted incomplete evidence; 35 missing and 35 unmapped; both completion booleans false |
+| 2026-07-14 | `810dd02` | GitHub PR checks | Applicable PR gates passed; main-only publication skipped by design | Linux verify/integration/E2E, macOS verify, supply chain, image/container/Trivy, CodeQL, and aggregate required |
 
-Not yet proven at one exact revision: full `make verify`, clean-checkout `make conformance`, current
-production-server browser E2E, local or remote non-root read-only container execution, macOS and WSL
-release smoke, mutation thresholds, Real Integration, successful Linux/macOS PR workflows, and
+Not yet proven at one exact revision: full local `make verify`, a successful `make conformance` with
+mapped evidence, WSL release smoke, mutation thresholds, Real Integration, and
 publication/promotion/rollback.
 
 ## External repository and release state
@@ -131,9 +141,10 @@ publication/promotion/rollback.
 - No branch protection or repository ruleset currently enforces the required checks or merge queue.
 - Merge commits and rebases are enabled alongside squash merges; this does not satisfy `CICD.md`.
 - Auto-merge and update-branch support are disabled.
-- No exact-revision artifact, SBOM, provenance, promotion-without-rebuild, or rollback proof has
-  completed remotely.
-- PR `#3` remains draft and its current title is not Conventional Commit compliant.
+- Only diagnostic workflow artifacts have been emitted. No deployable product artifact, SBOM,
+  provenance, promotion-without-rebuild, or rollback proof has completed remotely.
+- PR `#3` remains draft; its title, `feat: implement Symphony Encore control plane`, follows the
+  repository's Conventional Commit pattern.
 
 ## Completion rule
 
