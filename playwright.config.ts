@@ -15,7 +15,7 @@ export default defineConfig({
   },
   webServer: {
     command:
-      "pnpm --filter @symphony/web build && pnpm --filter @symphony/web exec vite preview --host 127.0.0.1 --port 4173",
+      "corepack pnpm --filter @symphony/web build && corepack pnpm --filter @symphony/web exec vite preview --host 127.0.0.1 --port 4173",
     port: 4173,
     reuseExistingServer: false,
     timeout: 120_000,

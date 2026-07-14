@@ -262,6 +262,70 @@ test("rejects bare pnpm in root package scripts", async () => {
   }
 });
 
+test("rejects bare pnpm in the Playwright web server command", async () => {
+  const commonFiles = {
+    "package.json": JSON.stringify({
+      engines: { node: ">=24.0.0 <25" },
+      packageManager: "pnpm@11.12.0",
+    }),
+    ".node-version": "24.17.0\n",
+    Makefile: validMakefile(),
+    "pnpm-workspace.yaml": `packages:\n${REQUIRED_WORKSPACES.map((item) => `  - ${item}`).join("\n")}\n`,
+  };
+  const bareRoot = await fixture({
+    ...commonFiles,
+    "playwright.config.ts": `export default {
+  webServer: {
+    command: "pnpm --filter @symphony/web build && pnpm --filter @symphony/web exec vite preview",
+  },
+};\n`,
+  });
+  const qualifiedRoot = await fixture({
+    ...commonFiles,
+    "playwright.config.ts": `export default {
+  webServer: {
+    command: "corepack pnpm --filter @symphony/web build && corepack pnpm --filter @symphony/web exec vite preview",
+  },
+};\n`,
+  });
+  const variableRoot = await fixture({
+    ...commonFiles,
+    "playwright.config.ts": `const command = \`pnpm --filter @symphony/web build\`;
+export default { webServer: [{ command }] };\n`,
+  });
+  const arrayRoot = await fixture({
+    ...commonFiles,
+    "playwright.config.ts": `export default {
+  webServer: [{ command: "corepack pnpm --filter @symphony/web build" }, { command: \`pnpm --filter @symphony/web exec vite preview\` }],
+};\n`,
+  });
+  const unrelatedRoot = await fixture({
+    ...commonFiles,
+    "playwright.config.ts": `const unrelated = { command: "pnpm audit" };
+export default { webServer: { command: "corepack pnpm exec vite preview" }, unrelated };\n`,
+  });
+
+  const bareViolations = await validateRepository(bareRoot);
+  const qualifiedViolations = await validateRepository(qualifiedRoot);
+  const variableViolations = await validateRepository(variableRoot);
+  const arrayViolations = await validateRepository(arrayRoot);
+  const unrelatedViolations = await validateRepository(unrelatedRoot);
+  assert(
+    bareViolations.includes("playwright.config.ts web server must invoke corepack pnpm"),
+    JSON.stringify(bareViolations),
+  );
+  assert(
+    !qualifiedViolations.includes("playwright.config.ts web server must invoke corepack pnpm"),
+    JSON.stringify(qualifiedViolations),
+  );
+  for (const violations of [variableViolations, arrayViolations, unrelatedViolations]) {
+    assert(
+      violations.includes("playwright.config.ts web server must invoke corepack pnpm"),
+      JSON.stringify(violations),
+    );
+  }
+});
+
 test("requires fail-closed release preflights and failure-safe publication ordering", async () => {
   const root = await fixture({
     "package.json": JSON.stringify({

@@ -79,9 +79,26 @@ test.beforeEach(async ({ page }) => {
 
 test("operates the protected console without executing hostile content", async ({ page }) => {
   const browserErrors: string[] = [];
+  const expectedBootstrapErrors: string[] = [];
+  const failedResponses: Array<{ status: number; url: string }> = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.status() >= 400) {
+      failedResponses.push({ status: response.status(), url: response.url() });
+    }
+  });
   page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
+    if (message.type() !== "error") return;
+    const location = message.location();
+    if (
+      location.url.endsWith("/api/v1/bootstrap") &&
+      message.text() ===
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ) {
+      expectedBootstrapErrors.push(message.text());
+      return;
+    }
+    browserErrors.push(message.text());
   });
 
   await page.goto("/operations");
@@ -106,6 +123,10 @@ test("operates the protected console without executing hostile content", async (
   await expect(page.getByRole("link", { exact: true, name: "Operations" })).toBeVisible();
   await expect(page.getByRole("link", { exact: true, name: "History" })).toBeVisible();
   await expect(page.getByRole("link", { exact: true, name: "Settings" })).toBeVisible();
+  expect(failedResponses).toEqual([{ status: 404, url: "http://127.0.0.1:4173/api/v1/bootstrap" }]);
+  expect(expectedBootstrapErrors).toEqual([
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  ]);
   expect(browserErrors).toEqual([]);
 });
 

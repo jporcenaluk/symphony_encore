@@ -206,10 +206,9 @@ function workflowJobSource(source: string, name: string): string | undefined {
 
 function hasUnqualifiedPnpmToken(command: string): boolean {
   const source = command.replace(/\\\r?\n/gu, " ");
-  for (const match of source.matchAll(/(^|[\s;&|()])pnpm(?=$|[\s;&|()])/gu)) {
-    const tokenIndex = (match.index ?? 0) + (match[1]?.length ?? 0);
-    const prefix = source.slice(0, tokenIndex);
-    if (!/(?:^|[\s;&|()])corepack[ \t]+$/u.test(prefix)) return true;
+  for (const match of source.matchAll(/\bpnpm\b/gu)) {
+    const prefix = source.slice(0, match.index ?? 0);
+    if (!/\bcorepack[ \t]+$/u.test(prefix)) return true;
   }
   return false;
 }
@@ -220,6 +219,7 @@ export async function validateRepository(root: string): Promise<string[]> {
   const nodeVersion = (await optionalRead(path.join(root, ".node-version")))?.trim();
   const makefile = await optionalRead(path.join(root, "Makefile"));
   const dockerfile = await optionalRead(path.join(root, "Dockerfile"));
+  const playwrightConfig = await optionalRead(path.join(root, "playwright.config.ts"));
   const workspace = await optionalRead(path.join(root, "pnpm-workspace.yaml"));
 
   if (nodeVersion !== "24.17.0") {
@@ -235,6 +235,9 @@ export async function validateRepository(root: string): Promise<string[]> {
     if (hasUnqualifiedPnpmToken(command)) {
       violations.push(`root script ${name} must invoke corepack pnpm`);
     }
+  }
+  if (playwrightConfig !== undefined && hasUnqualifiedPnpmToken(playwrightConfig)) {
+    violations.push("playwright.config.ts web server must invoke corepack pnpm");
   }
 
   if (dockerfile !== undefined) {
