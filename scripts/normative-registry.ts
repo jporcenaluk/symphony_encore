@@ -41,6 +41,26 @@ export interface ReviewedNormativeRegistry {
   readonly total_requirements: number;
 }
 
+export interface ReviewedNormativeCatalogRequirement {
+  readonly id: string;
+  readonly source: string;
+  readonly statement: string;
+  readonly strength: NormativeStrength;
+}
+
+export interface ReviewedNormativeCatalogDocument {
+  readonly document: "SPEC" | "TECH_STACK" | "CICD";
+  readonly registry_sha256: string;
+  readonly requirements: readonly ReviewedNormativeCatalogRequirement[];
+}
+
+export interface ReviewedNormativeCatalog {
+  readonly documents: readonly ReviewedNormativeCatalogDocument[];
+  readonly kind: "reviewed_normative_catalog";
+  readonly schema_version: 1;
+  readonly total_requirements: number;
+}
+
 type NormativeStrength = (typeof STRENGTHS)[number];
 type RequirementKind = (typeof KINDS)[number];
 type Applicability = (typeof APPLICABILITY)[number];
@@ -54,6 +74,11 @@ interface NormativeRequirement {
   readonly source_fragment_sha256: string;
   readonly statement: string;
   readonly strength: NormativeStrength;
+}
+
+interface ValidatedNormativeDocument {
+  readonly catalog: ReviewedNormativeCatalogDocument;
+  readonly summary: ReviewedNormativeDocument;
 }
 
 const DOCUMENTS: readonly DocumentContract[] = [
@@ -98,7 +123,7 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function readBoundedRegularFile(
+export async function readBoundedRegularFile(
   root: string,
   relativePath: string,
   maximumBytes: number,
@@ -161,7 +186,7 @@ async function readBoundedRegularFile(
   }
 }
 
-function hasDuplicateJsonKeys(source: string): boolean {
+export function hasDuplicateJsonKeys(source: string): boolean {
   let offset = 0;
   let duplicate = false;
 
@@ -392,7 +417,7 @@ function assertAcyclic(requirements: readonly NormativeRequirement[], document: 
 async function validateRegistry(
   root: string,
   contract: DocumentContract,
-): Promise<ReviewedNormativeDocument> {
+): Promise<ValidatedNormativeDocument> {
   const [sourceBuffer, registryBuffer] = await Promise.all([
     readBoundedRegularFile(
       root,
@@ -463,23 +488,43 @@ async function validateRegistry(
     );
   }
   return Object.freeze({
-    document: contract.document,
-    registry_file: contract.registry,
-    registry_sha256: contract.registrySha256,
-    requirement_count: requirements.length,
-    source_file: contract.file,
-    source_sha256: contract.sourceSha256,
-    status: contract.status,
-    strengths: Object.freeze({ ...contract.strengths }),
+    catalog: Object.freeze({
+      document: contract.document,
+      registry_sha256: contract.registrySha256,
+      requirements: Object.freeze(
+        requirements.map((requirement) =>
+          Object.freeze({
+            id: requirement.id,
+            source: requirement.source,
+            statement: requirement.statement,
+            strength: requirement.strength,
+          }),
+        ),
+      ),
+    }),
+    summary: Object.freeze({
+      document: contract.document,
+      registry_file: contract.registry,
+      registry_sha256: contract.registrySha256,
+      requirement_count: requirements.length,
+      source_file: contract.file,
+      source_sha256: contract.sourceSha256,
+      status: contract.status,
+      strengths: Object.freeze({ ...contract.strengths }),
+    }),
   });
+}
+
+async function validateDocuments(root: string): Promise<readonly ValidatedNormativeDocument[]> {
+  return Object.freeze(
+    await Promise.all(DOCUMENTS.map((document) => validateRegistry(root, document))),
+  );
 }
 
 export async function loadReviewedNormativeRegistry(
   root = process.cwd(),
 ): Promise<ReviewedNormativeRegistry> {
-  const documents = Object.freeze(
-    await Promise.all(DOCUMENTS.map((document) => validateRegistry(root, document))),
-  );
+  const documents = Object.freeze((await validateDocuments(root)).map(({ summary }) => summary));
   const registry = Object.freeze({
     documents,
     kind: "reviewed_normative_registry" as const,
@@ -491,6 +536,21 @@ export async function loadReviewedNormativeRegistry(
   });
   REVIEWED_REGISTRIES.add(registry);
   return registry;
+}
+
+export async function loadReviewedNormativeCatalog(
+  root = process.cwd(),
+): Promise<ReviewedNormativeCatalog> {
+  const documents = Object.freeze((await validateDocuments(root)).map(({ catalog }) => catalog));
+  return Object.freeze({
+    documents,
+    kind: "reviewed_normative_catalog" as const,
+    schema_version: 1 as const,
+    total_requirements: documents.reduce(
+      (total, document) => total + document.requirements.length,
+      0,
+    ),
+  });
 }
 
 export function isReviewedNormativeRegistry(value: unknown): value is ReviewedNormativeRegistry {

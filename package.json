@@ -15,7 +15,7 @@
     "dev": "node scripts/dev-supervisor.ts",
     "format": "biome check --write .",
     "image": "docker build --tag symphony-encore:verify .",
-    "lint": "biome check . && markdownlint-cli2 && node scripts/repository-policy.ts && corepack pnpm contracts:check && corepack pnpm openapi:check && corepack pnpm normative:cli-check && corepack pnpm normative:check",
+    "lint": "biome check . && markdownlint-cli2 && node scripts/repository-policy.ts && corepack pnpm contracts:check && corepack pnpm openapi:check && corepack pnpm normative:cli-check && corepack pnpm normative:check && corepack pnpm traceability:check",
     "normative:check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/normative-registry-cli.ts --check",
     "normative:cli-check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/verify-normative-registry-cli.ts",
     "openapi:check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/generate-openapi.ts --check",
@@ -26,6 +26,8 @@
     "test:e2e": "playwright test",
     "test:integration": "corepack pnpm build && node --import ./scripts/typescript-source-loader.mjs scripts/verify-production-runtime.ts",
     "test:coverage": "vitest run --coverage",
+    "traceability:check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/traceability-status-cli.ts --check",
+    "traceability:generate": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/traceability-status-cli.ts --write",
     "typecheck": "corepack pnpm -r --if-present typecheck && tsc --noEmit -p tsconfig.scripts.json",
     "verify-fast": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test"
   },

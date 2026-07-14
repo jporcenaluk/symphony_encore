@@ -1,5 +1,7 @@
 # TECH_STACK.md traceability matrix
 
+<!-- traceability-metadata {"schema_version":1,"document":"TECH_STACK","assessment":{"kind":"legacy_mixed","revision":null}} -->
+
 This matrix expands every `MUST`, `MUST NOT`, and `SHOULD` in `TECH_STACK.md`. It also gives each
 unkeyworded normative runtime, package, technology, version, image, command, and deferred-choice
 contract an independently statusable row. RFC 2119 boilerplate, examples, rationale, optional `MAY`
@@ -220,8 +222,9 @@ need a supported host, registry, provider, or GitHub run remain **External proof
 
 ## Assessment summary
 
-The selected technologies and repository skeleton are mostly present, but the package responsibility
-contract is not yet satisfied: orchestration still lives in `apps/server`, persistence typing is weak,
-and the notification, metrics, and durable-log responsibilities are incomplete. Local source presence
-also does not prove supported-host, CI, container, dependency-update, or deferred-replacement claims.
-Those rows remain Partial or External proof until direct evidence exists.
+This is a `legacy_mixed` planning snapshot, not current exact-revision evidence. At the revisions
+represented by its rows, the selected technologies and repository skeleton were mostly present, but
+the package-responsibility contract remained incomplete: orchestration still lived in `apps/server`,
+persistence typing was weak, and notification, metrics, and durable-log responsibilities were
+incomplete. Local source presence does not prove supported-host, CI, container, dependency-update, or
+deferred-replacement claims.

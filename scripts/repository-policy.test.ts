@@ -74,6 +74,38 @@ test("keeps generated verification artifacts outside the Biome source set", asyn
   assert.ok(config.files.includes.includes("!!**/artifacts"));
 });
 
+test("keeps editorial traceability outside the conformance dependency closure", async () => {
+  const root = process.cwd();
+  const visited = new Set<string>();
+  const pending = ["scripts/conformance-command.ts"];
+  const relativeImport =
+    /\b(?:import|export)\s+(?:type\s+)?(?:[^;"']*?\s+from\s+)?["'](\.[^"']+)["']/gu;
+  const relativeCall = /\b(?:import|require)\(\s*["'](\.[^"']+)["']\s*\)/gu;
+  const computedCall = /\b(?:import|require)\(\s*(?!["'])/u;
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (file === undefined || visited.has(file)) continue;
+    visited.add(file);
+    const source = await readFile(path.join(root, file), "utf8");
+    assert.doesNotMatch(source, computedCall, `${file} must not compute a dependency`);
+    for (const pattern of [relativeImport, relativeCall]) {
+      pattern.lastIndex = 0;
+      for (const match of source.matchAll(pattern)) {
+        const specifier = match[1];
+        if (specifier === undefined) continue;
+        const resolved = path
+          .normalize(path.join(path.dirname(file), specifier))
+          .replace(/\.js$/u, ".ts");
+        if (resolved.startsWith("scripts/")) pending.push(resolved);
+      }
+    }
+  }
+
+  assert(visited.has("scripts/conformance-report.ts"));
+  assert(visited.has("scripts/conformance-evidence.ts"));
+  assert(!visited.has("scripts/traceability-status.ts"));
+});
+
 test("installs and verifies the pinned Linux sandbox runtime before verification", async () => {
   const source = await readFile(path.join(process.cwd(), ".github", "workflows", "ci.yml"), "utf8");
   const sandboxInstall = source.match(

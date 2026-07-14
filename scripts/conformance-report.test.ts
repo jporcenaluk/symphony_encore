@@ -185,6 +185,24 @@ describe("fail-closed conformance report", () => {
     });
   });
 
+  it("never treats editorial traceability status as conformance evidence", async () => {
+    const report = buildConformanceReport({
+      editorialTraceability: {
+        implemented: 761,
+        semantic_matrix_sha256: "forged",
+      },
+      evidence: await produceTrustedEvidence(await privateDirectory()),
+      implementationVersion: "0.0.0",
+      normativeRegistry: await loadReviewedNormativeRegistry(),
+    } as Parameters<typeof buildConformanceReport>[0] & {
+      editorialTraceability: unknown;
+    });
+
+    expect(report.results.normative_coverage.status).toBe("unproven");
+    expect(report.core_conformance).toBe(false);
+    expect(report.production_ready).toBe(false);
+  });
+
   it("serializes the same evidence to byte-identical repository-formatted JSON", async () => {
     const evidence = await produceTrustedEvidence(await privateDirectory());
     const firstRegistry = await loadReviewedNormativeRegistry();

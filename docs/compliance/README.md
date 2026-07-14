@@ -21,17 +21,25 @@ semantic aggregate membership, and the complete 761-row inventory. Each fragment
 exact cited line ranges in textual order after CRLF-to-LF normalization, retains their normalized
 line terminators, and adds no separator between disjoint ranges.
 
+Run `corepack pnpm traceability:check` to verify the Markdown matrices against that catalog and to
+check their assessment metadata, editorial status counts, semantic matrix digests, and generated
+summary in `IMPLEMENTATION_STATUS.md`. Use `corepack pnpm traceability:generate` only to refresh the
+generated summary after an intentional reviewed matrix edit. The generator uses crash-atomic
+replacement and rejects input or status edits it observes before replacement, but POSIX files do
+not provide content compare-and-swap. Serialize this maintenance command with other editors, review
+its diff, and run the non-mutating `traceability:check`; CI relies only on the check operation.
+
 ## Interpretation
 
 The source documents remain normative. These matrices do not replace them.
 
-Each source-ordered, independently statusable requirement has:
+Each source-ordered requirement has:
 
 - a stable traceability ID;
 - its source section and line;
 - RFC 2119 strength;
 - a concise statement that preserves the source meaning;
-- current status;
+- an editorial status for the matrix's declared assessment basis;
 - implementation location;
 - direct test or operational evidence;
 - remaining work;
@@ -57,7 +65,8 @@ declare normative. RFC boilerplate, examples, rationale, and non-normative refer
 
 ## Status values
 
-`implemented` means direct evidence currently proves the complete requirement.
+In an `exact_revision` assessment, `implemented` means direct evidence at the declared revision
+proves the complete requirement.
 
 `partial` means useful implementation or evidence exists, but at least one required behavior or
 composition is missing.
@@ -69,6 +78,18 @@ provider, repository-setting, publication, release, or integration evidence that
 
 An `implemented` row may regress to `partial` when later integration exposes a missing composition.
 Rows are promoted only from passing exact-revision evidence, never from file existence or prose.
+
+Each matrix declares one strict metadata record immediately after its heading. `legacy_mixed` means
+the rows span multiple implementation revisions and are planning evidence only; its revision is
+always null. `exact_revision` means every row received a complete editorial audit against the named
+40-character Git revision. It still does not turn an editorial status into executable conformance
+evidence.
+
+The traceability checker computes a semantic SHA-256 digest over the assessment metadata and all ten
+cells of every source-ordered row. It understands pipes inside Markdown code spans and escaped pipes.
+The generated status block records those digests and derives counts directly from the matrices.
+Neither the checker nor its generated summary may be imported by the conformance reporter or evidence
+producer.
 
 ## Workstreams
 
@@ -91,9 +112,11 @@ Rows are promoted only from passing exact-revision evidence, never from file exi
 The dependency order and detailed file ownership are maintained in
 `docs/superpowers/plans/2026-07-13-symphony-encore-completion-roadmap.md`.
 
-## Audited baseline
+## Audit history
 
-The initial matrices describe revision `090cd6b818097e72524d462ab03208625a94155e`.
+The initial audit began at revision `090cd6b818097e72524d462ab03208625a94155e`, but selected rows
+were edited after that checkpoint as early fixes landed. The current matrices therefore declare
+`legacy_mixed`; they are neither a frozen `090cd6b` snapshot nor current exact-revision evidence.
 
 At that revision:
 
@@ -103,13 +126,13 @@ At that revision:
 - CodeQL passed;
 - the main CI workflow failed on clean-runner package-manager setup, workflow lint, image smoke,
   and the aggregate required check;
-- the legacy prose-driven ledger marked two of 35 Core IDs complete; the corrected ledger retains
-  only `C-DUR-03` as directly proven;
+- historical prose-driven ledgers marked Core IDs complete without canonical evidence; the current
+  producer maps none of the 35 cases;
 - the Real Integration Profile had not run; and
 - repository branch and merge settings did not satisfy `CICD.md`.
 
 The architecture review later committed at `1302c0b` changes documentation only and does not alter
-the audited runtime status.
+the historical runtime facts above.
 
 The normalized baseline has 327 `SPEC.md` rows, 204 `TECH_STACK.md` rows, and 230 `CICD.md` rows.
 Counts are descriptive only; differently sized requirements are not interchangeable progress units.

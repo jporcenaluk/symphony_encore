@@ -25,8 +25,8 @@ At the baseline revision:
 - PR `#3` is open as a draft and contains 403 files and 86,770 additions.
 - CodeQL passed, but the main CI workflow failed on Linux, macOS, workflow lint, image smoke, and
   the aggregate required check.
-- the legacy prose-driven Core report marked only `C-DUR-03` and `C-UI-04` complete; the corrected
-  ledger retains only `C-DUR-03` as directly proven;
+- the legacy prose-driven Core report marked `C-DUR-03` and `C-UI-04` complete without canonical
+  case evidence; the trusted producer now maps neither case and reports all Core cases unproven;
 - the Real Integration Profile has not run;
 - `production_ready` is false;
 - Docker is unavailable in the current WSL environment;

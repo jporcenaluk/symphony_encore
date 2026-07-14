@@ -13,6 +13,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isReviewedNormativeRegistry,
+  loadReviewedNormativeCatalog,
   loadReviewedNormativeRegistry,
   runNormativeRegistryCli,
   sourceFragmentForReference,
@@ -167,6 +168,62 @@ describe("normative requirement registry", () => {
     expect(registry.documents.every((document) => Object.isFrozen(document.strengths))).toBe(true);
     expect(Reflect.set(registry.documents[0]?.strengths ?? {}, "MUST", 0)).toBe(false);
     expect(registry.documents[0]?.strengths.MUST).toBe(291);
+  });
+
+  it("exposes the validated immutable catalog without widening report capabilities", async () => {
+    const catalog = await loadReviewedNormativeCatalog();
+
+    expect(catalog).toMatchObject({
+      kind: "reviewed_normative_catalog",
+      schema_version: 1,
+      total_requirements: 761,
+    });
+    expect(
+      catalog.documents.map(({ document, registry_sha256, requirements }) => ({
+        document,
+        registry_sha256,
+        requirement_count: requirements.length,
+      })),
+    ).toEqual([
+      {
+        document: "SPEC",
+        registry_sha256: "d3344f5bbd0f1400e9437cbdcfcd94fe02b28b83c523b9efcad9ddc823a76f2e",
+        requirement_count: 327,
+      },
+      {
+        document: "TECH_STACK",
+        registry_sha256: "ef3aabad4de329ee68108410d59f21bf73c67cd209651c88684c6345c615eb46",
+        requirement_count: 204,
+      },
+      {
+        document: "CICD",
+        registry_sha256: "046f32c7a2a93296136c15d7b6e4395055fc9a5a6e49d7b8338e19e2641800ce",
+        requirement_count: 230,
+      },
+    ]);
+    expect(catalog.documents[0]?.requirements[0]).toEqual({
+      id: "SPEC-R001",
+      source: "Purpose, lines 9–10",
+      statement: "Constrain each agent's file edits to its assigned workspace.",
+      strength: "MUST",
+    });
+    expect(catalog.documents[2]?.requirements.at(-1)).toEqual({
+      id: "CICD-R230",
+      source: "§13, lines 396–397",
+      statement:
+        "Do not use documentation or an empty passing job as proof of an unimplemented safety property.",
+      strength: "MUST NOT",
+    });
+    expect(Object.isFrozen(catalog)).toBe(true);
+    expect(Object.isFrozen(catalog.documents)).toBe(true);
+    expect(
+      catalog.documents.every(
+        (document) =>
+          Object.isFrozen(document) &&
+          Object.isFrozen(document.requirements) &&
+          document.requirements.every((requirement) => Object.isFrozen(requirement)),
+      ),
+    ).toBe(true);
   });
 
   it("rejects a whitespace-only normative statement", async () => {
