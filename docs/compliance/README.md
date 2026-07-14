@@ -9,6 +9,18 @@ The matrices are:
 - `tech-stack-traceability.md` for `TECH_STACK.md`; and
 - `cicd-traceability.md` for `CICD.md`.
 
+The reviewed machine registries are:
+
+- `registry/spec.requirements.json` for all 327 `SPEC.md` rows;
+- `registry/tech-stack.requirements.json` for all 204 `TECH_STACK.md` rows; and
+- `registry/cicd.requirements.json` for all 230 `CICD.md` rows.
+
+Run `corepack pnpm normative:check` to verify the exact raw source-document digests, reviewed
+whole-registry digests, contiguous IDs, RFC 2119 strengths, source-fragment digests, applicability,
+semantic aggregate membership, and the complete 761-row inventory. Each fragment digest covers the
+exact cited line ranges in textual order after CRLF-to-LF normalization, retains their normalized
+line terminators, and adds no separator between disjoint ranges.
+
 ## Interpretation
 
 The source documents remain normative. These matrices do not replace them.
@@ -30,6 +42,12 @@ Rows do not use a broad umbrella plus narrower child rows for the same obligatio
 sentence contains independent strengths or behaviors, it receives separate rows. A grouped row is
 allowed only when its fields share one strength, implementation status, evidence set, remaining
 work, dependencies, and owner without hiding a separately testable contract.
+
+The machine registries retain semantic umbrella rows instead of treating them as independent proof
+slots. `aggregate` entries name their direct member rows, `profile` entries identify executable
+conformance profiles, and `reference` entries preserve normative reference contracts. Membership
+never implies that the umbrella has passed: every retained row still requires its own applicable
+direct evidence or explicit `SHOULD` justification.
 
 Requirements introduced by a normative lead such as “the API MUST provide” include the list items
 that inherit that lead. The matrices also inventory unkeyworded schemas, enums, transitions,

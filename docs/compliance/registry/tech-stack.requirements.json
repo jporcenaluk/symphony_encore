@@ -1,0 +1,2049 @@
+{
+  "schema_version": 1,
+  "document": "TECH_STACK",
+  "file": "TECH_STACK.md",
+  "status": "Draft v1",
+  "source_sha256": "edcfcfa293c4346e479458d127903e6435ab7a0f9373a7e166b64c3a8442b4c6",
+  "requirements": [
+    {
+      "id": "STACK-R001",
+      "source": "Preamble, lines 9–11",
+      "strength": "MUST",
+      "statement": "Keep these stack choices normative until an ADR replaces one with evidence from a working implementation.",
+      "source_fragment_sha256": "4adb96fb98109ea8ff0e8f7acdd0489e852c26fbe689d1fde0a9e4450b2f8f21",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R002",
+      "source": "§1 item 1, lines 15–17",
+      "strength": "MUST",
+      "statement": "Use TypeScript for application, browser, shared-contract, programmatic build-script, and test code; limit exceptions to SQL migrations, shell entrypoints, Make targets, Dockerfiles, and generated files.",
+      "source_fragment_sha256": "2912c6a727288918dfb2c811c73aa245f998456dc8ca939cf76b11adc557a142",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R003",
+      "source": "§1 item 2, line 18",
+      "strength": "MUST",
+      "statement": "Make the long-running daemon the owner of orchestration.",
+      "source_fragment_sha256": "109244a05ee7b718f40b1fa94a47bcfd0e07514b88ff7e45701c61953d42a3a2",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R004",
+      "source": "§1 item 2, lines 18–19",
+      "strength": "MUST NOT",
+      "statement": "Keep the browser a Control API client; do not host scheduler or workflow behavior in it.",
+      "source_fragment_sha256": "f05d977e4d0eeb052c41b839a8213ed25a0c8593e838db62f9ddc5a77c8e0083",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R005",
+      "source": "§1 item 3, lines 20–21",
+      "strength": "MUST",
+      "statement": "Keep domain, persistence, adapter, API, and UI boundaries independently testable even when production uses one Node process.",
+      "source_fragment_sha256": "627583f32b8455efd86eb04f56e84e454cff44172d99b2c1536d9d5f1b54455a",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R006",
+      "source": "§1 item 4, lines 22–23",
+      "strength": "MUST",
+      "statement": "Use SQLite transactions and normalized durable records as the source of truth.",
+      "source_fragment_sha256": "80c8d1c9db62be085f417431540f1f4c786939d47caed44b9be2413c5f68777e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R007",
+      "source": "§1 item 4, lines 23–24",
+      "strength": "MUST NOT",
+      "statement": "Do not use in-memory actors, browser state, logs, or tracker comments as alternate decision stores.",
+      "source_fragment_sha256": "2b455596a4b5ead597efccff009b8f955fd446ac510f3dcc0fa235bfcdfaaac2",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R008",
+      "source": "§1 item 5, lines 25–26",
+      "strength": "MUST",
+      "statement": "Adopt a dependency only when it solves a current requirement.",
+      "source_fragment_sha256": "e871e9fb3aeb8fb2600f6000febfce31f9930d0cd5bd765f60167976305eb4c0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R009",
+      "source": "§1 item 5, lines 25–26",
+      "strength": "MUST",
+      "statement": "Require maintained documentation for every dependency.",
+      "source_fragment_sha256": "e871e9fb3aeb8fb2600f6000febfce31f9930d0cd5bd765f60167976305eb4c0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R010",
+      "source": "§1 item 5, lines 25–26",
+      "strength": "MUST",
+      "statement": "Require every dependency to support the selected Node line.",
+      "source_fragment_sha256": "e871e9fb3aeb8fb2600f6000febfce31f9930d0cd5bd765f60167976305eb4c0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R011",
+      "source": "§1 item 5, lines 25–26",
+      "strength": "MUST",
+      "statement": "Keep each dependency replaceable behind a small boundary.",
+      "source_fragment_sha256": "e871e9fb3aeb8fb2600f6000febfce31f9930d0cd5bd765f60167976305eb4c0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R012",
+      "source": "§1 item 6, lines 27–29",
+      "strength": "MUST",
+      "statement": "Run one configured project per service instance on Linux, macOS, and Linux under WSL in version 1.",
+      "source_fragment_sha256": "f4b46245623334c6748f4339facca77dc1ec06c47bb6feda8a88aeb1cf05973a",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R013",
+      "source": "§1 item 6, lines 28–29",
+      "strength": "MUST",
+      "statement": "Carry `project_id` and repository identity in durable records so later multi-project hosting needs no domain-model rewrite.",
+      "source_fragment_sha256": "a8d65a091f15690b098979c120f7e4b5a736a7d441ea331ac0a0b4a7ff897709",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R014",
+      "source": "§2, lines 33–36",
+      "strength": "MUST",
+      "statement": "Use the latest mutually compatible Active LTS Node.js release line.",
+      "source_fragment_sha256": "e2150c34782419a7af33da087bb3e342b49ecc0ab1959aa549a6052d7ee69c35",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R015",
+      "source": "§2, line 37",
+      "strength": "MUST",
+      "statement": "Use pnpm workspaces for package management.",
+      "source_fragment_sha256": "a7428bdde0ffe17c78248c21e94c04f65a549dbabe18e28c653ea05e1769c896",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R016",
+      "source": "§2, line 38",
+      "strength": "MUST",
+      "statement": "Compile TypeScript in strict mode.",
+      "source_fragment_sha256": "e27895adbe69e826c6c18d5d54125df36deb9224e0fc746fd8e72420b681d44d",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R017",
+      "source": "§2, line 39",
+      "strength": "MUST",
+      "statement": "Use a root Makefile as the stable human and CI command interface.",
+      "source_fragment_sha256": "9fb3761ef7d0f186368cfaa453d1f569f7c58f8c5946f8bf497e9560e183c4ab",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R018",
+      "source": "§2, line 40",
+      "strength": "MUST",
+      "statement": "Commit one lockfile at the repository root.",
+      "source_fragment_sha256": "08a3b9c613c304f13de46a64fea173aac188b07fb523b72f03fe11926c2ad69c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R019",
+      "source": "§2, line 42",
+      "strength": "MUST",
+      "statement": "Use Node.js as the production runtime.",
+      "source_fragment_sha256": "c8a1be70f56e559842f7e510028f094a37db78a031b99d74ede32ed8c3a86a20",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R020",
+      "source": "§2, lines 42–43",
+      "strength": "MUST NOT",
+      "statement": "Do not require Bun, Deno, or a browser runtime to operate the service.",
+      "source_fragment_sha256": "c963fc68f4a4d18c5b6ac9f8dd735c0e36e66ede3d6a1aed8155ae2650ef69e7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R021",
+      "source": "§2, lines 43–44",
+      "strength": "MUST",
+      "statement": "Before replacing Node, prove subprocess management, signals, process-tree termination, SQLite behavior, and every Core test.",
+      "source_fragment_sha256": "4fcab1ce2413801779c95109b9c2e44a7952dc13e476b3df28ad1850e9b1896f",
+      "kind": "profile",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R022",
+      "source": "§2 layout, lines 46–51",
+      "strength": "SHOULD",
+      "statement": "Keep `apps/server` limited to the process entrypoint, Fastify Control API, and static UI hosting.",
+      "source_fragment_sha256": "e82d924df3cf2c4f949d03eb03a1ad91131ae54eaedda68107285719f2636f42",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R023",
+      "source": "§2 layout, lines 51–52",
+      "strength": "SHOULD",
+      "statement": "Keep `apps/web` responsible for the Vite/React operator UI.",
+      "source_fragment_sha256": "ac562a4427302031906c37cddc0d225f0e06367becdae6c4c1630b6a97bf8b55",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R024",
+      "source": "§2 layout, line 53",
+      "strength": "SHOULD",
+      "statement": "Keep `packages/domain` responsible for entities, policies, pure transitions, and domain errors.",
+      "source_fragment_sha256": "4bd3b25fbbf98ebe4a8b7c1eabf48c46a8bfba0f0a674926cfaf195eba409be3",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R025",
+      "source": "§2 layout, line 54",
+      "strength": "SHOULD",
+      "statement": "Keep `packages/contracts` responsible for TypeBox schemas, OpenAPI definitions, and generated-client inputs.",
+      "source_fragment_sha256": "b901b8313fe8a1f26af816330e2c0367d51387e63561b70a481d4dfbecd957eb",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R026",
+      "source": "§2 layout, line 55",
+      "strength": "SHOULD",
+      "statement": "Keep `packages/persistence` responsible for Kysely, migrations, repositories, and transaction helpers.",
+      "source_fragment_sha256": "e4b3580de63a8726654ee50945db500b479044a99d91b5ba2bb7e6af380944dc",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R027",
+      "source": "§2 layout, line 56",
+      "strength": "SHOULD",
+      "statement": "Keep scheduler, claims, retries, review coordination, and merge queue in `packages/orchestration`.",
+      "source_fragment_sha256": "9b9dbc7e675b84b10271ee5f712120efca7df5c5e9e0025dc3256e27da2689a1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R028",
+      "source": "§2 layout, line 57",
+      "strength": "SHOULD",
+      "statement": "Keep tracker, repository-host, Git, agent, and notification integrations in `packages/adapters`.",
+      "source_fragment_sha256": "eb71de085aec61807442ab33d5d9558c00e8871044a65cdad5678e3efdf171e6",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R029",
+      "source": "§2 layout, line 58",
+      "strength": "SHOULD",
+      "statement": "Keep Pino configuration, log bindings, metrics, and event projection in `packages/observability`.",
+      "source_fragment_sha256": "af3e02ab5b3ca8611bd4daa65f76045f78032627bb5db0d1fc4d208396b7fa8f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R030",
+      "source": "§2 layout, line 59",
+      "strength": "SHOULD",
+      "statement": "Keep fixtures, fake adapters, fake clocks, and temporary databases in `packages/test-support`.",
+      "source_fragment_sha256": "210aeb98d7db281e7d25885c22f0a1cf571ec4bb473ec973f054fbf4b709a971",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R031",
+      "source": "§2, lines 62–64",
+      "strength": "MUST",
+      "statement": "Point workspace dependencies inward from adapters, persistence, API, and UI toward contracts/domain.",
+      "source_fragment_sha256": "2bfa04b4b3014d83ef00ca890b755de6f9e7ed3e3ca0994cdbd1b9d52a0af411",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R032",
+      "source": "§2, lines 62–64",
+      "strength": "MUST NOT",
+      "statement": "Keep domain free of Fastify, React, Kysely, Pino, provider SDKs, and concrete adapters.",
+      "source_fragment_sha256": "2bfa04b4b3014d83ef00ca890b755de6f9e7ed3e3ca0994cdbd1b9d52a0af411",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R033",
+      "source": "§2, line 66",
+      "strength": "MUST NOT",
+      "statement": "Forbid cycles between workspace packages.",
+      "source_fragment_sha256": "60a7223f866b1d3794b493bc9b2d55cd1900c35d0ce19a2012a991e2462a8c44",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R034",
+      "source": "§2, lines 66–67",
+      "strength": "MUST",
+      "statement": "Make CI verify the package graph.",
+      "source_fragment_sha256": "01090295ab8ffddd360b5d444e3486d13e68fd80a2bbefe0bfa734afc8b993cb",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R035",
+      "source": "§3 list, lines 71–73",
+      "strength": "MUST",
+      "statement": "Use React for the operator UI.",
+      "source_fragment_sha256": "69d77aa761fae18d2c72c560208882a925b9552cc6fd79d3c3b9d2d51e037c07",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R036",
+      "source": "§3, line 74",
+      "strength": "MUST",
+      "statement": "Use Vite for the operator UI build and development server.",
+      "source_fragment_sha256": "5725f46223ad57304d77703596b415814721025aade6907552937f1dac9656b7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R037",
+      "source": "§3, line 75",
+      "strength": "MUST",
+      "statement": "Use TanStack Router for typed routes and URL search state.",
+      "source_fragment_sha256": "d114b4bb977c92b52042d56eac74b21a8ef8cd94f7265bb92760849dfea3112a",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R038",
+      "source": "§3, line 76",
+      "strength": "MUST",
+      "statement": "Use TanStack Query for Control API server state.",
+      "source_fragment_sha256": "26adbb2728bc5aef1d45c1ae7f500434808f6ac90af91bd04882612330b4fbed",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R039",
+      "source": "§3, line 77",
+      "strength": "MUST",
+      "statement": "Use TanStack Table for data-heavy operator surfaces.",
+      "source_fragment_sha256": "30b822f8f557a9e0437c79aefb8cbd925a55bd0efbce49826484ded69f0f57b3",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R040",
+      "source": "§3, line 78",
+      "strength": "MUST",
+      "statement": "Use source-owned shadcn/ui components and Tailwind CSS for accessible UI components.",
+      "source_fragment_sha256": "7000cd37ce75def1095666a1195a2cbb18470af71f6689190ac704a17d312c55",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R041",
+      "source": "§3, line 79",
+      "strength": "MUST",
+      "statement": "Use a generated client derived from the shared OpenAPI contract.",
+      "source_fragment_sha256": "9a09ee86c8e325fd0697589a3cf02f0aa94add07380dc5b0c0a19019990b8856",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R042",
+      "source": "§3, lines 81–82",
+      "strength": "MUST",
+      "statement": "Make the URL the source of truth for shareable filters, selected tabs, pagination, and history ranges.",
+      "source_fragment_sha256": "422665261f3b74c0653a0e4c6707533dbbfd507e539a0ea3c970cfef10b2ca03",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R043",
+      "source": "§3, line 82",
+      "strength": "MUST",
+      "statement": "Let TanStack Query own fetched server state.",
+      "source_fragment_sha256": "8e9a9cc5af6177e6ca575bab2e3f3038667a4cdfd08c78415788a0493ac6f2a6",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R044",
+      "source": "§3, lines 82–83",
+      "strength": "MUST",
+      "statement": "Limit React component state to ephemeral presentation state.",
+      "source_fragment_sha256": "7e4121b63fc3737917b127cc088cf5d083974c5fdd1bf8d3071cd59ef7c21948",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R045",
+      "source": "§3, lines 83–84",
+      "strength": "MUST NOT",
+      "statement": "Do not copy durable orchestration records into another client-side store.",
+      "source_fragment_sha256": "da00e006bc3c1ab3026ec927ae7fbbce561959d0fb57818e6759bbc2b3d8de11",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R046",
+      "source": "§3, lines 86–88",
+      "strength": "MUST NOT",
+      "statement": "Do not use XState as global state management.",
+      "source_fragment_sha256": "b58eddc0bcafd92bb1ea8f6bfa9722702985bd75566d33af9f9afc374874ea14",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R047",
+      "source": "§3, line 90",
+      "strength": "MUST NOT",
+      "statement": "Keep Next.js and TanStack Start out of the initial stack.",
+      "source_fragment_sha256": "08b44c269b5760d444b3135abf6c2903da360b37b1aa2fafaa9beeab7b3b6b9b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R048",
+      "source": "§3, lines 90–92",
+      "strength": "MUST NOT",
+      "statement": "Do not add a second web-server lifecycle merely for SSR, React Server Components, or framework server functions.",
+      "source_fragment_sha256": "f16a219c6d70cad1835b65ad63f40a519e0767912d71e3f1afbd3fd92eaa819f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R049",
+      "source": "§3, lines 92–93",
+      "strength": "MUST",
+      "statement": "Require a concrete hosted-product need before adding those web frameworks.",
+      "source_fragment_sha256": "fe72a1b00891cbb045dcaabbd889e396066fd3956c7b830eafb93a4766510a47",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R050",
+      "source": "§3, lines 92–93",
+      "strength": "MUST NOT",
+      "statement": "Do not move orchestration into request handlers when adding a web framework.",
+      "source_fragment_sha256": "fe72a1b00891cbb045dcaabbd889e396066fd3956c7b830eafb93a4766510a47",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R051",
+      "source": "§3, line 95",
+      "strength": "MUST",
+      "statement": "Proxy Control API and event-stream requests from the development Vite server to Node.",
+      "source_fragment_sha256": "de7f517f87f19656f2cbd670282f45c19926fbf2303b8c400891978bcec88a49",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R052",
+      "source": "§3, lines 95–96",
+      "strength": "MUST",
+      "statement": "Serve the production Vite static build from Fastify.",
+      "source_fragment_sha256": "28f771acdfef852c7bc2573e71d279c8172ed3c7830999d6efa3f42e241ae518",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R053",
+      "source": "§3, lines 96–97",
+      "strength": "MUST",
+      "statement": "Expose one application port in production.",
+      "source_fragment_sha256": "da66bdfffd2dfb200f8d85c557ac3ae0b67cb5edb573cb66d66be388e26597b5",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R054",
+      "source": "§4, line 101",
+      "strength": "MUST",
+      "statement": "Use Fastify for the server.",
+      "source_fragment_sha256": "423658ad3bf85572cd8b9a41ed0c946937fd88d1fe0689c938ea9868c39c669b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R055",
+      "source": "§4, lines 101–102",
+      "strength": "MUST",
+      "statement": "Define public request/response contracts with TypeBox schemas that provide runtime validation and JSON Schema.",
+      "source_fragment_sha256": "5b0a716327c1bbf48693de166910a64abd306f6d9e2a2913870b21107cafffb2",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R056",
+      "source": "§4, lines 102–103",
+      "strength": "MUST",
+      "statement": "Generate OpenAPI from the same schemas accepted by the server.",
+      "source_fragment_sha256": "cfe25d6b7f813e77b02446658d72899df9e1c2e7031247bcbf3cc78b991a953b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R057",
+      "source": "§4, line 103",
+      "strength": "MUST",
+      "statement": "Fail CI when the committed OpenAPI document or generated client is stale.",
+      "source_fragment_sha256": "fcb5742381ddcd89d362b2a27afc86e2516264d24e0ab51a897b5fb0300d53c4",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R058",
+      "source": "§4, lines 105–106",
+      "strength": "MUST",
+      "statement": "Use ordinary HTTP resources with SPEC error, authorization, expected-version, and idempotency contracts.",
+      "source_fragment_sha256": "23839dfd34163e9192c9e1856a19cba048d357f20839e0092437ab3855ac6997",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R059",
+      "source": "§4, lines 105–107",
+      "strength": "MUST NOT",
+      "statement": "Keep tRPC and GraphQL out of the initial stack.",
+      "source_fragment_sha256": "e36abc7964af473507ca32d85bf821b48b0d4d5ce4d500ad86ed4fc361e35b0e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R060",
+      "source": "§4, lines 106–107",
+      "strength": "MUST NOT",
+      "statement": "Do not substitute shared TypeScript types for a language-neutral wire contract.",
+      "source_fragment_sha256": "60c6485b2a17da9c302ebff60e8f5dcc29755eb4d0b8a9d1c0243e14db463974",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R061",
+      "source": "§4, lines 109–110",
+      "strength": "MUST",
+      "statement": "Deliver live logs, stage transitions, usage, budgets, and other append-only updates to browsers through SSE.",
+      "source_fragment_sha256": "4828bf2849efabdcc67e2c76c2cdcb626ea5ee6efecd39dde6751ec492e10ed0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R062",
+      "source": "§4, lines 110–111",
+      "strength": "MUST",
+      "statement": "Give SSE events durable cursors that support resume or explicit refresh after a gap.",
+      "source_fragment_sha256": "81bf76e3895c65a5d62da3afafb5e3771382f689d188366e7d00377af4207587",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R063",
+      "source": "§4, lines 111–112",
+      "strength": "MUST",
+      "statement": "Keep mutations as ordinary authenticated HTTP requests.",
+      "source_fragment_sha256": "22784060651028dcbcfb613c1e1a782d85c98fd238021e9a65bf717457946c52",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R064",
+      "source": "§4, lines 115–116",
+      "strength": "MUST",
+      "statement": "Keep API and orchestration module boundaries separate.",
+      "source_fragment_sha256": "281f38483b30bc99cec2c302e66912dd9879f75782f1a74aca484b5a5a0189ea",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R065",
+      "source": "§4, line 116",
+      "strength": "MUST",
+      "statement": "Keep API and orchestration shutdown paths separate.",
+      "source_fragment_sha256": "c490ffbb90e704ff08c76b80fe6e048a72895a188d63f6b05a224d5ad0cf9cab",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R066",
+      "source": "§4, lines 116–117",
+      "strength": "MUST NOT",
+      "statement": "Prevent an HTTP failure from corrupting scheduler state.",
+      "source_fragment_sha256": "345bbfb946eb2793b76efd8757b364ed8cd541f9a5e56cf5755fab23052640b7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R067",
+      "source": "§4, line 117",
+      "strength": "MUST NOT",
+      "statement": "Prevent scheduler backpressure from making health endpoints unavailable.",
+      "source_fragment_sha256": "889ac1948485b8b24ba979c161f5388049079b40ec0d3f332c902045f7008cf3",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R068",
+      "source": "§4, line 117",
+      "strength": "MUST NOT",
+      "statement": "Prevent scheduler backpressure from making operator-control endpoints unavailable.",
+      "source_fragment_sha256": "889ac1948485b8b24ba979c161f5388049079b40ec0d3f332c902045f7008cf3",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R069",
+      "source": "§5, line 121",
+      "strength": "MUST",
+      "statement": "Model durable orchestration with explicit TypeScript discriminated unions.",
+      "source_fragment_sha256": "1e71b963cb4989944d3dd0ae463362d0186dd1039ad4823b1bd96ed6ba8b8446",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R070",
+      "source": "§5, lines 121–122",
+      "strength": "MUST",
+      "statement": "Compute orchestration transitions with pure functions.",
+      "source_fragment_sha256": "088f17668d184ad27b0b8dc68c7b1d17ed75245c098c2abb8e26cac67aa543e9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R071",
+      "source": "§5, lines 121–122",
+      "strength": "MUST",
+      "statement": "Apply orchestration commands through transactional handlers.",
+      "source_fragment_sha256": "088f17668d184ad27b0b8dc68c7b1d17ed75245c098c2abb8e26cac67aa543e9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R072",
+      "source": "§5 step 1, line 124",
+      "strength": "MUST",
+      "statement": "Load the current durable aggregate and revision before a transition.",
+      "source_fragment_sha256": "37e1b185c99e4bccaaeb9abfab873cb10c5dd5454c7444debaf7d7f7d948c41c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R073",
+      "source": "§5 step 2, line 125",
+      "strength": "MUST",
+      "statement": "Validate the typed event or terminal result before a transition.",
+      "source_fragment_sha256": "587d14db6e4ffd9112b201115880759555f82588a721d7562f1345e2e308f202",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R074",
+      "source": "§5 step 3, line 126",
+      "strength": "MUST",
+      "statement": "Compute decisions with a pure domain function.",
+      "source_fragment_sha256": "32cc699ffc5443ee2c20cd95e59f1c778b0fe43577c429155478f91f6a929e93",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R075",
+      "source": "§5 step 4, line 127",
+      "strength": "MUST",
+      "statement": "Atomically persist state, events, claim changes, and side-effect intents.",
+      "source_fragment_sha256": "4da252af62407b097fe9023ee8bbd2a28c83b791def777c474e7c9569245f53d",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R076",
+      "source": "§5 step 5, line 128",
+      "strength": "MUST",
+      "statement": "Apply only committed intents through typed adapters.",
+      "source_fragment_sha256": "a2857e9df6fde2cf997499c901cc48a8c2f6e2e142543f1a4b7d77b7d1e45901",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R077",
+      "source": "§5 step 6, line 129",
+      "strength": "MUST",
+      "statement": "Persist side-effect receipts and reconcile the observed external revision.",
+      "source_fragment_sha256": "9ad6fbcc66796c8a4688fdc370fe8f770bfbd9deb4166c303512cf25d2405b2f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R078",
+      "source": "§5, lines 131–132",
+      "strength": "MUST NOT",
+      "statement": "Do not use XState actor snapshots as durable truth.",
+      "source_fragment_sha256": "c8526c22464da92dced3f775b38595bd82be01bbd8d428410f92a350768666fa",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R079",
+      "source": "§5, lines 131–133",
+      "strength": "MUST NOT",
+      "statement": "Keep Temporal, BullMQ, Redis, and other workflow/queue services out of the initial stack.",
+      "source_fragment_sha256": "1df31925a547d0f80cde82ddebf3f7d9d28a209026c73be46814f63e27710f7c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R080",
+      "source": "§5, lines 132–133",
+      "strength": "MUST",
+      "statement": "Use SQLite as the initial durable scheduler queue.",
+      "source_fragment_sha256": "50bd88bd34c22139d66e862ba0544891754f76d98a8b6bfe3f402bebc4a6618e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R081",
+      "source": "§5, lines 135–136",
+      "strength": "MUST",
+      "statement": "Route time, IDs, randomness, process launch, filesystem, network, and provider calls through explicit orchestration interfaces.",
+      "source_fragment_sha256": "5617828780ccd43609ae16a0f4e1138200265b378c1c7db322e6c0959874abea",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R082",
+      "source": "§5, lines 136–137",
+      "strength": "MUST",
+      "statement": "Let tests replace every named external boundary with fakes without monkey-patching globals.",
+      "source_fragment_sha256": "f23a76b04178610aadbc44de9af7541921147672e5f64e5a847653a6d816fbfd",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R083",
+      "source": "§6 list, lines 141–143",
+      "strength": "MUST",
+      "statement": "Use SQLite WAL mode where the deployment filesystem supports it.",
+      "source_fragment_sha256": "6af0db12126f4e8470aa099a8fabb23d64df87e85847b07d6e92013a8f381a31",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R084",
+      "source": "§6, line 144",
+      "strength": "MUST",
+      "statement": "Use `better-sqlite3` as the Node SQLite driver.",
+      "source_fragment_sha256": "e4d387e10923ae95e5dc253a4389a781136deee446d0e464190fdbd9506bb8fe",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R085",
+      "source": "§6, line 145",
+      "strength": "MUST",
+      "statement": "Use Kysely as the typed SQL query builder.",
+      "source_fragment_sha256": "317db957cb72e5d58f7b4fceaccaa8e63e648992d2c775839adbfeffecfbbb9d",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R086",
+      "source": "§6, line 146",
+      "strength": "MUST",
+      "statement": "Use ordered, immutable, repository-owned migrations.",
+      "source_fragment_sha256": "5f587f686a74b4a3767fde565456da515c2568f232b1d3da8767b87e64904902",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R087",
+      "source": "§6, lines 148–150",
+      "strength": "MUST",
+      "statement": "Map database rows to domain types at the persistence boundary.",
+      "source_fragment_sha256": "9d0a9d66333504b6d62cfe3386f1cbebd8472441bf855a980f0df6e1a87e0264",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R088",
+      "source": "§6, lines 149–150",
+      "strength": "MUST",
+      "statement": "Change Kysely table interfaces, migrations, and row mappers together.",
+      "source_fragment_sha256": "7c2914dc6122f32a2f06fe6a8fdb900f23ea6e92208f7c045441a5789d1c84df",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R089",
+      "source": "§6, line 152",
+      "strength": "MUST",
+      "statement": "Include a migration for every schema change.",
+      "source_fragment_sha256": "971e453d4e55132f0d484aa369f185d00c8b87baea202c30e21a3c12f4a379aa",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R090",
+      "source": "§6, line 152",
+      "strength": "MUST",
+      "statement": "Include a migration test for every schema change.",
+      "source_fragment_sha256": "971e453d4e55132f0d484aa369f185d00c8b87baea202c30e21a3c12f4a379aa",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R091",
+      "source": "§6, lines 152–153",
+      "strength": "MUST NOT",
+      "statement": "Do not edit an applied migration.",
+      "source_fragment_sha256": "97cee7d850afaf9eed5040d7db629b057d5a0597d2ed4e6b6bb32aedd95df0b1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R092",
+      "source": "§6, lines 153–154",
+      "strength": "MUST",
+      "statement": "Use expand-migrate-contract for destructive changes unless release policy proves no durable installation can observe an intermediate version.",
+      "source_fragment_sha256": "0948955d0f3836642cc1cc1363c51ab8a518785a61860d6324ba685e1fdfb3b9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R093",
+      "source": "§6, lines 156–157",
+      "strength": "MUST",
+      "statement": "Persist state transitions in explicit transactions.",
+      "source_fragment_sha256": "358a115370c1a468b465fe6cb1525b34126f4f64db709ca8210b338d9e769aa6",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R094",
+      "source": "§6, line 156",
+      "strength": "MUST",
+      "statement": "Persist claim mutations in explicit transactions.",
+      "source_fragment_sha256": "a55bd0e091a949fc991b23b8fae12b1c8e75f2d92bff16e2e2b6a2930446bd57",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R095",
+      "source": "§6, line 156",
+      "strength": "MUST",
+      "statement": "Persist budget reservations in explicit transactions.",
+      "source_fragment_sha256": "a55bd0e091a949fc991b23b8fae12b1c8e75f2d92bff16e2e2b6a2930446bd57",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R096",
+      "source": "§6, line 156",
+      "strength": "MUST",
+      "statement": "Persist review aggregates in explicit transactions.",
+      "source_fragment_sha256": "a55bd0e091a949fc991b23b8fae12b1c8e75f2d92bff16e2e2b6a2930446bd57",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R097",
+      "source": "§6, lines 156–157",
+      "strength": "MUST",
+      "statement": "Create side-effect intents in explicit transactions.",
+      "source_fragment_sha256": "358a115370c1a468b465fe6cb1525b34126f4f64db709ca8210b338d9e769aa6",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R098",
+      "source": "§6, lines 157–159",
+      "strength": "MUST NOT",
+      "statement": "Do not build SQL with untrusted input strings.",
+      "source_fragment_sha256": "b18d905957cade5fa4a19756da488f7af655be109fa50b3a7474f355ea26a84b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R099",
+      "source": "§6, line 161",
+      "strength": "MUST",
+      "statement": "Test persistence against real temporary SQLite databases.",
+      "source_fragment_sha256": "5a88197abbc42661344c2f015c1ea4ffdf88996dff273974612db810f1f9808a",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R100",
+      "source": "§6, line 161",
+      "strength": "MUST",
+      "statement": "Run production migrations in persistence tests.",
+      "source_fragment_sha256": "5a88197abbc42661344c2f015c1ea4ffdf88996dff273974612db810f1f9808a",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R101",
+      "source": "§6, lines 161–162",
+      "strength": "MUST NOT",
+      "statement": "Do not use mocked query-builder chains as the sole repository evidence.",
+      "source_fragment_sha256": "18a17998a1ba752f66b582b7af03490fbdf5f890cc82915d40d6743ce9d31c7b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R102",
+      "source": "§6, line 164",
+      "strength": "MUST",
+      "statement": "Optimize the initial implementation honestly for SQLite.",
+      "source_fragment_sha256": "0447d572ed7b217f19d850d0774c8bb1c7eb91ee49c86d26bbcfc1c134024ef8",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R103",
+      "source": "§6, line 164",
+      "strength": "MUST",
+      "statement": "Optimize the initial implementation honestly for a single writer.",
+      "source_fragment_sha256": "0447d572ed7b217f19d850d0774c8bb1c7eb91ee49c86d26bbcfc1c134024ef8",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R104",
+      "source": "§6, lines 164–165",
+      "strength": "MUST NOT",
+      "statement": "Do not claim drop-in PostgreSQL support merely because Kysely has another dialect.",
+      "source_fragment_sha256": "c33eb873aa8a0e61e75439b9898f40b4215826b447c8fb40a5fb1580c3b3eae4",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R105",
+      "source": "§7, line 171",
+      "strength": "MUST",
+      "statement": "Use Pino for process-level structured logging.",
+      "source_fragment_sha256": "972e3a62fd1849d94cc20ac2290213df9a84859227ad1cc8afb67eadd6f16a22",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R106",
+      "source": "§7, lines 171–172",
+      "strength": "MUST",
+      "statement": "Use Fastify's Pino integration for request logging instead of a separate logger.",
+      "source_fragment_sha256": "f832fb3cbcc8ce896d37c2b21d6f7d0bff66d6525e944cf512171b20f0b9e919",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R107",
+      "source": "§7, lines 172–173",
+      "strength": "MUST",
+      "statement": "Emit newline-delimited JSON in production.",
+      "source_fragment_sha256": "caec5746f11013c95ae89465fd72b45bafb500b0d2ad7778afbbeb57fd9eab4e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R108",
+      "source": "§7, line 175",
+      "strength": "MUST",
+      "statement": "Give each component a child logger with stable bindings.",
+      "source_fragment_sha256": "16f89b6f2fdce878fddea43d4cf7f603fb34e07771282c45254ba000fa56ff57",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R109",
+      "source": "§7, lines 175–176",
+      "strength": "MUST",
+      "statement": "Bind applicable service-run, project, work, attempt, session, repository, and stage identifiers.",
+      "source_fragment_sha256": "2fffc3ecd519e42a9bd57e89f8d1c89ba8fbfd579eb3151c9e9043b613898679",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R110",
+      "source": "§7, lines 176–177",
+      "strength": "MUST",
+      "statement": "Store event names and reason codes as fields, not parsed message text.",
+      "source_fragment_sha256": "45c26f6fd0b92262443c7a8eee96cc25f659d28d89c9dad3b250df5d2057ec1b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R111",
+      "source": "§7, line 179",
+      "strength": "MUST",
+      "statement": "Use one root configuration for levels, serializers, and redaction.",
+      "source_fragment_sha256": "ad229fae916459d0ccf86bdd202bf0dc7de619e55ebdeb1704bfa478c56f576e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R112",
+      "source": "§7, lines 179–182",
+      "strength": "MUST",
+      "statement": "Remove authorization headers, cookies, credentials, secret references, full prompts, raw diffs, and provider tokens before data leaves the process.",
+      "source_fragment_sha256": "77b93c6a458361fa6d8d3795a6e2eb872df0872d8f8ac203a1f6894526379fb9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R113",
+      "source": "§7, lines 182–183",
+      "strength": "MUST NOT",
+      "statement": "Do not let user-controlled values define redaction paths.",
+      "source_fragment_sha256": "dd53dacbfdbfe14cf29aac634d56460b8ee148e8683b06ff2cd84d522f7ebcce",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R114",
+      "source": "§7, lines 185–186",
+      "strength": "MUST",
+      "statement": "Write SPEC-required events and logs to SQLite before projecting them to Pino.",
+      "source_fragment_sha256": "5f1ae567ddcbd4a9bb17eb81dfbb321e74b8bc2e2e7d27ee19e401b0cf36f994",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R115",
+      "source": "§7, lines 186–187",
+      "strength": "MUST NOT",
+      "statement": "Do not derive guard, retry, budget, or merge decisions by reading process logs.",
+      "source_fragment_sha256": "53bbda8ddd17708f8c0e7838b95bdfd7f558ce54199227d2027ccca307e599f7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R116",
+      "source": "§8 list, lines 191–193",
+      "strength": "MUST",
+      "statement": "Use Vitest for unit, contract, component, and Node integration tests.",
+      "source_fragment_sha256": "cbc7ba54f3bb3861fbef3d222f2f30a2fea57da2dacec18b5504f409dbb84f53",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R117",
+      "source": "§8, line 194",
+      "strength": "MUST",
+      "statement": "Use Playwright for browser and end-to-end tests.",
+      "source_fragment_sha256": "e6e80c6bef1f8d24a0acb24ee5b11989989a6a51f78ab86af286a04a1e011e38",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R118",
+      "source": "§8, line 195",
+      "strength": "MUST",
+      "statement": "Use Biome for formatting and linting.",
+      "source_fragment_sha256": "c4371dc383dcfd42c4327e9fee2cf0d7d97080f9df8b6a45a43674b7c9b34b17",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R119",
+      "source": "§8, line 196",
+      "strength": "MUST",
+      "statement": "Use TypeScript `noEmit` for type checking.",
+      "source_fragment_sha256": "88f622b5777460ab47b8c8656372f91281bdf8da95afb510edb7b190b3b37fb8",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R120",
+      "source": "§8, line 197",
+      "strength": "MUST",
+      "statement": "Use real temporary repositories, processes, and SQLite databases for boundary integration tests.",
+      "source_fragment_sha256": "26cbe84b00436a045d2d01e3db76801f90659017b7588df4d92f5916df429735",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R121",
+      "source": "§8, line 199",
+      "strength": "MUST",
+      "statement": "Unit-test pure policy and transition functions.",
+      "source_fragment_sha256": "059ea97de33a28b3244a6aea07c9c006092799673e0c4499b3e3427f4f10bc6c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R122",
+      "source": "§8, lines 199–200",
+      "strength": "MUST",
+      "statement": "Run every adapter against shared conformance fixtures.",
+      "source_fragment_sha256": "3286842f8d6f2c06bc873aaca8f27046af04c44911411e1972e0a26b7b2e7c1d",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R123",
+      "source": "§8, line 200",
+      "strength": "MUST",
+      "statement": "Integration-test migrations.",
+      "source_fragment_sha256": "a6a6032c57dbe39f8cc4d755383dd0583cf925924165947f84034548dd6fcd93",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R124",
+      "source": "§8, lines 200–201",
+      "strength": "MUST",
+      "statement": "Integration-test transactions.",
+      "source_fragment_sha256": "4819b0108dc9da08f543a214de50248848d410eb13a25553fa2783f60272f2d8",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R125",
+      "source": "§8, line 201",
+      "strength": "MUST",
+      "statement": "Integration-test restart recovery.",
+      "source_fragment_sha256": "786ace37b1729c647ece5170cd1e1514e0672f996c3199d88551cafd6018ed76",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R126",
+      "source": "§8, line 201",
+      "strength": "MUST",
+      "statement": "Integration-test process-tree termination.",
+      "source_fragment_sha256": "786ace37b1729c647ece5170cd1e1514e0672f996c3199d88551cafd6018ed76",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R127",
+      "source": "§8, line 201",
+      "strength": "MUST",
+      "statement": "Integration-test intent/receipt reconciliation.",
+      "source_fragment_sha256": "786ace37b1729c647ece5170cd1e1514e0672f996c3199d88551cafd6018ed76",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R128",
+      "source": "§8, lines 201–202",
+      "strength": "MUST",
+      "statement": "Browser-test every required UI surface.",
+      "source_fragment_sha256": "c37a5eec6377b163aee298c3da73e424c3cb7540fa3d3f53ca06dbd6d25c32e3",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R129",
+      "source": "§8, line 202",
+      "strength": "MUST",
+      "statement": "Browser-test security-sensitive mutations.",
+      "source_fragment_sha256": "c6353602506ccb1188ea467aa2d719c402d7811d806c5c3ef154b73a88e9b05a",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R130",
+      "source": "§8, lines 204–205",
+      "strength": "SHOULD",
+      "statement": "Establish an initial measured coverage floor in CI.",
+      "source_fragment_sha256": "aba1461a398a92ac1b06f7e7f7c9a6ca4c6a11514e5c744aa950a4d80cd165ee",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R131",
+      "source": "§8, lines 205–206",
+      "strength": "MUST",
+      "statement": "Prevent unexplained coverage regression below the measured floor.",
+      "source_fragment_sha256": "be18aa97fde3db1239089d2ac7fd15d7bee1a58796131f13d472300f27e44c50",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R132",
+      "source": "§8, lines 205–206",
+      "strength": "MUST NOT",
+      "statement": "Do not reward low-value tests written only to raise coverage.",
+      "source_fragment_sha256": "be18aa97fde3db1239089d2ac7fd15d7bee1a58796131f13d472300f27e44c50",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R133",
+      "source": "§8, line 208",
+      "strength": "MUST",
+      "statement": "Make `make verify` the canonical full local and CI gate.",
+      "source_fragment_sha256": "bf584f64cf8592af5b564b40f942c2491e4a216c83f2c98496428844892857b1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R134",
+      "source": "§8, lines 208–209",
+      "strength": "MUST",
+      "statement": "Make CI compose the same repository-owned commands used locally.",
+      "source_fragment_sha256": "93a2283de141b4f6754d9b01f67b7e96e28bb8b8f1bc3e29525426d9f8be1b9e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R135",
+      "source": "§9, lines 211–214",
+      "strength": "MUST",
+      "statement": "Support development on Linux, macOS, and Linux under WSL.",
+      "source_fragment_sha256": "d03d66b814ef073a1a3fa4e29ebf502803f509ed621a3d2c684cd704e9665547",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R136",
+      "source": "§9 command list, lines 216–219",
+      "strength": "MUST",
+      "statement": "Provide `make setup` to install pinned tools and repository hooks.",
+      "source_fragment_sha256": "5793ad3e3ab2f4ce13d7b45a956e6ad75affe4027caa6cb7927f863f057b6c76",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R137",
+      "source": "§9 command list, line 220",
+      "strength": "MUST",
+      "statement": "Provide `make dev` to run web and server under one supervisor.",
+      "source_fragment_sha256": "82487e70bd5122adb0979517efbc41c3d8cb0884206152aecdab2c2227d7ba7e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R138",
+      "source": "§9 command list, line 221",
+      "strength": "MUST",
+      "statement": "Provide `make build` for all production artifacts.",
+      "source_fragment_sha256": "a594d788d46dfa69a29e7f31ab9bf3ece977a518d8dbc0d7f1960ceaf3180f8c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R139",
+      "source": "§9 command list, line 222",
+      "strength": "MUST",
+      "statement": "Provide `make test` for the normal test suite.",
+      "source_fragment_sha256": "4a62482aee2a99ef647a1ee8dba62cdb0eadd3cc3cad8f83bc042a9a3c7dcfbf",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R140",
+      "source": "§9 command list, line 223",
+      "strength": "MUST",
+      "statement": "Provide `make verify` for the complete local/CI gate.",
+      "source_fragment_sha256": "75ec2980523b2f561c9b52be2b2f1721d23049a2b1119ece010f14be4f5a1157",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R141",
+      "source": "§9 command list, line 224",
+      "strength": "MUST",
+      "statement": "Provide `make start` for the built production service.",
+      "source_fragment_sha256": "509fd462dbc44fb4e72d7068d96dec17dd042643d9e8f38459a138c8d7438a5b",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R142",
+      "source": "§9, lines 227–228",
+      "strength": "MUST",
+      "statement": "Keep both development processes in one terminal.",
+      "source_fragment_sha256": "e0c65c0451d8cbc6a64c752ef9dea685c2ab8d6bc633c72d5b7c24a3084df076",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R143",
+      "source": "§9, line 228",
+      "strength": "MUST",
+      "statement": "Forward termination signals to both development process trees.",
+      "source_fragment_sha256": "9e36a289dc96e6e511354da35d63be1ff896871d3433e28ac9b1d38e2de66020",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R144",
+      "source": "§9, lines 228–229",
+      "strength": "MUST",
+      "statement": "Return failure when either required development process exits unexpectedly.",
+      "source_fragment_sha256": "2239ee9a02ca0a609483376caa8b78144b8535afa74976ba58ef4577e2a0fe92",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R145",
+      "source": "§9, line 231",
+      "strength": "MUST",
+      "statement": "Bind the server to the SPEC loopback default.",
+      "source_fragment_sha256": "8bc9fd240e97ed918e676f30727a0fe4cb5b2c4fe32f71cb810b9bfc3afdb84c",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R146",
+      "source": "§9, line 231",
+      "strength": "MUST",
+      "statement": "Print the exact UI URL after startup.",
+      "source_fragment_sha256": "8bc9fd240e97ed918e676f30727a0fe4cb5b2c4fe32f71cb810b9bfc3afdb84c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R147",
+      "source": "§9, lines 231–232",
+      "strength": "MUST NOT",
+      "statement": "Do not require or attempt to launch a graphical browser.",
+      "source_fragment_sha256": "ed64ad44b7aba50cf4e619227ef208afbdf1b48cda54c44d92bf994ec3cd0047",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R148",
+      "source": "§9, lines 232–233",
+      "strength": "MUST",
+      "statement": "Make a WSL-hosted service usable from Windows through localhost forwarding.",
+      "source_fragment_sha256": "c1fd965f8951923764685f1364fef62de154cef6232f2f2439d2000072f71cd9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R149",
+      "source": "§9, lines 233–234",
+      "strength": "MUST",
+      "statement": "Document non-loopback binding as a security-sensitive exception, not a troubleshooting default.",
+      "source_fragment_sha256": "6b229a5935c97b813c449320d9789343c3aebbd526a32aa77159e6298411d908",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R150",
+      "source": "§10, line 238",
+      "strength": "MUST",
+      "statement": "Support a normal Node.js production installation.",
+      "source_fragment_sha256": "25d9c335473612f0f7149f3b44729117e28f306a29d31840f5c55c41f56d1185",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R151",
+      "source": "§10, lines 238–240",
+      "strength": "SHOULD",
+      "statement": "Provide a multi-stage Docker image containing the built server, static UI, production dependencies, and required OS utilities.",
+      "source_fragment_sha256": "9b3eda7619fbb86873de6bd7c5025d26bf7c70247efae1855b1fa11460b4e438",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "exception_allowed"
+    },
+    {
+      "id": "STACK-R152",
+      "source": "§10 image list, lines 242–244",
+      "strength": "MUST",
+      "statement": "Run the production image as a non-root user.",
+      "source_fragment_sha256": "f16b0fd2f115a663e2de54bc7b0ccb816333604b7e301bca686022bfc23770f5",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R153",
+      "source": "§10 image item, line 245",
+      "strength": "MUST",
+      "statement": "Support a read-only root filesystem where deployment permits it.",
+      "source_fragment_sha256": "c742972cbd1ee291ccd4247981beb2d694f2b82e225a2973d62543174467ee96",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R154",
+      "source": "§10 image item, line 246",
+      "strength": "MUST",
+      "statement": "Write only to declared database, workspace, and temporary volumes.",
+      "source_fragment_sha256": "16efa619808b5eed64dd549d97771281d8441078dc900fe95432d45dbe296147",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R155",
+      "source": "§10 image item, line 247",
+      "strength": "MUST",
+      "statement": "Expose health checks that distinguish startup/recovery from readiness.",
+      "source_fragment_sha256": "c999522c5d1b6d90a69ae83d86031dfedf9b2f000a6c5c36e0825371711b1506",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R156",
+      "source": "§10 image item, line 248",
+      "strength": "MUST",
+      "statement": "Keep build credentials and source-control tokens out of the image.",
+      "source_fragment_sha256": "0b62412c2ca2dc4916bd8744b1d4fd5c73afaddad13098a989dc549b302ea39c",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R157",
+      "source": "§10 image item, line 249",
+      "strength": "MUST",
+      "statement": "Accept secrets only at runtime.",
+      "source_fragment_sha256": "cdd1021b84a7759a534b5eae3dcc312a76c1eed28bafab7677050a9698a4b5fd",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R158",
+      "source": "§10 image item, line 250",
+      "strength": "MUST",
+      "statement": "Preserve signal delivery to the Node process.",
+      "source_fragment_sha256": "c86df465fe6ab60c3a98767243127f0ac4899168bfcda44f2b593ef38fb506d1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R159",
+      "source": "§10, lines 252–253",
+      "strength": "MUST",
+      "statement": "Document container workspace mounts explicitly.",
+      "source_fragment_sha256": "b0ed8f6ce5933cd1327971f29a1b01d9aa07aa0231d2166b2c8d364fc0badcdf",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R160",
+      "source": "§10, line 252",
+      "strength": "MUST",
+      "statement": "Document container Git identity explicitly.",
+      "source_fragment_sha256": "156a31de4e9b5e0e049da08130e222692438f096ecdba6fb83eaa55ecdb35a04",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R161",
+      "source": "§10, line 252",
+      "strength": "MUST",
+      "statement": "Document repository-host credentials explicitly.",
+      "source_fragment_sha256": "156a31de4e9b5e0e049da08130e222692438f096ecdba6fb83eaa55ecdb35a04",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R162",
+      "source": "§10, line 253",
+      "strength": "MUST",
+      "statement": "Document agent credentials explicitly.",
+      "source_fragment_sha256": "9695be2ad03ca463a3f5db32e008212e9722061823f1567726b06c25be23057f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R163",
+      "source": "§10, line 253",
+      "strength": "MUST",
+      "statement": "Document the agent executable boundary explicitly.",
+      "source_fragment_sha256": "9695be2ad03ca463a3f5db32e008212e9722061823f1567726b06c25be23057f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R164",
+      "source": "§10, lines 253–254",
+      "strength": "MUST NOT",
+      "statement": "Do not mount a host Docker socket by default.",
+      "source_fragment_sha256": "58da05d542da9b8a7bc31830e2a2b0fa78006791332e8604c8db8c44911ba201",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R165",
+      "source": "§10, lines 253–254",
+      "strength": "MUST NOT",
+      "statement": "Do not describe a host Docker socket as ordinary isolation.",
+      "source_fragment_sha256": "58da05d542da9b8a7bc31830e2a2b0fa78006791332e8604c8db8c44911ba201",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R166",
+      "source": "§10, line 256",
+      "strength": "MUST NOT",
+      "statement": "Do not require Docker for contributors.",
+      "source_fragment_sha256": "3e2b3f150a06c2ea24a736a6e4445ca2a62179e5b5b371c5f329ea16ece32e71",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R167",
+      "source": "§10, lines 256–258",
+      "strength": "MUST",
+      "statement": "Add a self-contained executable only after subprocess, native-dependency, and SQLite Core conformance passes on every supported host.",
+      "source_fragment_sha256": "c690b5c5749f1faa8a5380eb79cdf7f0a75c13e5827bbd9f2444de7332559223",
+      "kind": "profile",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R168",
+      "source": "§11, lines 262–263",
+      "strength": "MUST",
+      "statement": "Select the newest stable, non-prerelease dependency version on first adoption.",
+      "source_fragment_sha256": "00b6b1aa9426c70d03e303bcdae57ad0825ef8a0778ad2583f6752ea199ea3a4",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R169",
+      "source": "§11, lines 262–264",
+      "strength": "MUST",
+      "statement": "Require dependency compatibility with Node, peers, build tools, native modules, and supported hosts.",
+      "source_fragment_sha256": "816d18a36cd8f45d4be313d71602c17b5325889333cba5b67659c6929ac10b63",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R170",
+      "source": "§11, lines 264–265",
+      "strength": "MUST",
+      "statement": "Interpret “latest” as latest compatible at the time of change.",
+      "source_fragment_sha256": "0cd478504622c17a73cc4fd0e7c29db264b9f38a7df4d2a54e34ecf19e8add14",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R171",
+      "source": "§11, lines 264–265",
+      "strength": "MUST NOT",
+      "statement": "Do not use unpinned floating versions resolved on each CI run.",
+      "source_fragment_sha256": "0cd478504622c17a73cc4fd0e7c29db264b9f38a7df4d2a54e34ecf19e8add14",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R172",
+      "source": "§11, line 267",
+      "strength": "MUST",
+      "statement": "Record exact resolved versions in `pnpm-lock.yaml`.",
+      "source_fragment_sha256": "9ab4c384533e61027d021aa1d4357d91f402b68dbcfcfc5753e33e704ebab25e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R173",
+      "source": "§11, lines 267–268",
+      "strength": "MUST",
+      "statement": "Pin the package manager in `package.json`.",
+      "source_fragment_sha256": "906776632af552b1d409b983731c50aa27ddbdf3285266c6b4aef98cbbb8d972",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R174",
+      "source": "§11, line 268",
+      "strength": "MUST",
+      "statement": "Constrain Node.js in `engines`.",
+      "source_fragment_sha256": "504e94df1bc2c0f0223fdc5e6dbdb60d943f8861f12bbd207a2dbcd3a838f66f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R175",
+      "source": "§11, lines 268–270",
+      "strength": "MUST",
+      "statement": "Use one repository-owned toolchain version file across developers, CI, and Docker builds.",
+      "source_fragment_sha256": "f7b75416b41283c3a8d57fcab8b85c51737da8b2e5019090db7f6b8922a83ccb",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R176",
+      "source": "§11, lines 269–270",
+      "strength": "MUST",
+      "statement": "Execute container base images immutably.",
+      "source_fragment_sha256": "0cf47c211b5567736d6fb582ddc563d84f2732a07c7c4fdab731a6c03b32bc10",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R177",
+      "source": "§11, lines 269–270",
+      "strength": "MUST",
+      "statement": "Execute GitHub Actions immutably.",
+      "source_fragment_sha256": "0cf47c211b5567736d6fb582ddc563d84f2732a07c7c4fdab731a6c03b32bc10",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R178",
+      "source": "§11, lines 269–270",
+      "strength": "MUST",
+      "statement": "Use automated pull requests to keep action and image pins current.",
+      "source_fragment_sha256": "0cf47c211b5567736d6fb582ddc563d84f2732a07c7c4fdab731a6c03b32bc10",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R179",
+      "source": "§11, lines 272–274",
+      "strength": "MUST",
+      "statement": "Require a prerelease-dependency ADR to state the missing stable capability, operational risk, rollback path, and removal condition.",
+      "source_fragment_sha256": "92f82b4eff06ab8745894c27c7eb9b3c48895200087e7cf80e4158beb1f44fd0",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R180",
+      "source": "§11, lines 273–275",
+      "strength": "MUST NOT",
+      "statement": "Do not adopt an incompatible transitive dependency to preserve a preferred top-level package.",
+      "source_fragment_sha256": "ffcf75244ccb3c2d679c5d49e3018fb166f2ce1280386be43534abf7a1fd41db",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R181",
+      "source": "§11, lines 273–275",
+      "strength": "MUST NOT",
+      "statement": "Do not adopt an unmaintained transitive dependency to preserve a preferred top-level package.",
+      "source_fragment_sha256": "ffcf75244ccb3c2d679c5d49e3018fb166f2ce1280386be43534abf7a1fd41db",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R182",
+      "source": "§11, line 277",
+      "strength": "MUST",
+      "statement": "Make automated dependency updates follow `CICD.md`.",
+      "source_fragment_sha256": "48f8d5cc6317065bc6d67e48d5082bda0246920a898cde70a50f6d08c26a1a35",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R183",
+      "source": "§11, lines 277–278",
+      "strength": "MUST",
+      "statement": "Validate dependency updates with the same gates as application code.",
+      "source_fragment_sha256": "7734fb86b7c5125ab80ccf66718f3f46e660500c801ab53215c205bcb7a642c9",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R184",
+      "source": "§11, lines 278–279",
+      "strength": "MUST",
+      "statement": "Isolate major dependency upgrades from unrelated changes.",
+      "source_fragment_sha256": "cd0031180d3efecc3c434cdf761c883d28beef3fb285f2f351ae163067368dd5",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R185",
+      "source": "§11, lines 278–279",
+      "strength": "MUST",
+      "statement": "Review release notes, migrations, peer changes, and runtime support for each major upgrade.",
+      "source_fragment_sha256": "cd0031180d3efecc3c434cdf761c883d28beef3fb285f2f351ae163067368dd5",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R186",
+      "source": "§12 deferred item, line 285",
+      "strength": "MUST NOT",
+      "statement": "Do not add multi-project configuration to one running instance before a measured revisit trigger.",
+      "source_fragment_sha256": "7d9874f08fd6fbfe840d0d39cc2c95594505331f01abfb3822a20af04f22d498",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R187",
+      "source": "§12 deferred item, line 286",
+      "strength": "MUST NOT",
+      "statement": "Do not add multi-tenant authorization or tenant isolation before a measured revisit trigger.",
+      "source_fragment_sha256": "d23391e2ba64cd58128c7e81ab51846461e5b9fd36b126eca8a54726583ff37f",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R188",
+      "source": "§12 deferred item, line 287",
+      "strength": "MUST NOT",
+      "statement": "Do not add PostgreSQL before a measured revisit trigger.",
+      "source_fragment_sha256": "48795fb1468cf46111533306d1a88ff8d7d62c75a0e48799d7a6a6b867a338d1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R189",
+      "source": "§12 deferred item, line 287",
+      "strength": "MUST NOT",
+      "statement": "Do not add horizontally scaled schedulers before a measured revisit trigger.",
+      "source_fragment_sha256": "48795fb1468cf46111533306d1a88ff8d7d62c75a0e48799d7a6a6b867a338d1",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R190",
+      "source": "§12 deferred item, line 288",
+      "strength": "MUST NOT",
+      "statement": "Do not add remote worker fleets before a measured revisit trigger.",
+      "source_fragment_sha256": "7b27d90c6458885431039752875a6efaaa62344a112ae9b725d4adb667de5ade",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R191",
+      "source": "§12 deferred item, line 289",
+      "strength": "MUST NOT",
+      "statement": "Do not add WebSockets before a measured bidirectional-streaming need.",
+      "source_fragment_sha256": "a8ca0bff96578d05241f3f8bc46923a16e7a59aaae2006e041eaafba447fcc9e",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R192",
+      "source": "§12 deferred item, line 290",
+      "strength": "MUST NOT",
+      "statement": "Do not add server-side rendering before a measured revisit trigger.",
+      "source_fragment_sha256": "0250cce424aec88c0a05d7ec07d3b5d60deef8ba337c8c4bf173b290a8cd5107",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R193",
+      "source": "§12 deferred item, line 291",
+      "strength": "MUST NOT",
+      "statement": "Do not add a Go, Rust, or Elixir service component before a measured revisit trigger.",
+      "source_fragment_sha256": "8333bc977b5f69b5309d48955660efc25345e8826abaccb4c5a1e78a5c317446",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R194",
+      "source": "§12 deferred item, line 292",
+      "strength": "MUST NOT",
+      "statement": "Do not use XState as a backend workflow engine before a measured revisit trigger.",
+      "source_fragment_sha256": "b269a17426827deadb8e341008a4109570989471b72a169050f9ea8a1ab9db17",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R195",
+      "source": "§12 deferred item, line 293",
+      "strength": "MUST NOT",
+      "statement": "Do not add Temporal before a measured revisit trigger.",
+      "source_fragment_sha256": "a4d4276aa62d291cd2c4b2b2efbf192264b5c636875b0985c7fbe3b7d384c807",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R196",
+      "source": "§12 deferred item, line 293",
+      "strength": "MUST NOT",
+      "statement": "Do not add Redis before a measured revisit trigger.",
+      "source_fragment_sha256": "a4d4276aa62d291cd2c4b2b2efbf192264b5c636875b0985c7fbe3b7d384c807",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R197",
+      "source": "§12 deferred item, line 293",
+      "strength": "MUST NOT",
+      "statement": "Do not add a general-purpose job queue before a measured revisit trigger.",
+      "source_fragment_sha256": "a4d4276aa62d291cd2c4b2b2efbf192264b5c636875b0985c7fbe3b7d384c807",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R198",
+      "source": "§12 deferred item, line 294",
+      "strength": "MUST NOT",
+      "statement": "Do not add a self-contained desktop application before a measured revisit trigger.",
+      "source_fragment_sha256": "2711856a78e997968413c63aad218162091c72826e939dc9e42834a59fa11d34",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R199",
+      "source": "§12 deferred item, line 294",
+      "strength": "MUST NOT",
+      "statement": "Do not add self-contained executable distribution before a measured revisit trigger.",
+      "source_fragment_sha256": "2711856a78e997968413c63aad218162091c72826e939dc9e42834a59fa11d34",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R200",
+      "source": "§12, line 296",
+      "strength": "MUST",
+      "statement": "Reconsider a deferred choice only when a measured requirement appears.",
+      "source_fragment_sha256": "e569e78e17711287cc10581f1d3c6dcd5a33a02eabf93874fedfc9a33b37dcd7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R201",
+      "source": "§12, lines 296–297",
+      "strength": "MUST NOT",
+      "statement": "Do not treat preference, novelty, or theoretical future scale as evidence for a deferred choice.",
+      "source_fragment_sha256": "855e47ce8482fa4dd6314c82c849779f91731e9876fc862961879af01be97465",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R202",
+      "source": "§12, lines 297–298",
+      "strength": "MUST",
+      "statement": "Make every deferred-choice replacement preserve the normative SPEC contracts.",
+      "source_fragment_sha256": "1375b78821498a9fbc3e75828cd88f3dab986856a217ae6883465bbca1c93fc7",
+      "kind": "reference",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R203",
+      "source": "§12, lines 297–298",
+      "strength": "MUST",
+      "statement": "Give every deferred-choice replacement a migration path for durable state.",
+      "source_fragment_sha256": "1375b78821498a9fbc3e75828cd88f3dab986856a217ae6883465bbca1c93fc7",
+      "kind": "leaf",
+      "members": [],
+      "applicability": "required"
+    },
+    {
+      "id": "STACK-R204",
+      "source": "§12, lines 297–298",
+      "strength": "MUST",
+      "statement": "Make every deferred-choice replacement pass the applicable conformance profile.",
+      "source_fragment_sha256": "1375b78821498a9fbc3e75828cd88f3dab986856a217ae6883465bbca1c93fc7",
+      "kind": "profile",
+      "members": [],
+      "applicability": "required"
+    }
+  ]
+}
