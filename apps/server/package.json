@@ -1,0 +1,38 @@
+{
+  "name": "@symphony/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "test": "vitest run --root ../.. apps/server/src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/static": "9.1.3",
+    "@fastify/swagger": "9.8.0",
+    "@fastify/type-provider-typebox": "5.2.0",
+    "@sinclair/typebox": "0.34.52",
+    "@symphony/adapters": "workspace:*",
+    "@symphony/contracts": "workspace:*",
+    "@symphony/domain": "workspace:*",
+    "@symphony/observability": "workspace:*",
+    "@symphony/orchestration": "workspace:*",
+    "@symphony/persistence": "workspace:*",
+    "fastify": "5.10.0"
+  },
+  "devDependencies": {
+    "@symphony/test-support": "workspace:*"
+  }
+}

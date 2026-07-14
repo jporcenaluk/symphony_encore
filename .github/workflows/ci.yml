@@ -1,0 +1,259 @@
+name: ci
+
+on:
+  merge_group:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+      - name: Install pinned Linux sandbox runtime
+        if: runner.os == 'Linux'
+        env:
+          BUBBLEWRAP_VERSION: 0.9.0-1ubuntu0.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes "bubblewrap=${BUBBLEWRAP_VERSION}"
+          installed_version="$(dpkg-query --show --showformat="\${Version}" bubblewrap)"
+          test "$installed_version" = "$BUBBLEWRAP_VERSION"
+          test "$(command -v bwrap)" = /usr/bin/bwrap
+          sudo install --owner=root --group=root --mode=0644 .github/apparmor/usr.bin.bwrap /etc/apparmor.d/symphony-encore-bwrap
+          sudo apparmor_parser --replace /etc/apparmor.d/symphony-encore-bwrap
+          sudo grep --fixed-strings --quiet "symphony-encore-bwrap" /sys/kernel/security/apparmor/profiles
+          bwrap --version
+      - run: make install
+      - run: make verify-fast
+      - if: runner.os == 'Linux'
+        run: make test-integration
+      - if: runner.os == 'Linux'
+        run: corepack pnpm exec playwright install --with-deps chromium
+      - if: runner.os == 'Linux'
+        run: make test-e2e
+      - if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: ignore
+          name: playwright-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  supply-chain:
+    name: supply chain
+    permissions:
+      contents: read # Required to scan the checked-out commit history.
+      pull-requests: read # Required by Gitleaks to resolve the exact PR commit range.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+        with:
+          cache: false
+          version: 1.7.12
+      - uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        with:
+          advanced-security: false
+          online-audits: false
+          persona: pedantic
+          version: 1.26.1
+      - if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node -e 'if (!/^(build|chore|ci|docs|feat|fix|perf|refactor|revert|test)(\([a-z0-9._-]+\))?!?: .+$/u.test(process.env.PR_TITLE ?? "")) process.exit(1)'
+      - if: github.event_name != 'merge_group'
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+      - name: Scan merge-group commits with pinned Gitleaks
+        if: github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GITLEAKS_ARCHIVE_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          GITLEAKS_VERSION: 8.30.1
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          printf '%s  %s\n' "$GITLEAKS_ARCHIVE_SHA256" "$archive" | sha256sum --check
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
+          test "$("${RUNNER_TEMP}/gitleaks" version)" = "$GITLEAKS_VERSION"
+          "${RUNNER_TEMP}/gitleaks" git \
+            --no-banner \
+            --redact \
+            --verbose \
+            --log-opts="${BASE_SHA}..${HEAD_SHA}" \
+            .
+      - if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
+  image:
+    name: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: symphony-encore:verify
+      - run: bash scripts/verify-container.sh symphony-encore:verify
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          exit-code: "1"
+          format: table
+          ignore-unfixed: true
+          image-ref: symphony-encore:verify
+          severity: CRITICAL,HIGH
+
+  required:
+    name: required
+    if: always()
+    needs: [verify, supply-chain, image]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          IMAGE_RESULT: ${{ needs.image.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply-chain.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$SUPPLY_CHAIN_RESULT" = success
+          test "$IMAGE_RESULT" = success
+
+  publish:
+    name: publish main artifacts
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [required]
+    permissions:
+      artifact-metadata: write # Required to register artifact metadata for attestations.
+      attestations: write # Required to persist signed provenance.
+      contents: read
+      id-token: write # Required to obtain the short-lived Sigstore signing identity.
+      packages: write # Required to publish the commit-addressed image to GHCR.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # zizmor: ignore[cache-poisoning] Protected main; cache disabled.
+        with:
+          cache: ""
+          node-version-file: .node-version
+      - run: make install
+      - run: make build
+      - name: Package the Node distribution
+        run: |
+          mkdir -p artifacts/layout/ui
+          corepack pnpm --filter @symphony/server --prod deploy --legacy artifacts/layout/server
+          cp -R apps/web/dist/. artifacts/layout/ui/
+          tar -C artifacts/layout -czf "artifacts/symphony-encore-${SHA}.tar.gz" server ui
+          rm -rf artifacts/layout
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          provenance: mode=max
+          push: true
+          sbom: true
+          tags: ${{ env.IMAGE }}:sha-${{ env.SHA }}
+      - name: Generate image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          format: cyclonedx
+          image-ref: ${{ env.IMAGE }}@${{ steps.image.outputs.digest }}
+          output: artifacts/image.cdx.json
+          scan-type: image
+      - name: Generate distribution SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          format: cyclonedx
+          output: artifacts/distribution.cdx.json
+          scan-ref: artifacts
+          scan-type: fs
+      - name: Record immutable build evidence
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync("artifacts/build-manifest.json", JSON.stringify({
+              commit: process.env.SHA,
+              image: [process.env.IMAGE, process.env.DIGEST].join("@"),
+              publication_run: [
+                process.env.SERVER_URL,
+                process.env.GITHUB_REPOSITORY,
+                "actions/runs",
+                process.env.RUN_ID,
+              ].join("/"),
+            }, null, 2) + "\n");
+          '
+          cd artifacts
+          sha256sum \
+            "symphony-encore-${SHA}.tar.gz" \
+            image.cdx.json \
+            distribution.cdx.json \
+            build-manifest.json > checksums.txt
+      - id: provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-checksums: artifacts/checksums.txt
+      - name: Preserve the signed provenance bundle
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" artifacts/provenance.sigstore.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: symphony-main-${{ env.SHA }}
+          path: artifacts/
+          retention-days: 90

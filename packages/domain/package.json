@@ -1,0 +1,21 @@
+{
+  "name": "@symphony/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run --root ../.. packages/domain/src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -1,0 +1,197 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import {
+  ActionRequestSchema,
+  AdjudicationResultSchema,
+  AgentAdapterManifestSchema,
+  AgentApprovalRequestSchema,
+  AgentErrorCodeSchema,
+  AgentEventSchema,
+  AgentVerificationSchema,
+  AttemptSchema,
+  BudgetAdjustmentSchema,
+  BudgetLedgerSchema,
+  BudgetReservationSchema,
+  ClaimSchema,
+  ConfigurationSnapshotSchema,
+  ControlStateSchema,
+  CoreAdapterKindSchema,
+  CoreConformanceCategorySchema,
+  CoreConformanceExecutionSchema,
+  CoreConformanceIdSchema,
+  CoreConformanceResultSchema,
+  CoreEvidenceBundleSchema,
+  CorePlatformSchema,
+  ErrorEnvelopeSchema,
+  EventRecordPageQuerySchema,
+  EventRecordPageSchema,
+  EventRecordSchema,
+  EventStreamHeadersSchema,
+  EventStreamQuerySchema,
+  EvidenceRefSchema,
+  ExecutionFailureSchema,
+  ExternalEvidenceIdSchema,
+  ExternalEvidenceSchema,
+  GuardDecisionSchema,
+  HandoffSchema,
+  HealthResponseSchema,
+  ImplementationOutcomeSchema,
+  IssueSchema,
+  LessonSchema,
+  LiveSessionSchema,
+  LogRecordSchema,
+  MutationAuthorizationSchema,
+  NormativeDocumentSchema,
+  NormativeRequirementEvidenceSchema,
+  OperatorActionSchema,
+  OperatorQuestionRecordSchema,
+  OperatorQuestionSchema,
+  ParkedWorkSchema,
+  PlanReviewResultSchema,
+  PlanSchema,
+  PullRequestSnapshotSchema,
+  ReadyResponseSchema,
+  RealIntegrationCaseIdSchema,
+  RealIntegrationEvidenceSchema,
+  RepositoryLinkSchema,
+  RetryEntrySchema,
+  ReviewRecordSchema,
+  ReviewResultSchema,
+  ReviewSetSchema,
+  RuleSchema,
+  SelectedAdapterEvidenceSchema,
+  ServiceRunSchema,
+  SideEffectIntentSchema,
+  SideEffectReceiptSchema,
+  StageTransitionSchema,
+  SynthesisResultSchema,
+  SystemJobSchema,
+  TrackerIssuePageSchema,
+  UsageSampleSchema,
+  VerificationRecordSchema,
+  WorkRefSchema,
+} from "../packages/contracts/src/index.ts";
+
+const CONTRACT_SCHEMAS: Readonly<Record<string, unknown>> = {
+  ActionRequest: ActionRequestSchema,
+  AdjudicationResult: AdjudicationResultSchema,
+  AgentAdapterManifest: AgentAdapterManifestSchema,
+  AgentApprovalRequest: AgentApprovalRequestSchema,
+  AgentErrorCode: AgentErrorCodeSchema,
+  AgentEvent: AgentEventSchema,
+  AgentVerification: AgentVerificationSchema,
+  Attempt: AttemptSchema,
+  BudgetAdjustment: BudgetAdjustmentSchema,
+  BudgetLedger: BudgetLedgerSchema,
+  BudgetReservation: BudgetReservationSchema,
+  Claim: ClaimSchema,
+  ConfigurationSnapshot: ConfigurationSnapshotSchema,
+  ControlState: ControlStateSchema,
+  CoreAdapterKind: CoreAdapterKindSchema,
+  CoreConformanceCategory: CoreConformanceCategorySchema,
+  CoreConformanceExecution: CoreConformanceExecutionSchema,
+  CoreConformanceId: CoreConformanceIdSchema,
+  CoreConformanceResult: CoreConformanceResultSchema,
+  CoreEvidenceBundle: CoreEvidenceBundleSchema,
+  CorePlatform: CorePlatformSchema,
+  EvidenceRef: EvidenceRefSchema,
+  ExternalEvidence: ExternalEvidenceSchema,
+  ExternalEvidenceId: ExternalEvidenceIdSchema,
+  ErrorEnvelope: ErrorEnvelopeSchema,
+  EventRecord: EventRecordSchema,
+  EventRecordPage: EventRecordPageSchema,
+  EventRecordPageQuery: EventRecordPageQuerySchema,
+  EventStreamHeaders: EventStreamHeadersSchema,
+  EventStreamQuery: EventStreamQuerySchema,
+  ExecutionFailure: ExecutionFailureSchema,
+  GuardDecision: GuardDecisionSchema,
+  Handoff: HandoffSchema,
+  HealthResponse: HealthResponseSchema,
+  ImplementationOutcome: ImplementationOutcomeSchema,
+  Issue: IssueSchema,
+  Lesson: LessonSchema,
+  LiveSession: LiveSessionSchema,
+  LogRecord: LogRecordSchema,
+  MutationAuthorization: MutationAuthorizationSchema,
+  NormativeDocument: NormativeDocumentSchema,
+  NormativeRequirementEvidence: NormativeRequirementEvidenceSchema,
+  OperatorAction: OperatorActionSchema,
+  OperatorQuestion: OperatorQuestionSchema,
+  OperatorQuestionRecord: OperatorQuestionRecordSchema,
+  ParkedWork: ParkedWorkSchema,
+  Plan: PlanSchema,
+  PlanReviewResult: PlanReviewResultSchema,
+  PullRequestSnapshot: PullRequestSnapshotSchema,
+  RepositoryLink: RepositoryLinkSchema,
+  ReadyResponse: ReadyResponseSchema,
+  RealIntegrationCaseId: RealIntegrationCaseIdSchema,
+  RealIntegrationEvidence: RealIntegrationEvidenceSchema,
+  RetryEntry: RetryEntrySchema,
+  ReviewRecord: ReviewRecordSchema,
+  ReviewResult: ReviewResultSchema,
+  ReviewSet: ReviewSetSchema,
+  Rule: RuleSchema,
+  ServiceRun: ServiceRunSchema,
+  SideEffectIntent: SideEffectIntentSchema,
+  SideEffectReceipt: SideEffectReceiptSchema,
+  SelectedAdapterEvidence: SelectedAdapterEvidenceSchema,
+  StageTransition: StageTransitionSchema,
+  SynthesisResult: SynthesisResultSchema,
+  SystemJob: SystemJobSchema,
+  TrackerIssuePage: TrackerIssuePageSchema,
+  UsageSample: UsageSampleSchema,
+  VerificationRecord: VerificationRecordSchema,
+  WorkRef: WorkRefSchema,
+};
+
+export const GENERATED_CONTRACT_SCHEMAS_PATH = path.resolve(
+  "packages/contracts/generated/contracts.schema.json",
+);
+
+export function renderContractSchemas(): string {
+  const schemas = Object.fromEntries(
+    Object.entries(CONTRACT_SCHEMAS).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+  return `${JSON.stringify(
+    {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      generated_notice: "Generated by scripts/generate-contract-schemas.ts; do not edit by hand.",
+      schemas,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+export async function checkGeneratedContractSchemas(target: string): Promise<boolean> {
+  try {
+    return (await readFile(target, "utf8")) === renderContractSchemas();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export async function writeGeneratedContractSchemas(target: string): Promise<void> {
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, renderContractSchemas(), "utf8");
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes("--check")) {
+    if (!(await checkGeneratedContractSchemas(GENERATED_CONTRACT_SCHEMAS_PATH))) {
+      process.stderr.write(
+        "Generated contracts are stale; run `pnpm contracts:generate` and commit the result.\n",
+      );
+      process.exitCode = 1;
+    }
+    return;
+  }
+  await writeGeneratedContractSchemas(GENERATED_CONTRACT_SCHEMAS_PATH);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}

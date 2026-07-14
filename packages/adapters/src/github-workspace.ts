@@ -1,0 +1,506 @@
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, realpath, rm } from "node:fs/promises";
+import path from "node:path";
+import type { WorkspaceRepositoryAdapter } from "./contracts.js";
+import type { GhCliApiClient } from "./gh-cli-api.js";
+import {
+  bindPosixSupervisor,
+  type PosixProcessGroupBinding,
+  type PosixProcessGroupOperations,
+  PosixProcessTreeError,
+  posixSupervisorInvocation,
+  terminateBoundPosixProcessGroup,
+} from "./posix-process-tree.js";
+import {
+  issueWorkspacePath,
+  resolveAssignedWorkspace,
+  systemJobWorkspacePath,
+} from "./workspace-boundary.js";
+
+const GH_ENVIRONMENT_KEYS = [
+  "GH_CONFIG_DIR",
+  "GH_ENTERPRISE_TOKEN",
+  "GH_HOST",
+  "GH_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GITHUB_TOKEN",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "PATH",
+  "XDG_CONFIG_HOME",
+] as const;
+
+const GIT_ENVIRONMENT_KEYS = ["HOME", "LANG", "LC_ALL", "PATH", "XDG_CONFIG_HOME"] as const;
+
+export interface WorkspaceCommandRequest {
+  arguments: readonly string[];
+  command: "gh" | "git";
+  cwd: string;
+  environment: Readonly<Record<string, string>>;
+  maxOutputBytes: number;
+  timeoutMs: number;
+}
+
+export interface WorkspaceCommandRunner {
+  run(request: WorkspaceCommandRequest): Promise<{
+    exitCode: number;
+    stderr: string;
+    stdout: string;
+  }>;
+}
+
+interface RepositoryMetadataResponse {
+  repository: {
+    defaultBranchRef: { name: string; target: { oid: string } } | null;
+    nameWithOwner: string;
+  } | null;
+}
+
+const REPOSITORY_METADATA_QUERY = `
+  query SymphonyWorkspaceRepository($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      nameWithOwner
+      defaultBranchRef {
+        name
+        target { ... on Commit { oid } }
+      }
+    }
+  }
+`;
+
+export function createGitHubWorkspaceRepositoryAdapter(options: {
+  api: GhCliApiClient;
+  commandRunner: WorkspaceCommandRunner;
+  environment: Readonly<Record<string, string | undefined>>;
+  now?: () => string;
+  timeoutMs: number;
+}): WorkspaceRepositoryAdapter {
+  const now = options.now ?? (() => new Date().toISOString());
+  return {
+    async populateIssueWorkspace(input) {
+      const [owner, name, extra] = input.repository.split("/");
+      if (!owner || !name || extra !== undefined) throw new Error("workspace.repository_invalid");
+      if (!input.identifier) throw new Error("workspace.identifier_invalid");
+      if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+        throw new Error("workspace.timeout_invalid");
+      }
+      const metadata = await options.api.graphql<RepositoryMetadataResponse>(
+        REPOSITORY_METADATA_QUERY,
+        { name, owner },
+      );
+      const repository = metadata.data.repository;
+      const defaultBranch = repository?.defaultBranchRef;
+      const baseSha = defaultBranch?.target.oid;
+      if (
+        !repository ||
+        repository.nameWithOwner.toLocaleLowerCase("en-US") !==
+          input.repository.toLocaleLowerCase("en-US") ||
+        !defaultBranch ||
+        !defaultBranch.name ||
+        typeof baseSha !== "string" ||
+        !/^[A-Fa-f0-9]{7,64}$/u.test(baseSha)
+      ) {
+        throw new Error("workspace.repository_metadata_invalid");
+      }
+      await mkdir(input.workspaceRoot, { recursive: true });
+      const workspaceRoot = await realpath(input.workspaceRoot);
+      const workspacePath = issueWorkspacePath(workspaceRoot, input.identifier);
+      assertLexicalDescendant(workspaceRoot, workspacePath);
+      if (await pathExists(workspacePath)) throw new Error("workspace.already_exists");
+      const localBranch = localBranchName(input.identifier);
+      try {
+        await runRequired(options.commandRunner, {
+          arguments: ["repo", "clone", input.repository, workspacePath, "--", "--no-checkout"],
+          command: "gh",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GH_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const resolvedWorkspace = await resolveAssignedWorkspace(workspaceRoot, workspacePath);
+        await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "switch", "--create", localBranch, baseSha],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const revision = await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "rev-parse", "HEAD"],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        if (
+          revision.stdout.trim().toLocaleLowerCase("en-US") !== baseSha.toLocaleLowerCase("en-US")
+        ) {
+          throw new Error("workspace.base_revision_mismatch");
+        }
+        const createdAt = now();
+        if (!Number.isFinite(Date.parse(createdAt))) throw new Error("workspace.timestamp_invalid");
+        return {
+          baseRef: defaultBranch.name,
+          baseSha,
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt,
+          localBranch,
+          repository: input.repository,
+          workspacePath: resolvedWorkspace,
+        };
+      } catch (error) {
+        await rm(workspacePath, { force: true, recursive: true });
+        throw error;
+      }
+    },
+    async populateSystemJobWorkspace(input) {
+      const [owner, name, extra] = input.repository.split("/");
+      if (!owner || !name || extra !== undefined) throw new Error("workspace.repository_invalid");
+      if (!input.id) throw new Error("workspace.identifier_invalid");
+      if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+        throw new Error("workspace.timeout_invalid");
+      }
+      const metadata = await options.api.graphql<RepositoryMetadataResponse>(
+        REPOSITORY_METADATA_QUERY,
+        { name, owner },
+      );
+      const repository = metadata.data.repository;
+      const defaultBranch = repository?.defaultBranchRef;
+      const baseSha = defaultBranch?.target.oid;
+      if (
+        !repository ||
+        repository.nameWithOwner.toLocaleLowerCase("en-US") !==
+          input.repository.toLocaleLowerCase("en-US") ||
+        !defaultBranch ||
+        !defaultBranch.name ||
+        typeof baseSha !== "string" ||
+        !/^[A-Fa-f0-9]{7,64}$/u.test(baseSha)
+      ) {
+        throw new Error("workspace.repository_metadata_invalid");
+      }
+      await mkdir(input.workspaceRoot, { recursive: true });
+      const workspaceRoot = await realpath(input.workspaceRoot);
+      const workspacePath = systemJobWorkspacePath(workspaceRoot, input.kind, input.id);
+      assertLexicalDescendant(workspaceRoot, workspacePath);
+      if (await pathExists(workspacePath)) throw new Error("workspace.already_exists");
+      await mkdir(path.dirname(workspacePath), { recursive: true });
+      const localBranch = systemJobLocalBranchName(input.kind, input.id);
+      try {
+        await runRequired(options.commandRunner, {
+          arguments: ["repo", "clone", input.repository, workspacePath, "--", "--no-checkout"],
+          command: "gh",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GH_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const resolvedWorkspace = await resolveAssignedWorkspace(workspaceRoot, workspacePath);
+        await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "switch", "--create", localBranch, baseSha],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        const revision = await runRequired(options.commandRunner, {
+          arguments: ["-C", resolvedWorkspace, "rev-parse", "HEAD"],
+          command: "git",
+          cwd: workspaceRoot,
+          environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+          maxOutputBytes: 1_000_000,
+          timeoutMs: options.timeoutMs,
+        });
+        if (
+          revision.stdout.trim().toLocaleLowerCase("en-US") !== baseSha.toLocaleLowerCase("en-US")
+        ) {
+          throw new Error("workspace.base_revision_mismatch");
+        }
+        const createdAt = now();
+        if (!Number.isFinite(Date.parse(createdAt))) throw new Error("workspace.timestamp_invalid");
+        return {
+          baseRef: defaultBranch.name,
+          baseSha,
+          checkoutMethod: "trusted_repository_adapter",
+          createdAt,
+          localBranch,
+          repository: input.repository,
+          workspacePath: resolvedWorkspace,
+        };
+      } catch (error) {
+        await rm(workspacePath, { force: true, recursive: true });
+        throw error;
+      }
+    },
+  };
+}
+
+export function createNodeWorkspaceCommandRunner(): WorkspaceCommandRunner {
+  return {
+    run(request) {
+      if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs <= 0) {
+        return Promise.reject(new Error("workspace.command_timeout_invalid"));
+      }
+      if (!Number.isSafeInteger(request.maxOutputBytes) || request.maxOutputBytes <= 0) {
+        return Promise.reject(new Error("workspace.command_output_limit_invalid"));
+      }
+      return new Promise((resolve, reject) => {
+        const invocation =
+          process.platform === "win32"
+            ? { arguments: request.arguments, command: request.command }
+            : posixSupervisorInvocation(request.command, request.arguments);
+        const child = spawn(invocation.command, [...invocation.arguments], {
+          cwd: request.cwd,
+          detached: process.platform !== "win32",
+          env: { ...request.environment },
+          stdio:
+            process.platform === "win32"
+              ? ["ignore", "pipe", "pipe"]
+              : ["ignore", "pipe", "pipe", "ipc"],
+        });
+        let posixBinding:
+          | {
+              readonly binding: PosixProcessGroupBinding;
+              readonly operations: PosixProcessGroupOperations;
+            }
+          | undefined;
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          posixBinding = bindPosixSupervisor(child);
+        }
+        const childStderr = child.stderr;
+        const childStdout = child.stdout;
+        if (childStderr === null || childStdout === null) {
+          reject(new Error("workspace.command_stdio_unavailable"));
+          return;
+        }
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        let outputBytes = 0;
+        let failure: Error | null = null;
+        let settled = false;
+        let killTimer: NodeJS.Timeout | undefined;
+        let termination: Promise<void> | null = null;
+        const finish = (operation: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (killTimer) clearTimeout(killTimer);
+          operation();
+        };
+        const signalChild = (name: NodeJS.Signals) => {
+          try {
+            child.kill(name);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+              finish(() => reject(processTreeFailure("workspace.command", error)));
+            }
+          }
+        };
+        const terminate = (error: Error) => {
+          if (failure) return;
+          failure = error;
+          if (process.platform === "win32") {
+            signalChild("SIGTERM");
+            killTimer = setTimeout(() => signalChild("SIGKILL"), 250);
+            killTimer.unref();
+            return;
+          }
+          if (posixBinding === undefined) {
+            finish(() => reject(processTreeFailure("workspace.command", undefined)));
+            return;
+          }
+          termination = terminateBoundPosixProcessGroup(posixBinding.binding, {
+            operations: posixBinding.operations,
+          });
+          void termination.then(
+            () => finish(() => reject(error)),
+            (terminationError: unknown) =>
+              finish(() => reject(processTreeFailure("workspace.command", terminationError))),
+          );
+        };
+        const append = (target: Buffer[], chunk: Buffer) => {
+          outputBytes += chunk.byteLength;
+          if (outputBytes > request.maxOutputBytes)
+            terminate(new Error("workspace.command_output_limit"));
+          else target.push(Buffer.from(chunk));
+        };
+        childStdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+        childStderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+        child.once("error", (error) => finish(() => reject(error)));
+        child.once("close", (code) => {
+          if (termination !== null) return;
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (killTimer) clearTimeout(killTimer);
+          if (failure) reject(failure);
+          else {
+            resolve({
+              exitCode: code ?? -1,
+              stderr: Buffer.concat(stderr).toString("utf8"),
+              stdout: Buffer.concat(stdout).toString("utf8"),
+            });
+          }
+        });
+        const timeout = setTimeout(
+          () => terminate(new Error("workspace.command_timeout")),
+          request.timeoutMs,
+        );
+        timeout.unref();
+      });
+    },
+  };
+}
+
+export async function readWorkspaceHeadRevision(options: {
+  commandRunner: WorkspaceCommandRunner;
+  environment: Readonly<Record<string, string | undefined>>;
+  timeoutMs: number;
+  workspace: string;
+  workspaceRoot: string;
+}): Promise<string> {
+  const workspace = await resolveAssignedWorkspace(options.workspaceRoot, options.workspace);
+  const result = await runRequired(options.commandRunner, {
+    arguments: ["-C", workspace, "rev-parse", "HEAD"],
+    command: "git",
+    cwd: options.workspaceRoot,
+    environment: allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS),
+    maxOutputBytes: 1_000_000,
+    timeoutMs: options.timeoutMs,
+  });
+  const revision = result.stdout.trim();
+  if (!/^[A-Fa-f0-9]{7,64}$/u.test(revision)) {
+    throw new Error("workspace.head_revision_invalid");
+  }
+  return revision;
+}
+
+export async function syncWorkspaceToPublishedBranch(options: {
+  branch: string;
+  commandRunner: WorkspaceCommandRunner;
+  environment: Readonly<Record<string, string | undefined>>;
+  expectedHeadSha: string;
+  timeoutMs: number;
+  workspace: string;
+  workspaceRoot: string;
+}): Promise<string> {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(options.branch) ||
+    options.branch.includes("..") ||
+    options.branch.includes("@{") ||
+    options.branch.endsWith("/")
+  ) {
+    throw new Error("workspace.branch_invalid");
+  }
+  if (!/^[A-Fa-f0-9]{7,64}$/u.test(options.expectedHeadSha)) {
+    throw new Error("workspace.head_revision_invalid");
+  }
+  const workspace = await resolveAssignedWorkspace(options.workspaceRoot, options.workspace);
+  const environment = allowlistedEnvironment(options.environment, GIT_ENVIRONMENT_KEYS);
+  const request = (arguments_: readonly string[]) =>
+    runRequired(options.commandRunner, {
+      arguments: arguments_,
+      command: "git" as const,
+      cwd: options.workspaceRoot,
+      environment,
+      maxOutputBytes: 1_000_000,
+      timeoutMs: options.timeoutMs,
+    });
+  const status = await request(["-C", workspace, "status", "--porcelain=v1"]);
+  if (status.stdout.trim()) throw new Error("workspace.dirty_before_sync");
+  const remoteRef = `refs/remotes/origin/${options.branch}`;
+  await request([
+    "-C",
+    workspace,
+    "fetch",
+    "--force",
+    "origin",
+    `refs/heads/${options.branch}:${remoteRef}`,
+  ]);
+  const fetched = (await request(["-C", workspace, "rev-parse", remoteRef])).stdout.trim();
+  if (fetched.toLocaleLowerCase("en-US") !== options.expectedHeadSha.toLocaleLowerCase("en-US")) {
+    throw new Error("workspace.fetched_revision_mismatch");
+  }
+  await request(["-C", workspace, "reset", "--hard", options.expectedHeadSha]);
+  const head = (await request(["-C", workspace, "rev-parse", "HEAD"])).stdout.trim();
+  if (head.toLocaleLowerCase("en-US") !== options.expectedHeadSha.toLocaleLowerCase("en-US")) {
+    throw new Error("workspace.synced_revision_mismatch");
+  }
+  return head;
+}
+
+async function runRequired(
+  runner: WorkspaceCommandRunner,
+  request: WorkspaceCommandRequest,
+): Promise<Awaited<ReturnType<WorkspaceCommandRunner["run"]>>> {
+  let result: Awaited<ReturnType<WorkspaceCommandRunner["run"]>>;
+  try {
+    result = await runner.run(request);
+  } catch {
+    throw new Error("workspace.command_failed");
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(request.command === "gh" ? "workspace.clone_failed" : "workspace.git_failed");
+  }
+  return result;
+}
+
+function allowlistedEnvironment<const Keys extends readonly string[]>(
+  source: Readonly<Record<string, string | undefined>>,
+  keys: Keys,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value) result[key] = value;
+  }
+  return result;
+}
+
+function localBranchName(identifier: string): string {
+  const normalized = identifier.replace(/[^A-Za-z0-9_-]+/gu, "-");
+  let start = 0;
+  while (normalized[start] === "-") start += 1;
+  let end = normalized.length;
+  while (end > start && normalized[end - 1] === "-") end -= 1;
+  const label = normalized.slice(start, end).slice(0, 48) || "work";
+  const digest = createHash("sha256").update(identifier).digest("hex").slice(0, 12);
+  return `symphony/${label}-${digest}`;
+}
+
+function processTreeFailure(prefix: "workspace.command", cause: unknown): Error {
+  const diagnostic =
+    cause instanceof PosixProcessTreeError ? cause.code : "process_tree.signal_failed";
+  return new Error(`${prefix}.process_tree_termination_failed:${diagnostic}`, { cause });
+}
+
+function systemJobLocalBranchName(kind: "repair" | "synthesis", id: string): string {
+  const digest = createHash("sha256").update(`${kind}:${id}`).digest("hex").slice(0, 12);
+  return `symphony/system-${kind}-${digest}`;
+}
+
+function assertLexicalDescendant(root: string, candidate: string): void {
+  const relative = path.relative(root, candidate);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("workspace.outside_root");
+  }
+}
+
+async function pathExists(candidate: string): Promise<boolean> {
+  try {
+    await lstat(candidate);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}

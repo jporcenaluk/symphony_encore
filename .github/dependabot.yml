@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      development-tooling:
+        dependency-type: development
+        patterns:
+          - "@biomejs/*"
+          - "@playwright/*"
+          - "@types/*"
+          - "@vitest/*"
+          - "typescript"
+          - "vite"
+          - "vitest"
+    versioning-strategy: increase
+  - package-ecosystem: github-actions
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
+  - package-ecosystem: docker
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
