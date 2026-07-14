@@ -243,12 +243,11 @@ describe("gh CLI API transport", () => {
       await writeFile(
         executable,
         [
-          `#!${process.execPath}`,
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          'const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
-          "writeFileSync(process.env.SYMPHONY_PID_FILE, String(process.pid) + '\\n' + String(grandchild.pid) + '\\n');",
-          "setTimeout(() => process.exit(0), 1000);",
+          "#!/bin/sh",
+          "sleep 30 &",
+          'descendant_pid="$!"',
+          'printf "%s\\n%s\\n" "$$" "$descendant_pid" > "$SYMPHONY_PID_FILE"',
+          'wait "$descendant_pid"',
         ].join("\n"),
       );
       await chmod(executable, 0o755);
@@ -263,7 +262,7 @@ describe("gh CLI API transport", () => {
           },
           maxOutputBytes: 10_000,
           stdin: "",
-          timeoutMs: 250,
+          timeoutMs: 1_000,
         }),
       ).rejects.toThrow("gh.timeout");
       spawnedPids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
