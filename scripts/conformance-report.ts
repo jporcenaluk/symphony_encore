@@ -1,65 +1,57 @@
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import {
+  CORE_CONFORMANCE_IDS,
+  EXTERNAL_EVIDENCE_IDS,
+  NORMATIVE_DOCUMENTS,
+  REAL_INTEGRATION_CASE_IDS,
+} from "../packages/contracts/src/index.ts";
+import { isTrustedEvidenceRun } from "./conformance-evidence.js";
 
-export interface CoreMatrix {
-  completed: string[];
-  missing: string[];
+const SELECTED_ADAPTER_KINDS = ["tracker", "repository_host", "agent", "authentication"] as const;
+
+export interface BuildConformanceReportInput {
+  readonly commandDiagnostics?: readonly string[];
+  readonly evidence: unknown;
+  readonly implementationVersion: string | null;
 }
 
-export function readCoreMatrix(ledger: string): CoreMatrix {
-  const completed: string[] = [];
-  const missing: string[] = [];
-  for (const match of ledger.matchAll(/^- \[([ x])\] `((?:C-)[A-Z]+-[0-9]{2})`/gmu)) {
-    const target = match[1] === "x" ? completed : missing;
-    const id = match[2];
-    if (id) target.push(id);
+export function generatedAtFromSourceEpoch(sourceDateEpoch: number | null): string | null {
+  if (sourceDateEpoch === null || !Number.isSafeInteger(sourceDateEpoch) || sourceDateEpoch < 0) {
+    return null;
   }
-  return { completed, missing };
+  const value = new Date(sourceDateEpoch * 1000);
+  return Number.isNaN(value.getTime()) ? null : value.toISOString();
 }
 
-export function specificationRequirementsComplete(ledger: string): boolean {
-  const statuses = [
-    ...ledger.matchAll(/^\| S[0-9]{2} \|[^\n]+\| (Implemented|In progress|Not started) \|/gmu),
-  ].map((match) => match[1]);
-  return statuses.length === 19 && statuses.every((status) => status === "Implemented");
-}
+/**
+ * This reporter intentionally has no success path yet. The trusted producer currently exposes
+ * the exact Core inventory as unmapped, and exhaustive normative, adapter, Real Integration, and
+ * external registries do not yet exist. Future success must replace the individual unproven gates
+ * with validators; it must not weaken this fail-closed aggregate.
+ */
+export function buildConformanceReport(input: BuildConformanceReportInput) {
+  const trusted = isTrustedEvidenceRun(input.evidence);
+  const evidence = trusted ? input.evidence : null;
+  const diagnostics = [
+    ...(trusted ? (evidence?.diagnostics ?? []) : ["conformance.evidence.unavailable"]),
+    ...(input.commandDiagnostics ?? []),
+  ];
+  const missingCoreIds = [...CORE_CONFORMANCE_IDS];
+  const unmappedCoreIds = [...CORE_CONFORMANCE_IDS];
 
-export function buildConformanceReport(input: {
-  generatedAt: string;
-  implementationVersion: string;
-  matrix: CoreMatrix;
-  requirementsComplete: boolean;
-  revision: string;
-}) {
-  const deterministicPassed =
-    input.requirementsComplete &&
-    input.matrix.completed.length > 0 &&
-    input.matrix.missing.length === 0;
-  const realIntegration = { report: null, status: "not_run" as const };
   return {
-    adapters: [
-      { kind: "tracker", name: "github", status: "partial", version: "0.0.0" },
-      {
-        kind: "repository_host",
-        name: "github",
-        status: "partial",
-        version: "0.0.0",
-      },
-      {
-        kind: "agent",
-        name: "codex_app_server",
-        status: "contract_only",
-        version: "0.0.0",
-      },
-      { kind: "authentication", name: "local", status: "implemented", version: "0.0.0" },
-    ],
-    core_conformance: deterministicPassed,
+    adapters: SELECTED_ADAPTER_KINDS.map((kind) => ({
+      evidence: null,
+      implementation: null,
+      kind,
+      status: "unproven" as const,
+      version: null,
+    })),
+    core_conformance: false as const,
     enabled_extensions: [],
-    generated_at: input.generatedAt,
+    generated_at: generatedAtFromSourceEpoch(evidence?.source_date_epoch ?? null),
     implementation: {
       name: "symphony-encore",
-      revision: input.revision,
+      revision: evidence?.revision ?? null,
       version: input.implementationVersion,
     },
     implementation_defined_choices: [
@@ -68,73 +60,92 @@ export function buildConformanceReport(input: {
       "loopback-only first-run bootstrap",
       "supervised learning synthesis",
     ],
-    production_ready: false,
+    production_ready: false as const,
     results: {
-      deterministic: {
-        completed_ids: [...input.matrix.completed],
-        missing_ids: [...input.matrix.missing],
-        status: deterministicPassed ? ("passed" as const) : ("incomplete" as const),
+      core_evidence: {
+        artifact_digest: evidence?.artifact_digest ?? null,
+        complete: false as const,
+        diagnostics,
+        producer_version: evidence?.producer_version ?? null,
+        status: trusted ? ("incomplete" as const) : ("rejected" as const),
+        trusted,
       },
-      real_integration: realIntegration,
+      deterministic: {
+        completed_ids: [],
+        missing_ids: missingCoreIds,
+        status: "incomplete" as const,
+        unmapped_ids: unmappedCoreIds,
+      },
+      external: {
+        completed_ids: [],
+        missing_ids: [...EXTERNAL_EVIDENCE_IDS],
+        status: "unproven" as const,
+      },
+      normative_coverage: {
+        documents: [...NORMATIVE_DOCUMENTS],
+        status: "unproven" as const,
+      },
+      real_integration: {
+        completed_ids: [],
+        missing_ids: [...REAL_INTEGRATION_CASE_IDS],
+        status: "not_run" as const,
+      },
+      selected_adapters: {
+        completed_kinds: [],
+        missing_kinds: [...SELECTED_ADAPTER_KINDS],
+        status: "unproven" as const,
+      },
     },
     schema_version: 1,
-    spec: { document: "SPEC.md", status: "Draft v3" },
+    specifications: [
+      { document: "SPEC.md", status: "Draft v3" },
+      { document: "TECH_STACK.md", status: "Draft v1" },
+      { document: "CICD.md", status: "Draft v1" },
+    ],
     test_command: "make conformance",
   };
 }
 
-export async function readGitRevision(root: string): Promise<string> {
-  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
-  const gitEntry = path.join(root, ".git");
-  const gitEntryStat = await lstat(gitEntry);
-  let gitDirectory = gitEntry;
-  if (!gitEntryStat.isDirectory()) {
-    const pointer = (await readFile(gitEntry, "utf8")).trim();
-    if (!pointer.startsWith("gitdir: ")) throw new Error("conformance.gitdir_invalid");
-    gitDirectory = path.resolve(root, pointer.slice("gitdir: ".length));
+export type ConformanceReport = ReturnType<typeof buildConformanceReport>;
+
+function formatJson(value: unknown, depth: number, column: number): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
   }
-  const head = (await readFile(path.join(gitDirectory, "HEAD"), "utf8")).trim();
-  if (!head.startsWith("ref: ")) return head;
-  const ref = head.slice("ref: ".length);
-  try {
-    return (await readFile(path.join(gitDirectory, ref), "utf8")).trim();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("conformance.report_non_finite_number");
+    return JSON.stringify(value);
   }
-  const packedRefs = await readFile(path.join(gitDirectory, "packed-refs"), "utf8");
-  const match = packedRefs
-    .split(/\r?\n/u)
-    .find((line) => !line.startsWith("#") && line.endsWith(` ${ref}`));
-  const revision = match?.split(" ")[0];
-  if (!revision) throw new Error("conformance.git_ref_missing");
-  return revision;
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    const primitive = value.every(
+      (item) => item === null || ["boolean", "number", "string"].includes(typeof item),
+    );
+    if (primitive) {
+      const inline = `[${value.map((item) => formatJson(item, depth + 1, 0)).join(", ")}]`;
+      if (column + inline.length <= 100) return inline;
+    }
+    const itemIndent = "  ".repeat(depth + 1);
+    const closingIndent = "  ".repeat(depth);
+    return `[\n${value
+      .map((item) => `${itemIndent}${formatJson(item, depth + 1, itemIndent.length)}`)
+      .join(",\n")}\n${closingIndent}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return "{}";
+    const propertyIndent = "  ".repeat(depth + 1);
+    const closingIndent = "  ".repeat(depth);
+    return `{\n${entries
+      .map(([key, child]) => {
+        const prefix = `${propertyIndent}${JSON.stringify(key)}: `;
+        return `${prefix}${formatJson(child, depth + 1, prefix.length)}`;
+      })
+      .join(",\n")}\n${closingIndent}}`;
+  }
+  throw new Error("conformance.report_value_invalid");
 }
 
-async function main(): Promise<void> {
-  const root = process.cwd();
-  const [ledger, manifestSource] = await Promise.all([
-    readFile(path.join(root, "IMPLEMENTATION_STATUS.md"), "utf8"),
-    readFile(path.join(root, "package.json"), "utf8"),
-  ]);
-  const manifest = JSON.parse(manifestSource) as { version: string };
-  const revision = await readGitRevision(root);
-  const report = buildConformanceReport({
-    generatedAt: new Date().toISOString(),
-    implementationVersion: manifest.version,
-    matrix: readCoreMatrix(ledger),
-    requirementsComplete: specificationRequirementsComplete(ledger),
-    revision,
-  });
-  const reportPath = path.resolve(
-    root,
-    process.argv[2] ?? path.join("artifacts", "conformance", "core.json"),
-  );
-  await mkdir(path.dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  process.stdout.write(`${reportPath}\n`);
-  if (!report.core_conformance) process.exitCode = 1;
-}
-
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main();
+export function serializeConformanceReport(report: ConformanceReport): string {
+  return `${formatJson(report, 0, 0)}\n`;
 }

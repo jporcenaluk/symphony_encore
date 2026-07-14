@@ -1,79 +1,134 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  CORE_CONFORMANCE_IDS,
+  EXTERNAL_EVIDENCE_IDS,
+  REAL_INTEGRATION_CASE_IDS,
+} from "../packages/contracts/src/index.ts";
 
+import { produceTrustedEvidence } from "./conformance-evidence.js";
 import {
   buildConformanceReport,
-  readCoreMatrix,
-  specificationRequirementsComplete,
-} from "./conformance-report.ts";
+  generatedAtFromSourceEpoch,
+  serializeConformanceReport,
+} from "./conformance-report.js";
 
-describe("Core conformance report", () => {
-  it("requires all nineteen specification areas to be implemented", () => {
-    const implemented = Array.from(
-      { length: 19 },
-      (_, index) => `| S${String(index + 1).padStart(2, "0")} | Area | Implemented | Proof |`,
-    ).join("\n");
-    expect(specificationRequirementsComplete(implemented)).toBe(true);
-    expect(
-      specificationRequirementsComplete(implemented.replace("Implemented", "In progress")),
-    ).toBe(false);
-  });
+const temporaryDirectories: string[] = [];
 
-  it("extracts complete and missing proof IDs from the implementation ledger", () => {
-    expect(
-      readCoreMatrix(`
-- [x] \`C-WF-01\` Workflow proof.
-- [ ] \`C-WF-02\` Override proof.
-- [x] \`C-DUR-01\` Atomic proof.
-`),
-    ).toEqual({
-      completed: ["C-WF-01", "C-DUR-01"],
-      missing: ["C-WF-02"],
-    });
-  });
+async function privateDirectory(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "symphony-report-test-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
 
-  it("reports partial coverage as incomplete rather than Core Conformance", () => {
-    expect(
-      buildConformanceReport({
-        generatedAt: "2026-07-13T12:00:00Z",
-        implementationVersion: "0.0.0",
-        matrix: { completed: ["C-WF-01"], missing: ["C-WF-02"] },
-        requirementsComplete: false,
-        revision: "abc1234",
-      }),
-    ).toMatchObject({
-      adapters: [
-        { kind: "tracker", name: "github", status: "partial", version: "0.0.0" },
-        { kind: "repository_host", name: "github", status: "partial", version: "0.0.0" },
-        { kind: "agent", name: "codex_app_server", status: "contract_only", version: "0.0.0" },
-        { kind: "authentication", name: "local", status: "implemented", version: "0.0.0" },
-      ],
-      core_conformance: false,
-      implementation: { name: "symphony-encore", revision: "abc1234", version: "0.0.0" },
-      results: {
-        deterministic: {
-          completed_ids: ["C-WF-01"],
-          missing_ids: ["C-WF-02"],
-          status: "incomplete",
-        },
-        real_integration: { report: null, status: "not_run" },
-      },
-      spec: { document: "SPEC.md", status: "Draft v3" },
-      test_command: "make conformance",
-    });
-  });
+afterEach(async () => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
 
-  it("separates Core Conformance from the production-ready Real Integration requirement", () => {
+describe("fail-closed conformance report", () => {
+  it("rejects manually authored evidence even when it claims completion", () => {
     const report = buildConformanceReport({
-      generatedAt: "2026-07-13T12:00:00Z",
-      implementationVersion: "1.0.0",
-      matrix: { completed: ["C-WF-01"], missing: [] },
-      requirementsComplete: true,
-      revision: "abc1234",
+      evidence: {
+        artifact_digest: "sha256:forged",
+        complete: true,
+        diagnostics: ["forged.diagnostic"],
+        producer_version: "forged",
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        source_date_epoch: 1_767_225_600,
+        suite_results: CORE_CONFORMANCE_IDS.map((id) => ({ id, status: "passed" })),
+      },
+      implementationVersion: "0.0.0",
     });
 
-    expect(report.core_conformance).toBe(true);
+    expect(report.core_conformance).toBe(false);
     expect(report.production_ready).toBe(false);
-    expect(report.results.deterministic.status).toBe("passed");
-    expect(report.results.real_integration.status).toBe("not_run");
+    expect(report.results.core_evidence).toMatchObject({
+      artifact_digest: null,
+      diagnostics: ["conformance.evidence.unavailable"],
+      producer_version: null,
+      status: "rejected",
+      trusted: false,
+    });
+    expect(report.generated_at).toBeNull();
+    expect(report.implementation.revision).toBeNull();
+    expect(report.results.deterministic.completed_ids).toEqual([]);
+    expect(report.results.deterministic.missing_ids).toEqual(CORE_CONFORMANCE_IDS);
+  });
+
+  it("reports every trusted but unmapped Core case as missing", async () => {
+    const evidence = await produceTrustedEvidence(await privateDirectory());
+    const report = buildConformanceReport({ evidence, implementationVersion: "0.0.0" });
+
+    expect(report.core_conformance).toBe(false);
+    expect(report.production_ready).toBe(false);
+    expect(report.results.core_evidence).toMatchObject({
+      complete: false,
+      status: "incomplete",
+      trusted: true,
+    });
+    expect(report.results.deterministic).toEqual({
+      completed_ids: [],
+      missing_ids: CORE_CONFORMANCE_IDS,
+      status: "incomplete",
+      unmapped_ids: CORE_CONFORMANCE_IDS,
+    });
+  });
+
+  it("derives its timestamp from the immutable source epoch", () => {
+    expect(generatedAtFromSourceEpoch(1_767_225_600)).toBe("2026-01-01T00:00:00.000Z");
+    expect(generatedAtFromSourceEpoch(null)).toBeNull();
+    expect(generatedAtFromSourceEpoch(Number.MAX_SAFE_INTEGER)).toBeNull();
+  });
+
+  it("keeps normative, adapter, real-integration, and external gates unproven", async () => {
+    const evidence = await produceTrustedEvidence(await privateDirectory());
+    const report = buildConformanceReport({ evidence, implementationVersion: "0.0.0" });
+
+    expect(report.adapters.map(({ kind, status }) => ({ kind, status }))).toEqual([
+      { kind: "tracker", status: "unproven" },
+      { kind: "repository_host", status: "unproven" },
+      { kind: "agent", status: "unproven" },
+      { kind: "authentication", status: "unproven" },
+    ]);
+    expect(report.results.normative_coverage).toEqual({
+      documents: ["SPEC", "TECH_STACK", "CICD"],
+      status: "unproven",
+    });
+    expect(report.results.selected_adapters.status).toBe("unproven");
+    expect(report.results.real_integration).toEqual({
+      completed_ids: [],
+      missing_ids: REAL_INTEGRATION_CASE_IDS,
+      status: "not_run",
+    });
+    expect(report.results.external).toEqual({
+      completed_ids: [],
+      missing_ids: EXTERNAL_EVIDENCE_IDS,
+      status: "unproven",
+    });
+  });
+
+  it("serializes the same evidence to byte-identical repository-formatted JSON", async () => {
+    const evidence = await produceTrustedEvidence(await privateDirectory());
+    const first = serializeConformanceReport(
+      buildConformanceReport({ evidence, implementationVersion: "0.0.0" }),
+    );
+    const second = serializeConformanceReport(
+      buildConformanceReport({ evidence, implementationVersion: "0.0.0" }),
+    );
+
+    expect(second).toBe(first);
+    const reportPath = path.join(await privateDirectory(), "core.json");
+    await writeFile(reportPath, first, "utf8");
+    const formatCheck = spawnSync("corepack", ["pnpm", "exec", "biome", "check", reportPath], {
+      encoding: "utf8",
+      env: process.env,
+      shell: false,
+    });
+    expect(formatCheck.status, `${formatCheck.stdout}${formatCheck.stderr}`).toBe(0);
   });
 });

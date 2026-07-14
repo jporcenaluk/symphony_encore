@@ -9,7 +9,7 @@
   "packageManager": "pnpm@11.12.0",
   "scripts": {
     "build": "corepack pnpm -r --if-present build",
-    "conformance": "node scripts/conformance-report.ts",
+    "conformance": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/conformance-command.ts",
     "contracts:check": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts --check",
     "contracts:generate": "node --conditions=development --import ./scripts/typescript-source-loader.mjs scripts/generate-contract-schemas.ts",
     "dev": "node scripts/dev-supervisor.ts",

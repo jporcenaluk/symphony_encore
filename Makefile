@@ -45,5 +45,5 @@ verify-fast: lint typecheck test
 
 verify: verify-fast test-integration build test-e2e image
 
-conformance: verify-fast
+conformance:
 	corepack pnpm conformance
