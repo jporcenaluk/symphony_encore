@@ -119,6 +119,7 @@ import {
 } from "./merge-queue.js";
 import { startPlannedPlanReviewAttemptLifecycle } from "./plan-review-attempt-lifecycle.js";
 import { planHighRiskPlanReviewAttempt } from "./plan-review-attempt-planner.js";
+import { pathFromRoot, rulesBlock } from "./production-agent-configuration.js";
 import { runPullRequestHygiene } from "./pull-request-hygiene.js";
 import {
   executeRepairRepositoryPublication,
@@ -2560,15 +2561,6 @@ function issueRoutingFacts(issue: Issue): ReadonlySet<string> {
   if (labels.has("architecture")) facts.add("risk.cross_package_architecture");
   if (issue.acceptance_criteria.length === 0) facts.add("risk.ambiguous_criteria");
   return facts;
-}
-
-function rulesBlock(prompt: string): string {
-  const match = /<!-- rules:start -->([\s\S]*?)<!-- rules:end -->/u.exec(prompt);
-  return match?.[1]?.trim() ?? "";
-}
-
-function pathFromRoot(root: string, suffix: string): string {
-  return `${root.replace(/\/+$/u, "")}/${suffix}`;
 }
 
 function createLazyProductionAgent(
