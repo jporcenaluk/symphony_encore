@@ -1,6 +1,6 @@
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureRepositorySnapshot,
   type GitProbeResult,
@@ -38,7 +38,12 @@ function snapshot(overrides: Partial<RepositoryProbe> = {}, sourceDateEpoch?: st
   });
 }
 
-beforeEach(() => spawnSyncMock.mockReset());
+beforeEach(() => {
+  spawnSyncMock.mockReset();
+  vi.stubEnv("GITHUB_SHA", revision);
+});
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("repository snapshot validation", () => {
   it("accepts an exact clean HEAD/tree snapshot", () => {
